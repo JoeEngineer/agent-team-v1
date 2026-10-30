@@ -65,6 +65,86 @@ Then in the project: `/agent-team:team-init`, then `/agent-team:milestone <slug>
 
 **Before you install:** the plugin's hooks run Node scripts on your machine on every subagent, session, shell and bridge call. They're short and dependency-free. Read [`scripts/`](scripts/) first, as you would for any plugin with hooks.
 
+## Protect your branches
+
+Do this in every repo where the Director will work, before the first milestone.
+
+**Why:** the plugin's guard hook stops the Director from merging into `main` or force-pushing. But it's a hook on your machine that reads commands as text, so a mistake can slip past it. GitHub's branch rules are enforced on GitHub's side, so they hold no matter what runs locally. Use both: the hook catches mistakes early with a clear message, and the ruleset is the hard stop.
+
+You need two rulesets: a strict one for `main`, which only you merge into, and a lighter one for `milestone/*`, where the Director merges task PRs on its own.
+
+### Ruleset 1: `main`
+
+Repo → **Settings** → **Rules** → **Rulesets** → **New ruleset** → **New branch ruleset**:
+
+| Setting | Value | Why |
+|---|---|---|
+| Name | `protect-main` | |
+| Enforcement status | Active | |
+| Bypass list | **Leave empty** | The Director and its agents act through *your* `gh` login. If repository admins can bypass the rules, so can every agent. An empty list means the rules bind everyone, you included. |
+| Target branches | Include default branch | |
+| Restrict deletions | On | `main` should never be deleted. |
+| Block force pushes | On | A force-push can silently rewrite reviewed history. |
+| Require a pull request before merging | On, **Required approvals: 0** | Every change reaches `main` through a PR you can see and undo. Approvals stay at 0 because GitHub won't let an account approve its own PR. With your agents acting as you, 1 required approval would lock everyone out. |
+| Require status checks to pass | On, once you have CI | Turn on when the project has CI, so a red build can't reach `main`. |
+
+Or from a terminal:
+
+```bash
+gh api -X POST repos/OWNER/REPO/rulesets --input - <<'EOF'
+{
+  "name": "protect-main",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["~DEFAULT_BRANCH"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "pull_request", "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": false,
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false } }
+  ]
+}
+EOF
+```
+
+### Ruleset 2: `milestone/*`
+
+| Setting | Value | Why |
+|---|---|---|
+| Name | `protect-milestones` | |
+| Enforcement status | Active | |
+| Bypass list | Leave empty | Same reason as above. |
+| Target branches | Include by pattern: `milestone/*` | |
+| Block force pushes | On | Milestone branches collect reviewed work. Rewriting them would drop it without a trace. |
+| Require status checks to pass | On, once you have CI | The Director merges task PRs here without you, so CI is the automatic check. |
+| Require a pull request | **Off** | The Director's task PRs already go through the `reviewer` agent. Requiring a GitHub PR here adds nothing, and it would block the Director from tidying up the branch. |
+| Restrict deletions | **Off** | You'll want to delete a milestone branch after it's merged into `main`, and with an empty bypass list this rule would stop you too. The guard hook already blocks agents from deleting milestone branches. |
+
+Or from a terminal (add a `required_status_checks` rule once you have CI):
+
+```bash
+gh api -X POST repos/OWNER/REPO/rulesets --input - <<'EOF'
+{
+  "name": "protect-milestones",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/milestone/*"], "exclude": [] } },
+  "rules": [ { "type": "non_fast_forward" } ]
+}
+EOF
+```
+
+Rulesets are free on public repos. Private repos need a paid GitHub plan for them.
+
+### What this means day to day
+
+- You and the Director can't push to `main` directly. Every change, yours included, goes through a branch and a PR.
+- The Director opens and merges task PRs into `milestone/<slug>`. When the milestone is done, it opens `milestone/<slug>` → `main` and hands that PR to you to merge.
+
 ## Developing the plugin
 
 Clone the repo and load it from disk instead of the marketplace, so edits take effect without pushing:
@@ -85,6 +165,8 @@ node tests/run.js
 
 Bump `version` in `.claude-plugin/plugin.json` whenever routing or agent prompts change. The logs record it as `guidance_version`.
 
+`main` in this repo is protected the same way, so contributions go through pull requests.
+
 ## Requirements
 
 - Node 18+ on PATH (hooks are dependency-free Node scripts).
@@ -93,7 +175,7 @@ Bump `version` in `.claude-plugin/plugin.json` whenever routing or agent prompts
 
 ## Limits and known gaps
 
-- **The guard is a guardrail, not a sandbox.** It parses commands simply. Server-side branch protection on `main` is the real enforcement; set it up.
+- **The guard is a guardrail, not a sandbox.** It parses commands simply. GitHub's branch rules are the real enforcement; see [Protect your branches](#protect-your-branches).
 - **Background subagents:** Claude Code may run a subagent in the background even when the call doesn't ask for it. The delegation line then records only the launch (`background: true`, `agent_id`, `resolved_model`). The result, tokens and duration land in `completions.jsonl` with the same `agent_id`, read from the subagent transcript when it stops. Reviewer verdicts are logged once, whichever path sees them first.
 - **Hook input formats aren't a published contract.** The logger relies on fields seen in Claude Code 2.1.314 (`agentId`, `isAsync`, `resolvedModel`, `agent_transcript_path`, the transcript JSONL shape). It never fails a tool call if they change, but log fields may come out empty. Errors go to `.agent-team/logs/hook-errors.jsonl`.
 - **Two token numbers:** `tokens` on a delegation line is Claude Code's own total for the subagent, and it doesn't include cached input. `tokens_with_cache` on a completion line is summed from the transcript, cache included. Compare like with like.
