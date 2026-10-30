@@ -100,3 +100,7 @@ Bump `version` in `.claude-plugin/plugin.json` whenever routing or agent prompts
 - **Sessions:** token usage of separate sessions isn't captured automatically yet.
 - **Effort of the Director itself** isn't visible to hooks. Decision records say `unknown` unless the Director knows it.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

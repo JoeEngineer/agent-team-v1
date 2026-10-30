@@ -7,6 +7,6 @@
   },
   "homepage": "https://github.com/JoeEngineer/agent-team-v1",
   "repository": "https://github.com/JoeEngineer/agent-team-v1",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "keywords": ["director", "delegation", "multi-agent", "routing"]
 }
