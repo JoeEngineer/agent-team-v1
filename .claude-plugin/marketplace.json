@@ -1,7 +1,9 @@
 {
   "name": "agent-team",
+  "description": "The agent-team plugin: run Claude Code as a Director that delegates to role agents with explicit model/effort routing and logs every decision.",
   "owner": {
-    "name": "Joe Bruce"
+    "name": "Joe Bruce",
+    "url": "https://github.com/JoeEngineer"
   },
   "plugins": [
     {

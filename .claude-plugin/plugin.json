@@ -5,6 +5,7 @@
   "author": {
     "name": "Joe Bruce"
   },
+  "homepage": "https://github.com/JoeEngineer/agent-team-v1",
   "repository": "https://github.com/JoeEngineer/agent-team-v1",
   "license": "UNLICENSED",
   "keywords": ["director", "delegation", "multi-agent", "routing"]

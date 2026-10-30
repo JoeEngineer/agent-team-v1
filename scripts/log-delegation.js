@@ -63,13 +63,29 @@ function resolveRouting(input, ti) {
   };
 }
 
+// A review can be seen twice (PostToolUse for a foreground subagent, then
+// SubagentStop). Log it once per agent id.
+function claimReview(input, agentId) {
+  if (!agentId) return true;
+  const dir = path.join(lib.logDir(input), '.pending');
+  fs.mkdirSync(dir, { recursive: true });
+  try {
+    fs.writeFileSync(path.join(dir, `review-${String(agentId).replace(/[^\w-]/g, '_')}`), '', { flag: 'wx' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function logReview(input, record, review) {
+  if (!claimReview(input, record.agent_id)) return;
   lib.appendJsonl(input, 'reviews.jsonl', {
     ...base(input),
+    agent_id: record.agent_id || null,
     task_id: record.task.reviewed_task || record.task.id,
     pr: record.task.pr,
     attempt: record.task.attempt,
-    reviewer_model: record.model,
+    reviewer_model: record.resolved_model || record.model,
     reviewer_effort: record.effort,
     ...review,
   });
@@ -78,21 +94,31 @@ function logReview(input, record, review) {
 function onPostSubagent(input) {
   const ti = input.tool_input || {};
   const resp = input.tool_response;
+  const r = resp && typeof resp === 'object' ? resp : {};
   const text = lib.responseText(resp);
-  const background = !!ti.run_in_background;
+  // Claude Code may run a subagent in the background even when the call didn't
+  // ask for it; the response then only confirms the launch.
+  const background = !!ti.run_in_background || r.isAsync === true || r.status === 'async_launched';
+  const elapsed = takeDuration(input);
   const record = {
     ...base(input),
     kind: 'subagent',
     agent: ti.subagent_type || 'general-purpose',
+    agent_id: r.agentId || null,
+    tool_use_id: input.tool_use_id || null,
     ...resolveRouting(input, ti),
+    resolved_model: r.resolvedModel || null,
     isolation: ti.isolation || null,
     background,
     description: ti.description,
     task: lib.parseTaskCard(ti.prompt),
-    duration_ms: takeDuration(input),
-    ...lib.usageFrom(resp),
   };
-  if (!background) {
+  if (background) {
+    // Result, duration and tokens arrive later in completions.jsonl (same agent_id).
+    record.launch_ms = elapsed;
+  } else {
+    record.duration_ms = elapsed;
+    Object.assign(record, lib.usageFrom(resp));
     record.result = lib.lastFencedJson(text, 'result-json');
     const review = lib.lastFencedJson(text, 'review-json');
     if (review) {
@@ -165,34 +191,93 @@ function onPostShell(input) {
   });
 }
 
-// SubagentStop: catches results of background subagents. Best effort — reads
-// the subagent's transcript if the hook input gives a path to it.
-function onSubagentStop(input) {
-  const tPath = input.agent_transcript_path || input.transcript_path;
-  if (!tPath || !input.agent_transcript_path) return;
-  let lastText = '';
-  try {
-    const lines = fs.readFileSync(tPath, 'utf8').trim().split(/\r?\n/);
-    for (let i = lines.length - 1; i >= 0 && !lastText; i--) {
-      const entry = JSON.parse(lines[i]);
-      const msg = entry.message || entry;
-      if ((entry.type === 'assistant' || msg.role === 'assistant') && msg.content) {
-        lastText = lib.responseText(msg.content);
-      }
+// Read a subagent transcript: task card from its first prompt, model, tokens
+// (each API message counted once), wall time, and the final assistant text.
+function readSubagentTranscript(file) {
+  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '' };
+  const seen = new Set();
+  let lastMsgId = null;
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const m = e.message || {};
+    if (e.type === 'user' && !out.prompt) {
+      out.prompt = lib.responseText(m.content);
+      if (e.timestamp) out.first = Date.parse(e.timestamp);
     }
-  } catch {
-    return;
+    if (e.type !== 'assistant') continue;
+    if (e.timestamp) out.last = Date.parse(e.timestamp);
+    if (m.model) out.model = m.model;
+    if (m.id && !seen.has(m.id) && m.usage) {
+      seen.add(m.id);
+      const u = m.usage;
+      out.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) +
+        (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    }
+    const text = Array.isArray(m.content)
+      ? m.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n')
+      : typeof m.content === 'string' ? m.content : '';
+    if (text) {
+      // One API message can be split across entries; keep its text together.
+      out.lastText = m.id && m.id === lastMsgId ? `${out.lastText}\n${text}` : text;
+      lastMsgId = m.id || null;
+    }
   }
-  const result = lib.lastFencedJson(lastText, 'result-json');
-  const review = lib.lastFencedJson(lastText, 'review-json');
-  if (!result && !review) return;
-  lib.appendJsonl(input, 'completions.jsonl', {
+  return out;
+}
+
+function readMeta(transcriptPath) {
+  try {
+    return JSON.parse(fs.readFileSync(transcriptPath.replace(/\.jsonl$/, '.meta.json'), 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+// The delegation record for this agent, to pick up the routing the Director chose.
+function findDelegation(input, agentId) {
+  if (!agentId) return null;
+  try {
+    const lines = fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').trim().split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const rec = JSON.parse(lines[i]);
+      if (rec.agent_id === agentId) return rec;
+    }
+  } catch { /* none yet */ }
+  return null;
+}
+
+// SubagentStop: fires when any subagent finishes (foreground or background).
+// Writes one completions.jsonl line with the result, linked by agent_id.
+function onSubagentStop(input) {
+  const tPath = input.agent_transcript_path;
+  if (!tPath || !fs.existsSync(tPath)) return;
+  const t = readSubagentTranscript(tPath);
+  const meta = readMeta(tPath);
+  const agentId = input.agent_id || (path.basename(tPath).match(/^agent-(.+)\.jsonl$/) || [])[1] || null;
+  const agentType = input.agent_type || meta.agentType || null;
+  const delegation = findDelegation(input, agentId);
+  const routing = delegation || resolveRouting(input, { subagent_type: agentType });
+  const record = {
     ...base(input),
-    agent_id: input.agent_id,
-    agent_type: input.agent_type,
-    result,
-    review,
-  });
+    kind: 'completion',
+    agent: agentType,
+    agent_id: agentId,
+    tool_use_id: meta.toolUseId || null,
+    model: routing.model,
+    resolved_model: t.model,
+    effort: routing.effort,
+    task: delegation ? delegation.task : lib.parseTaskCard(t.prompt),
+    duration_ms: t.first && t.last ? t.last - t.first : null,
+    // Includes cache reads/writes, so it's larger than Claude Code's own
+    // `tokens` total on the delegation line. Compare like with like.
+    tokens_with_cache: t.tokens || null,
+    result: lib.lastFencedJson(t.lastText, 'result-json'),
+    review: lib.lastFencedJson(t.lastText, 'review-json'),
+  };
+  lib.appendJsonl(input, 'completions.jsonl', record);
+  if (record.review) logReview(input, record, record.review);
 }
 
 function main() {

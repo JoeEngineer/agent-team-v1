@@ -173,6 +173,75 @@ test('background subagent: no result parsed', () => {
   eq(rec.model, 'haiku', 'scout model');
 });
 
+// Shapes below match what Claude Code 2.1.314 produced in a live run.
+function writeSubagentTranscript(dir, agentId, prompt, finalText, model = 'claude-haiku-5-5') {
+  const file = path.join(dir, `agent-${agentId}.jsonl`);
+  const usage = { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 500, output_tokens: 100 };
+  const lines = [
+    { type: 'user', timestamp: '2026-10-30T18:33:35.000Z', message: { role: 'user', content: prompt } },
+    { type: 'api-request-blob', message: { role: 'assistant', content: [{ type: 'text', text: 'ignore me' }] } },
+    { type: 'assistant', timestamp: '2026-10-30T18:33:37.000Z', message: { id: 'msg_1', model, usage, content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
+    { type: 'user', timestamp: '2026-10-30T18:33:38.000Z', message: { role: 'user', content: [{ type: 'tool_result', content: 'x' }] } },
+    { type: 'assistant', timestamp: '2026-10-30T18:33:40.000Z', message: { id: 'msg_2', model, usage, content: [{ type: 'thinking', thinking: '' }] } },
+    { type: 'assistant', timestamp: '2026-10-30T18:33:41.000Z', message: { id: 'msg_2', model, usage, content: [{ type: 'text', text: finalText }] } },
+  ];
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  fs.writeFileSync(file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ agentType: 'agent-team:reviewer', toolUseId: 'toolu_X', requestShape: 'background' }));
+  return file;
+}
+
+test('async launch: agent id and resolved model logged, no result', () => {
+  const proj = tmpProject();
+  const ti = { subagent_type: 'agent-team:scout', prompt: 'TASK id=LIVE-1 type=research difficulty=easy milestone=live attempt=1' };
+  const resp = { isAsync: true, status: 'async_launched', agentId: 'a1', resolvedModel: 'claude-haiku-5-5', description: 'x' };
+  run('log-delegation.js', { hook_event_name: 'PreToolUse', tool_name: 'Agent', tool_use_id: 'tu_a', tool_input: ti }, proj);
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'tu_a', tool_input: ti, tool_response: resp }, proj);
+  const [rec] = readLog(proj, 'delegations.jsonl');
+  eq(rec.background, true, 'detected as background without run_in_background');
+  eq(rec.agent_id, 'a1', 'agent id');
+  eq(rec.resolved_model, 'claude-haiku-5-5', 'resolved model');
+  assert(!('result' in rec) && !('duration_ms' in rec), 'no result or duration on launch');
+  assert(typeof rec.launch_ms === 'number', 'launch time recorded');
+});
+
+test('SubagentStop: completion linked to delegation, tokens and duration, review logged once', () => {
+  const proj = tmpProject();
+  const ti = { subagent_type: 'agent-team:reviewer', effort: 'high', prompt: 'TASK id=AUTH-14 type=review difficulty=medium milestone=auth attempt=2 pr=212\nWHY review' };
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'toolu_X', tool_input: ti, tool_response: { isAsync: true, status: 'async_launched', agentId: 'r1', resolvedModel: 'claude-sonnet-5-5' } }, proj);
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const final = 'Findings.\n```review-json\n{"verdict":"approve","severity":"none","issues":[],"tests_run":true,"tests_passed":true,"criteria_met":"all","summary":"ok"}\n```';
+  const tPath = writeSubagentTranscript(tdir, 'r1', ti.prompt, final, 'claude-sonnet-5-5');
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'r1', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  run('log-delegation.js', stop, proj); // duplicate stop must not double-log the review
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.agent_id, 'r1', 'agent id');
+  eq(c.tool_use_id, 'toolu_X', 'tool use id from meta');
+  eq(c.task.id, 'AUTH-14', 'task from delegation');
+  eq(c.effort, 'high', 'effort from delegation override');
+  eq(c.resolved_model, 'claude-sonnet-5-5', 'model from transcript');
+  eq(c.tokens_with_cache, 2 * 1602, 'tokens counted once per message id');
+  eq(c.duration_ms, 6000, 'duration from first prompt to last assistant entry');
+  eq(c.review.verdict, 'approve', 'review parsed from split message');
+  const reviews = readLog(proj, 'reviews.jsonl');
+  eq(reviews.length, 1, 'review logged once');
+  eq(reviews[0].task_id, 'AUTH-14', 'review task id');
+  eq(reviews[0].reviewer_model, 'claude-sonnet-5-5', 'reviewer model');
+  eq(reviews[0].reviewer_effort, 'high', 'reviewer effort');
+});
+
+test('SubagentStop without a delegation record falls back to transcript task card', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 's9', 'TASK id=Z-1 type=research difficulty=easy milestone=z attempt=1\nWHY w', 'done\n```result-json\n{"status":"done"}\n```');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_type: 'agent-team:scout', agent_transcript_path: tPath }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.agent_id, 's9', 'agent id from file name');
+  eq(c.task.id, 'Z-1', 'task from transcript');
+  eq(c.model, 'haiku', 'model from agent file');
+  eq(c.result.status, 'done', 'result');
+});
+
 test('session start logged with child session id', () => {
   const proj = tmpProject();
   const ti = { title: 'Auth API', initiation: 'user_asked', model: 'sonnet', use_worktree: true, prompt: 'TASK id=AUTH-2 type=implement difficulty=hard milestone=auth attempt=1\nWHY hard -> session' };
