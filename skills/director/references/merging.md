@@ -28,4 +28,10 @@ Post a one-line PR comment before merging: `Merged by Director after reviewer ap
 
 ## GitHub approvals
 
-GitHub doesn't let an account approve its own PR, and the Director and its agents act as the user's account. So the reviewer's verdict lives in the logs and a PR comment, not a formal GitHub approval. Branch protection on `milestone/*` should require status checks, not approving reviews. If the project uses a separate reviewer bot account, the project's `CLAUDE.md` says so and how to use it.
+GitHub doesn't let an account approve its own PR, and the Director and its agents act as the user's account. So the reviewer's verdict lives in the logs and a PR comment, not a formal GitHub approval. If the project uses a separate reviewer bot account, the project's `CLAUDE.md` says so and how to use it.
+
+Expected repo rules are in the plugin README under "Protect your branches":
+- `main`: PR required with 0 approvals, no force pushes, no deletion, and no bypass for anyone.
+- `milestone/*`: no force pushes, plus status checks once the project has CI.
+
+If a merge is refused by a ruleset, don't look for a way around it. Report it to the user.
