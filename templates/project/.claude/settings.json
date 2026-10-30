@@ -1,0 +1,13 @@
+{
+  "extraKnownMarketplaces": {
+    "agent-team": {
+      "source": {
+        "source": "github",
+        "repo": "JoeEngineer/agent-team-v1"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "agent-team@agent-team": true
+  }
+}

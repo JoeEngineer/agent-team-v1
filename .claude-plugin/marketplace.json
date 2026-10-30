@@ -1,0 +1,13 @@
+{
+  "name": "agent-team",
+  "owner": {
+    "name": "Joe Bruce"
+  },
+  "plugins": [
+    {
+      "name": "agent-team",
+      "source": "./",
+      "description": "Director pattern: delegation with model/effort routing, decision logs, reviewer-gated merges."
+    }
+  ]
+}
