@@ -493,6 +493,73 @@ test('merge backfills result and review that the lagging transcript missed; appe
   eq(readLog(proj, 'reviews.jsonl').length, 1, 'and no second review');
 });
 
+// ---- Backfill edge cases: lines it must skip, and a failure it must survive.
+function seedCompletion(proj, over) {
+  const dir = path.join(proj, '.agent-team', 'logs');
+  fs.mkdirSync(dir, { recursive: true });
+  const rec = { kind: 'completion', agent: 'agent-team:implementer', agent_id: 'eg', task: { id: 'EG-1', attempt: 1 }, turn: 1, result: null, review: null, report_source: 'text' };
+  fs.appendFileSync(path.join(dir, 'completions.jsonl'), JSON.stringify({ ...rec, ...over }) + '\n');
+}
+const mergeHook = (proj) => run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 4 --squash' }, tool_response: '' }, proj, fakeGh('{"number":4,"state":"MERGED"}'));
+const APPROVE = 'ok\n```review-json\n{"verdict":"approve","severity":"none","issues":[],"findings":[]}\n```';
+
+test('backfill skips a completion whose transcript_path is missing or moved', () => {
+  const proj = tmpProject();
+  const gone = path.join(os.tmpdir(), 'agent-team-does-not-exist', 'agent-eg.jsonl');
+  assert(!fs.existsSync(gone), 'precondition: transcript is absent');
+  seedCompletion(proj, { transcript_path: gone });
+  const r = mergeHook(proj);
+  eq(r.status, 0, 'hook exits cleanly');
+  eq(readLog(proj, 'merges.jsonl').length, 1, 'merge still logged');
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'nothing appended');
+});
+
+test('backfill skips pre-0.3.1 completion lines without transcript_path or turn', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'eg', 'TASK id=EG-1 type=implement difficulty=easy milestone=b attempt=1', 'x', 'claude-haiku-5-5', { handback: true });
+  addLine(tPath, asstHandback('2026-10-30T18:33:50.000Z', 'msg_9', 'done\n```result-json\n{"status":"done"}\n```'));
+  seedCompletion(proj, { agent_id: 'old1', turn: undefined, transcript_path: undefined });
+  seedCompletion(proj, { agent_id: 'old2', turn: undefined, transcript_path: tPath });
+  seedCompletion(proj, { agent_id: 'old3', turn: 1, transcript_path: undefined });
+  const before = readLog(proj, 'completions.jsonl');
+  assert(before.length === 3 && before.every((c) => !(c.transcript_path && c.turn)), 'precondition: no line has both transcript_path and turn');
+  mergeHook(proj);
+  eq(readLog(proj, 'completions.jsonl').length, 3, 'nothing appended');
+});
+
+test('a backfill that throws does not break the merge hook and appends nothing', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'eg', 'TASK id=EG-1 type=review difficulty=easy milestone=b attempt=1', APPROVE, 'claude-haiku-5-5', { handback: true });
+  assert(fs.readFileSync(tPath, 'utf8').includes('review-json'), 'precondition: the transcript holds a review');
+  // task null makes recording the recovered review throw.
+  seedCompletion(proj, { agent: 'agent-team:reviewer', task: null, transcript_path: tPath });
+  const r = mergeHook(proj);
+  eq(r.status, 0, 'hook exits cleanly');
+  eq(readLog(proj, 'merges.jsonl').length, 1, 'merge logged before the failure');
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'nothing appended');
+  eq(readLog(proj, 'reviews.jsonl').length, 0, 'no review recorded');
+});
+
+test('backfill recovers a review for a completion line whose agent is null', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'eg', 'TASK id=EG-1 type=review difficulty=easy milestone=b attempt=1 pr=4', 'reading', 'claude-haiku-5-5', { handback: true });
+  seedCompletion(proj, { agent: null, transcript_path: tPath });
+  mergeHook(proj);
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'precondition: no report in the transcript yet, nothing appended');
+  addLine(tPath, asstHandback('2026-10-30T18:33:50.000Z', 'msg_9', APPROVE));
+  mergeHook(proj);
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'corrected line appended');
+  eq(cs[1].report_source, 'backfill', 'marked backfill');
+  eq(cs[1].review.verdict, 'approve', 'review recovered without an agent name');
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'review recorded');
+  mergeHook(proj);
+  eq(readLog(proj, 'completions.jsonl').length, 2, 'idempotent');
+});
+
 test('reviews: a re-review by the same agent is logged; the same verdict seen twice is not', () => {
   const proj = tmpProject();
   const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=RR-1 type=review difficulty=easy milestone=r attempt=1 pr=9' };

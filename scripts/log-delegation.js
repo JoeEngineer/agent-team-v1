@@ -413,6 +413,8 @@ function findDelegation(input, agentId) {
 function completionTask(delegation, t) {
   const turnTask = t.task || {};
   const task = delegation ? { ...delegation.task } : lib.parseTaskCard(t.prompt);
+  // No attempt= on the turn's TASK line is the malformed-card case: we keep the
+  // delegation's attempt, which may be stale (e.g. a later resume's number).
   if (turnTask.attempt != null) task.attempt = turnTask.attempt;
   return task;
 }
@@ -434,8 +436,9 @@ function backfillCompletions(input) {
     if (rec.kind === 'completion' && rec.agent_id && rec.transcript_path && rec.turn) latest.set(`${rec.agent_id}#${rec.turn}`, rec);
   }
   for (const rec of latest.values()) {
-    const wantsReview = /reviewer/.test(rec.agent || '');
-    if (wantsReview ? rec.review : rec.result) continue;
+    // Missing means neither block was captured. Which block to recover is
+    // decided by what the transcript holds, not by the agent name.
+    if (rec.result || rec.review) continue;
     let t;
     try { t = readSubagentTranscript(rec.transcript_path).turns[rec.turn - 1]; } catch { continue; }
     if (!t) continue;
@@ -443,7 +446,7 @@ function backfillCompletions(input) {
     if (!report) continue;
     const result = lib.lastFencedJson(report, 'result-json');
     const review = lib.lastFencedJson(report, 'review-json');
-    if (!(wantsReview ? review : result)) continue;
+    if (!result && !review) continue;
     const fixed = {
       ...rec, ...base(input),
       duration_ms: t.first && t.last ? t.last - t.first : rec.duration_ms,
@@ -451,8 +454,9 @@ function backfillCompletions(input) {
       tokens_by_class: t.tokens ? { ...t.classes } : rec.tokens_by_class,
       report_source: 'backfill', result, review,
     };
-    lib.appendJsonl(input, 'completions.jsonl', fixed);
+    // Review first: if it throws, nothing is appended (the merge hook swallows it).
     if (review) logReview(input, fixed, review);
+    lib.appendJsonl(input, 'completions.jsonl', fixed);
   }
 }
 
