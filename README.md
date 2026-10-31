@@ -6,18 +6,23 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 
 | Path | What |
 |---|---|
-| `skills/director/` | The Director's instructions, routing table, task-card format, decision-record format, merge rules |
+| `skills/director/` | The Director's instructions, routing table, task-card format, decision-record format, merge rules. `references/codex.md` holds the Codex-specific steps |
 | `agents/` | Role agents with a default tier and effort: `scout` (small/low), `implementer` (medium/medium), `architect` (large/high), `reviewer` (medium/high), `coach` (large/high). Each tier maps to a model per tool via `config/models.json` |
-| `skills/` | `director` plus `team-init`, `milestone`, `status`, `coach`. In Claude Code they're invoked as `/agent-team:<name>` (same names as before); in Codex, as skills |
+| `skills/` | `director` plus `team-init`, `milestone`, `status`, `coach`. In Claude Code they're invoked as `/agent-team:<name>`; in Codex, as `$agent-team:<name>` |
 | `config/models.json` | Tier → model map per tool, with `enabled` and `billing` (see [Models and tiers](#models-and-tiers)) |
-| `hooks/hooks.json` | Wires up the logger and the guard for Claude Code and Codex; the logger also matches Codex's spawn tools. Whether the Codex CLI runs plugin hooks is not yet confirmed ([details](#codex)) |
+| `hooks/hooks.json` | The plugin's hook set for Claude Code: logger, guard and the SessionStart hooks-active check. The Codex CLI doesn't run plugin hooks, so on Codex `team-init` writes project hooks from this file ([Codex](#codex)) |
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
 | `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist |
-| `scripts/log-event.js` | Manual logging (decisions, escalations, notes) |
-| `scripts/models.js` | `show` prints the effective tier → model map; `resolve <tier> [--tool t]` prints the model for a tier |
-| `scripts/codex-log.js` | Codex hook stub: logs selected raw fields of Codex delegation events to `.agent-team/logs/codex-events.jsonl` |
+| `scripts/log-event.js` | Manual logging: decisions, escalations, notes, and the Director's own delegation and review lines (used for Codex) |
+| `scripts/models.js` | `show` prints the effective tier → model map; `resolve <tier> [--tool t]` prints the model for a tier; `up <tier>` and `down <tier>` move to the next auto-eligible tier for a tool |
+| `scripts/codex-log.js` | Codex hook handler. Writes full records (delegation, completion, review, merge) into the shared log files with `tool: "codex"`, and selected raw fields of Codex events into `codex-events.jsonl` |
+| `scripts/codex-agents.js` | Writes `.codex/agents/<role>-<tier>.toml` for each role and enabled Codex tier, from the model map. Per machine, gitignored. `--check` reports drift |
+| `scripts/codex-hooks.js` | Writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Both are committed |
+| `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run |
+| `scripts/archive-logs.js` | Milestone close: copies the project's logs to an archive folder outside the repo, and with `--clear` removes the live copies once the archive is verified |
+| `scripts/reconcile-logs.js` | Backfills completion and review records the stop hook missed, from subagent transcripts |
 | `plugin.json` (root) | Portable Agent Plugins manifest that Codex reads; `.claude-plugin/` stays for Claude Code |
-| `templates/project/` | Files `/agent-team:team-init` copies into a project |
+| `templates/project/` | Files `/agent-team:team-init` copies into a project, including the Codex hook shim |
 
 ## How it works
 
@@ -33,9 +38,11 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 ```
 
 - **Routing:** `skills/director/references/routing.md`: task type × difficulty → agent, tier, effort, vehicle, plus an escalation ladder (feedback → more effort → bigger tier → architect).
-- **Hooks:** the hook scripts detect whether their input comes from Claude Code or Codex. Codex events are only logged raw for now; full Codex logging comes in the next milestone.
+- **Codex logging:** Codex records go into the same log files as Claude's, with `tool: "codex"`. The spawn message is encrypted on Codex, so the Director logs each Codex delegation itself before spawning it (`log-event.js delegation` with the task card and a `task_name`). The hooks then link the subagent's completion and review to that line by `task_name`, and only add a fallback line if the Director didn't log one. `codex-events.jsonl` is a raw debug log, not used by the Coach.
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
+- **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
+- **Backfill:** if the stop hook missed a completion or review (a crash, or a hook that was off), `node scripts/reconcile-logs.js` rebuilds it from the subagent transcripts. `--dry-run` shows what it would add. Backfilled lines are marked `report_source: "reconcile"`.
 
 ## Models and tiers
 
@@ -48,6 +55,7 @@ Agents and the routing table name tiers, not models. Each tier maps to a model p
 | large | opus | gpt-6.1-sol | yes |
 | xlarge | fable (billed as usage credits on some plans) | gpt-6-astra (not available everywhere) | **no** |
 
+- The model names are the shipped defaults. The Director never assumes a model is available: if a mapped model is missing, it falls back as described below. An account without one of the tools can drop that column with an override.
 - Routing and the escalation ladder never pick xlarge or any entry with `enabled: false` or `billing: "credits"`. The Director may offer xlarge, and uses it only after you say yes for that task.
 - A tool with no entries in the map is never routed to.
 - **Override:** copy `config/models.json` to `~/.agent-team/models.json` (or point `AGENT_TEAM_MODELS` at a file) and edit it. The override replaces the whole map, so it must list every tier you use. Run `node scripts/models.js show` to see the effective map. Example: a Codex-only install deletes the `claude` keys and leaves xlarge disabled.
@@ -91,19 +99,25 @@ Then in the project: `/agent-team:team-init`, then `/agent-team:milestone <slug>
 
 ### Codex
 
-```bash
-codex plugin marketplace add JoeEngineer/agent-team-v1
-```
+1. **Install the plugin.**
 
-```bash
-codex plugin add agent-team@agent-team
-```
+   ```bash
+   codex plugin marketplace add JoeEngineer/agent-team-v1
+   ```
 
-Codex asks you to trust the plugin's hooks once, and again after an update that changes `hooks/hooks.json`. The hooks don't run until you trust them.
+   ```bash
+   codex plugin add agent-team@agent-team
+   ```
 
-In plugin version 0.3.0, the skills (all five: `director`, `team-init`, `milestone`, `status`, `coach`) install into Codex. The guard (blocks pushes and merges to `main`) and raw logging of subagent spawns (to `.agent-team/logs/codex-events.jsonl`) are in the plugin's `hooks/hooks.json`. The guard was verified in Codex through project hooks. Whether the Codex CLI runs *plugin* hooks is not yet confirmed (see "Still open" in [`docs/codex-mapping.md`](docs/codex-mapping.md)). If it doesn't, `team-init` will need to write `.codex/hooks.json` into each project, planned for the next milestone. Check with `/hooks` that the hooks are listed and trusted.
+   This installs the skills. Invoke them as `$agent-team:<skill>`, for example `$agent-team:team-init`. The Codex CLI doesn't run plugin hooks, so the guard and logging need step 2.
 
-Not yet: Codex agent definitions, `team-init` writing `.codex/`, and full Codex logging. These are planned for the next milestone.
+2. **Run `$agent-team:team-init` in each project.** On Codex it:
+   - generates `.codex/agents/<role>-<tier>.toml` from the model map. These are gitignored, because they bake in your model map. Re-run `node scripts/codex-agents.js` after a plugin update or a map change;
+   - writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Commit both. They are what make the guard and logging work on Codex.
+
+3. **Trust the project and its hooks, once.** Accept the startup prompt, or open `/hooks` and trust them. Untrusted hooks fail silently: nothing is guarded or logged, and no error is shown. Trust them again after a plugin update or regeneration that changes the hook set.
+
+4. **Check the hooks.** The first session should show `agent-team hooks: active (codex, <version>)`. If that line is missing, the hooks are not running. The Director then warns you, logs by hand with `log-event.js`, and relies on the GitHub rulesets below, since the guard isn't running.
 
 On Windows, a very long `CODEX_HOME` path can break the git clone during install. If that happens, use a shorter `CODEX_HOME`.
 
@@ -205,7 +219,7 @@ claude plugin validate .
 node tests/run.js
 ```
 
-`node tests/run.js` runs every `tests/*.test.js`.
+`node tests/run.js` runs every `tests/*.test.js`. The opt-in live test against a local Codex CLI is `node tests/live/codex-live.js`; it is not part of `tests/run.js`.
 
 Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever routing or agent prompts change; the manifest test enforces that they match. The logs record it as `guidance_version`.
 
@@ -220,15 +234,20 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 ## Limits and known gaps
 
 - **The guard is a guardrail, not a sandbox.** It parses commands simply. GitHub's branch rules are the real enforcement; see [Protect your branches](#protect-your-branches).
-- **How the guard blocks:** it prints a `PreToolUse` JSON `deny` decision and exits 0. Claude Code and Codex both honour that. Codex 0.166 ignores the older exit-code-2 signal, so guards before 0.2.1 didn't block anything in Codex.
+- **How the guard blocks:** it prints a `PreToolUse` JSON `deny` decision and exits 0. Claude Code and Codex both honour that. Codex ignores the older exit-code-2 signal, so guards before 0.2.1 didn't block anything in Codex.
+- **Hooks-active check:** the SessionStart line `agent-team hooks: active` is how the Director knows the hooks run. Without it, nothing is guarded or logged, whatever the install says.
+- **Codex users re-trust hooks after updating.** The hook set changed in 0.4.0, so each Codex project trusts the hooks again once (`/hooks`), and again after any later change to the hook set.
+- **Codex has no per-agent worktrees.** Subagents share the workspace, so on Codex the Director makes the worktree for each writer itself. In the sandbox `.git` can be read-only, so those git commands may need approval.
+- **Codex agent files are per project.** Plugins can't ship agents on Codex, so `team-init` generates them. Re-run the generator after a plugin update or a model-map change (`codex-agents.js --check` shows drift).
+- **`codex-events.jsonl` is raw.** It keeps selected fields of Codex events for debugging and never records the encrypted spawn message. The Coach reads only the shared log files.
 - **Background subagents:** Claude Code may run a subagent in the background even when the call doesn't ask for it. The delegation line then records only the launch (`background: true`, `agent_id`, `resolved_model`). The result, tokens and duration land in `completions.jsonl` with the same `agent_id`, read from the subagent transcript when it stops. Reviewer verdicts are logged once, whichever path sees them first.
-- **Hook input formats aren't a published contract.** The logger relies on fields seen in Claude Code 2.1.314 (`agentId`, `isAsync`, `resolvedModel`, `agent_transcript_path`, SubagentStop's `last_assistant_message` and `effort`, the transcript JSONL shape, the `SubagentHandback` tool's `message`, `SendMessage`'s `to`/`message`). It never fails a tool call if they change, but log fields may come out empty. Errors go to `.agent-team/logs/hook-errors.jsonl`.
+- **Hook input formats aren't a published contract.** The logger relies on fields seen in recent Claude Code releases (`agentId`, `isAsync`, `resolvedModel`, `agent_transcript_path`, SubagentStop's `last_assistant_message` and `effort`, the transcript JSONL shape, the `SubagentHandback` tool's `message`, `SendMessage`'s `to`/`message`). It never fails a tool call if they change, but log fields may come out empty. Errors go to `.agent-team/logs/hook-errors.jsonl`.
 - **Two token numbers:** `tokens` on a delegation line is Claude Code's own total for the subagent, and it doesn't include cached input. `tokens_with_cache` on a completion line is summed from the transcript, cache included. Compare like with like.
 - **Merge outcomes** come from `gh pr view` right after the `gh pr merge` call (7 s timeout). If GitHub can't be asked, the line says `outcome: "unknown"` rather than guessing.
 - **Retries by `SendMessage`** are logged as `kind: "resume"` delegations only when the message carries a TASK line.
 - **Sessions:** token usage of separate sessions isn't captured automatically yet.
 - **Effort of the Director itself** isn't visible to hooks. Decision records say `unknown` unless the Director knows it.
-- **Codex gaps:** Codex has no per-agent worktrees, plugins can't ship agents, and admins can disable hooks, which turns off the guard and logging. Whether the Codex CLI runs plugin hooks is not yet confirmed ([details](#codex)). See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
+- **Codex gaps:** admins can disable hooks, which turns off the guard and logging. The worktree and agent-file limits above also apply. See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.
 
 ## License
