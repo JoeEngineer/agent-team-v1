@@ -17,7 +17,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Agent|Task|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*",
+        "matcher": "Agent|Task|SendMessage|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*",
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/log-delegation.js\"", "timeout": 10 }
         ]

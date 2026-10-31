@@ -6,10 +6,13 @@
 //   - force-pushes, pushes to protected branches, deleting protected/milestone branches
 //   - changing branch protection / rulesets; deleting, archiving or editing the repo
 //   - creating or deleting releases
+//   - `git add -A` / `git add .` while unignored agent worktrees exist
 // This is a guardrail against mistakes, not a sandbox: a determined command can evade
 // simple parsing. Server-side branch protection is the real enforcement.
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
 const { execFileSync } = require('child_process');
 const lib = require('./lib');
 
@@ -25,28 +28,6 @@ function block(reason) {
   process.exit(2);
 }
 
-// Split a command line into segments on && || ; | and newlines, then tokenize
-// each segment with basic single/double quote handling.
-function segments(cmd) {
-  const out = [];
-  let cur = [], tok = '', quote = null, hasTok = false;
-  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; };
-  const pushSeg = () => { pushTok(); if (cur.length) out.push(cur); cur = []; };
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i];
-    if (quote) {
-      if (c === quote) quote = null; else tok += c;
-      continue;
-    }
-    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
-    if (c === '\n' || c === ';' || c === '|' || c === '&') { pushSeg(); continue; }
-    if (/\s/.test(c)) { pushTok(); continue; }
-    tok += c; hasTok = true;
-  }
-  pushSeg();
-  return out;
-}
-
 // For `git [-C dir] [-c k=v] <sub> args...` return { sub, args, dir }.
 function gitParts(tokens) {
   const gi = tokens.findIndex((t) => t === 'git' || t === 'git.exe' || /[\\/]git(\.exe)?$/.test(t));
@@ -58,12 +39,6 @@ function gitParts(tokens) {
     i++;
   }
   return { sub: tokens[i], args: tokens.slice(i + 1), dir };
-}
-
-function ghParts(tokens) {
-  const gi = tokens.findIndex((t) => t === 'gh' || t === 'gh.exe' || /[\\/]gh(\.exe)?$/.test(t));
-  if (gi < 0) return null;
-  return tokens.slice(gi + 1);
 }
 
 function currentBranch(cwd) {
@@ -99,23 +74,26 @@ function checkGitPush(args, cwd) {
   }
 }
 
+// `git add -A` / `git add .` would commit agent worktrees under .claude/worktrees/
+// as gitlinks. Block it only while that folder exists and isn't ignored.
+function checkGitAdd(args, cwd) {
+  const all = args.some((a) => a === '-A' || a === '--all' || a === '.' || a === ':/' || /^-[a-zA-Z]*A/.test(a));
+  if (!all) return;
+  const git = (...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  let top;
+  try { top = git('rev-parse', '--show-toplevel'); } catch { return; }
+  const wt = path.join(top, '.claude', 'worktrees');
+  if (!fs.existsSync(wt)) return;
+  try {
+    git('-C', top, 'check-ignore', '-q', '.claude/worktrees/');
+    return; // ignored, so -A can't pick it up
+  } catch { /* not ignored */ }
+  block('`git add -A` / `git add .` while `.claude/worktrees/` exists and isn\'t in .gitignore — it would commit agent worktrees. Stage explicit paths, or add `.claude/worktrees/` to .gitignore');
+}
+
 function checkGhPrMerge(args, cwd) {
   if (args.includes('--admin')) block('`gh pr merge --admin` bypasses branch protection');
-  // First positional after `pr merge` that isn't a flag value.
-  const valueFlags = new Set(['-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email']);
-  let target = null;
-  let repo = null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (valueFlags.has(a)) {
-      if (a === '-R' || a === '--repo') repo = args[i + 1];
-      i++;
-      continue;
-    }
-    if (a.startsWith('--repo=')) { repo = a.slice(7); continue; }
-    if (a.startsWith('-')) continue;
-    if (!target) target = a;
-  }
+  const { target, repo } = lib.prMergeTarget(args);
   const viewArgs = ['pr', 'view'];
   if (target) viewArgs.push(target);
   if (repo) viewArgs.push('--repo', repo);
@@ -143,8 +121,9 @@ function checkGhApi(args) {
 function checkSegment(tokens, cwd) {
   const git = gitParts(tokens);
   if (git && git.sub === 'push') checkGitPush(git.args, git.dir || cwd);
+  if (git && git.sub === 'add') checkGitAdd(git.args, git.dir || cwd);
 
-  const gh = ghParts(tokens);
+  const gh = lib.ghParts(tokens);
   if (!gh) return;
   const [g0, g1] = gh;
   if (g0 === 'pr' && g1 === 'merge') checkGhPrMerge(gh.slice(2), cwd);
@@ -159,7 +138,7 @@ function main() {
   const cmd = input.tool_input && input.tool_input.command;
   if (typeof cmd !== 'string' || !/\b(git|gh)(\.exe)?\b/.test(cmd)) return;
   const cwd = input.cwd || lib.projectDir(input);
-  for (const seg of segments(cmd)) checkSegment(seg, cwd);
+  for (const seg of lib.segments(cmd)) checkSegment(seg, cwd);
 }
 
 main();

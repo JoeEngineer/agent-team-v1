@@ -136,7 +136,67 @@ function usageFrom(resp) {
   return out;
 }
 
+// Split a command line into segments on && || ; | and newlines, then tokenize
+// each segment with basic single/double quote handling.
+function segments(cmd) {
+  const out = [];
+  let cur = [], tok = '', quote = null, hasTok = false;
+  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; };
+  const pushSeg = () => { pushTok(); if (cur.length) out.push(cur); cur = []; };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (quote) {
+      if (c === quote) quote = null; else tok += c;
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
+    if (c === '\n' || c === ';' || c === '|' || c === '&') { pushSeg(); continue; }
+    if (/\s/.test(c)) { pushTok(); continue; }
+    tok += c; hasTok = true;
+  }
+  pushSeg();
+  return out;
+}
+
+// Arguments after `gh` in a token list, or null if the segment isn't a gh call.
+function ghParts(tokens) {
+  const gi = tokens.findIndex((t) => t === 'gh' || t === 'gh.exe' || /[\\/]gh(\.exe)?$/.test(t));
+  if (gi < 0) return null;
+  return tokens.slice(gi + 1);
+}
+
+// For the args after `gh pr merge`: the PR (number, URL or branch; null means
+// the current branch's PR) and the --repo value, if any.
+function prMergeTarget(args) {
+  const valueFlags = new Set(['-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email']);
+  let target = null;
+  let repo = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (valueFlags.has(a)) {
+      if (a === '-R' || a === '--repo') repo = args[i + 1];
+      i++;
+      continue;
+    }
+    if (a.startsWith('--repo=')) { repo = a.slice(7); continue; }
+    if (a.startsWith('-')) continue;
+    if (!target) target = a;
+  }
+  return { target, repo };
+}
+
+// Every `gh pr merge` in a command line, as { target, repo, args }.
+function findPrMerges(cmd) {
+  const out = [];
+  for (const seg of segments(cmd || '')) {
+    const gh = ghParts(seg);
+    if (gh && gh[0] === 'pr' && gh[1] === 'merge') out.push({ ...prMergeTarget(gh.slice(2)), args: gh.slice(2) });
+  }
+  return out;
+}
+
 module.exports = {
   PLUGIN_ROOT, readStdin, projectDir, logDir, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
+  segments, ghParts, prMergeTarget, findPrMerges,
 };

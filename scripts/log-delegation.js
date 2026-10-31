@@ -6,6 +6,8 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { execFileSync } = require('child_process');
 const lib = require('./lib');
 
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
@@ -63,22 +65,26 @@ function resolveRouting(input, ti) {
   };
 }
 
-// A review can be seen twice (PostToolUse for a foreground subagent, then
-// SubagentStop). Log it once per agent id.
-function claimReview(input, agentId) {
-  if (!agentId) return true;
+// Create a marker file once; false if it already exists. Used to log an event
+// once when several hooks see it.
+function claimOnce(input, key) {
   const dir = path.join(lib.logDir(input), '.pending');
   fs.mkdirSync(dir, { recursive: true });
   try {
-    fs.writeFileSync(path.join(dir, `review-${String(agentId).replace(/[^\w-]/g, '_')}`), '', { flag: 'wx' });
+    fs.writeFileSync(path.join(dir, String(key).replace(/[^\w-]/g, '_')), '', { flag: 'wx' });
     return true;
   } catch {
     return false;
   }
 }
 
+const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
+
+// A review can be seen twice (PostToolUse for a foreground subagent, then
+// SubagentStop). Log it once per agent id and verdict content, so a re-review
+// by the same (resumed) reviewer is still logged.
 function logReview(input, record, review) {
-  if (!claimReview(input, record.agent_id)) return;
+  if (record.agent_id && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return;
   lib.appendJsonl(input, 'reviews.jsonl', {
     ...base(input),
     agent_id: record.agent_id || null,
@@ -178,23 +184,80 @@ function onPostBridge(input) {
   });
 }
 
+// Ask GitHub what happened to the PR instead of guessing from command output:
+// the Director often chains a merge with other commands whose output mentions
+// "error" or "failed". Returns null if gh can't answer.
+function prState(input, { target, repo }) {
+  const args = ['pr', 'view'];
+  if (target) args.push(target);
+  if (repo) args.push('--repo', repo);
+  args.push('--json', 'number,state,autoMergeRequest');
+  try {
+    const out = execFileSync('gh', args, {
+      cwd: input.cwd || lib.projectDir(input),
+      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 7000,
+    });
+    return JSON.parse(out);
+  } catch {
+    return null;
+  }
+}
+
+function mergeOutcome(state) {
+  if (!state) return 'unknown';
+  if (state.state === 'MERGED') return 'merged';
+  if (state.state === 'OPEN' && state.autoMergeRequest) return 'auto-merge-queued';
+  return 'not-merged';
+}
+
 function onPostShell(input) {
   const cmd = (input.tool_input && input.tool_input.command) || '';
   if (!/\bgh\s+pr\s+merge\b/.test(cmd)) return;
-  const text = lib.responseText(input.tool_response);
-  const failed = /\b(error|failed|not mergeable|denied)\b/i.test(text);
-  lib.appendJsonl(input, 'merges.jsonl', {
+  // Only real `gh pr merge` segments count, not the words inside a quoted string.
+  for (const m of lib.findPrMerges(cmd)) {
+    const state = prState(input, m);
+    lib.appendJsonl(input, 'merges.jsonl', {
+      ...base(input),
+      command: cmd.slice(0, 300),
+      pr: state && state.number != null ? String(state.number) : m.target,
+      outcome: mergeOutcome(state),
+      outcome_source: state ? 'gh pr view' : 'none',
+      chained: lib.segments(cmd).length > 1,
+    });
+  }
+}
+
+// SendMessage to an existing agent with a task card is a new attempt of that
+// task (warm context). Log it as a delegation so attempts aren't lost.
+function onPostSendMessage(input) {
+  const ti = input.tool_input || {};
+  const message = typeof ti.message === 'string' ? ti.message : lib.responseText(ti.message);
+  const task = lib.parseTaskCard(message);
+  if (!task.id) return;
+  const agentId = ti.to || ti.recipient || null;
+  const prior = findDelegation(input, agentId) || {};
+  lib.appendJsonl(input, 'delegations.jsonl', {
     ...base(input),
-    command: cmd.slice(0, 300),
-    pr: (cmd.match(/gh\s+pr\s+merge\s+(\S+)/) || [])[1] || null,
-    outcome: failed ? 'failed' : 'merged',
+    kind: 'resume',
+    agent: prior.agent || null,
+    agent_id: agentId,
+    tool_use_id: input.tool_use_id || null,
+    model: prior.model || 'unknown',
+    model_source: prior.model ? 'prior-delegation' : 'unknown',
+    resolved_model: prior.resolved_model || null,
+    effort: prior.effort || 'unknown',
+    effort_source: prior.effort ? 'prior-delegation' : 'unknown',
+    description: ti.summary,
+    task,
   });
 }
 
 // Read a subagent transcript: task card from its first prompt, model, tokens
-// (each API message counted once), wall time, and the final assistant text.
+// (each API message counted once), wall time, and the final report. The report
+// is the SubagentHandback tool's message when the agent used it, else the last
+// assistant text.
 function readSubagentTranscript(file) {
-  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '' };
+  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null };
   const seen = new Set();
   let lastMsgId = null;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -208,7 +271,15 @@ function readSubagentTranscript(file) {
     }
     if (e.type !== 'assistant') continue;
     if (e.timestamp) out.last = Date.parse(e.timestamp);
+    out.lastId = m.id || e.uuid || out.lastId;
     if (m.model) out.model = m.model;
+    if (Array.isArray(m.content)) {
+      for (const c of m.content) {
+        if (c && c.type === 'tool_use' && c.name === 'SubagentHandback' && c.input) {
+          out.handback = lib.responseText(c.input.message);
+        }
+      }
+    }
     if (m.id && !seen.has(m.id) && m.usage) {
       seen.add(m.id);
       const u = m.usage;
@@ -256,6 +327,19 @@ function onSubagentStop(input) {
   const t = readSubagentTranscript(tPath);
   const meta = readMeta(tPath);
   const agentId = input.agent_id || (path.basename(tPath).match(/^agent-(.+)\.jsonl$/) || [])[1] || null;
+  // The final report. `last_assistant_message` in the hook input is complete
+  // when the hook runs; the transcript file can lag one message behind (seen
+  // live in 2.1.314), so it's the fallback. Prefer a source with a JSON block.
+  const sources = [
+    ['hook-input', typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null],
+    ['handback', t.handback],
+    ['text', t.lastText],
+  ].filter(([, v]) => v);
+  const hasBlock = (v) => /```(result|review)-json/.test(v);
+  const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
+  // SubagentStop can fire more than once for the same finish. A resumed agent
+  // finishes again with a new report, so it's still logged.
+  if (agentId && !claimOnce(input, `stop-${agentId}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const agentType = input.agent_type || meta.agentType || null;
   const delegation = findDelegation(input, agentId);
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
@@ -268,13 +352,17 @@ function onSubagentStop(input) {
     model: routing.model,
     resolved_model: t.model,
     effort: routing.effort,
+    // The effort Claude Code actually ran the subagent at, when the hook says.
+    resolved_effort: (input.effort && input.effort.level) || null,
     task: delegation ? delegation.task : lib.parseTaskCard(t.prompt),
+    // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
     // Includes cache reads/writes, so it's larger than Claude Code's own
     // `tokens` total on the delegation line. Compare like with like.
     tokens_with_cache: t.tokens || null,
-    result: lib.lastFencedJson(t.lastText, 'result-json'),
-    review: lib.lastFencedJson(t.lastText, 'review-json'),
+    report_source: reportSource,
+    result: lib.lastFencedJson(report, 'result-json'),
+    review: lib.lastFencedJson(report, 'review-json'),
   };
   lib.appendJsonl(input, 'completions.jsonl', record);
   if (record.review) logReview(input, record, record.review);
@@ -292,6 +380,7 @@ function main() {
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
   if (isBridge(tool)) return onPostBridge(input);
   if (isShell(tool)) return onPostShell(input);
+  if (tool === 'SendMessage') return onPostSendMessage(input);
 }
 
 try {
