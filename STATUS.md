@@ -13,10 +13,10 @@ Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
 |---|---|---|---|---|---|---|---|
 | SS-0 | Breakdown | architect | large (opus) / high | 1 | done | #6 | |
 | SS-1 | Split test harness into per-area files | implementer | small (haiku) / medium | 1 | merged | #7 | #17 |
-| SS-2 | Root `plugin.json` + manifest sync test | implementer | small (haiku) / medium | | planned | #8 | |
-| SS-3 | Model map + `scripts/models.js` resolver | implementer | medium (sonnet) / medium | 1 | in progress | #9 | |
-| SS-4 | Tool detection, Codex stub, hook matchers | implementer | medium (sonnet) / medium | 1 | in progress | #10 | |
-| SS-5 | Commands → skills | implementer | medium (sonnet) / medium | | planned | #11 | |
+| SS-2 | Root `plugin.json` + manifest sync test | implementer | small (haiku) / medium | 1 | in progress | #8 | |
+| SS-3 | Model map + `scripts/models.js` resolver | implementer | medium (sonnet) / medium | 2 | merged | #9 | #19 |
+| SS-4 | Tool detection, Codex stub, hook matchers | implementer | medium (sonnet) / medium | 2 | merged | #10 | #18 |
+| SS-5 | Commands → skills | implementer | medium (sonnet) / medium | 1 | in progress | #11 | |
 | SS-6 | Tier + resolved model in logs; `tier_fallback` | implementer | medium (sonnet) / medium | | planned | #12 | |
 | SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | | planned | #13 | |
 | SS-8 | README + 0.3.0 | implementer | small (haiku) / low | | planned | #14 | |
@@ -34,11 +34,15 @@ Before each wave, the Director checks `runway --refresh --json` (Claude 5-hour w
 - 20–40% left: start at most two tasks, and keep the rest for after the window renews;
 - under 20% left, or anything in `blockedBy`: `runway wait` (in the background) before starting.
 
-Last check 2026-10-31 12:15 UTC: 5-hour window 32% left (renews ~15:20 UTC) → wave 2 started with SS-3 and SS-4 only; SS-2 and SS-5 held until the window renews.
+Last check 2026-10-31 12:42 UTC: 5-hour window 22% left (renews ~15:20 UTC) → wave 3 started with SS-2 and SS-5; SS-6 and SS-7 held until the window renews.
 
 ## Blocked
 
 - (none)
+
+## Follow-ups
+
+- SS-4: `SubagentStart` hook entry not added (Claude Code acceptance unconfirmed) — check in SS-9.
 
 ## Needs the user
 
