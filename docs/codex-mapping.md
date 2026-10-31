@@ -82,21 +82,40 @@ How each piece of the `agent-team` plugin (0.2.0) maps to Codex, as step 2 of su
 
 ### Models and effort
 
-OpenAI's current family has **four** tiers, largest first: **Astra → Sol → Terra → Luna**. Terra is the newest addition and reportedly better than Sol at writing. (This ordering comes from the project owner; `models_cache.json` only gives short descriptions.) Claude has three, so routing keeps three tiers, and Terra becomes a per-task-type option instead of a tier of its own:
+Both families have **four** models, largest first:
+- **Claude:** Fable → Opus → Sonnet → Haiku.
+- **OpenAI:** Astra → Sol → Terra → Luna. Terra is the newest and reportedly better than Sol at writing.
 
-| Tier | Claude | Codex (models on this account) | Notes |
-|---|---|---|---|
-| small | `haiku` | `gpt-6-luna` ("fast and affordable") | `gpt-reserve` is also listed as "fast and affordable agentic coding". Worth comparing. |
-| medium | `sonnet` | `gpt-6.1-sol` ("workhorse", your current default) | |
-| large | `opus` | `gpt-6-astra` ("frontier") | |
-| writing (Codex only, optional) | (uses medium) | `gpt-6.1-terra` | Sits between Sol and Luna in general ability, reportedly better than Sol at writing. Try it on `docs`, PR descriptions and decision records, where the Claude table uses Haiku or Sonnet. Let the Coach compare it with Sol on review results before making it a default. |
+The orderings come from the project owner; `models_cache.json` only gives short descriptions. The fourth model plays a different role in each: Fable sits above Opus, while Terra sits between Sol and Luna. So routing uses three **standard** tiers plus two optional ones:
 
-The routing table can express this as a task-type override (`docs → writing tier`) that the Claude package maps back to its normal tier. That way the core routing file stays shared.
+| Tier | Claude | Codex (models on this account) | On by default? | Notes |
+|---|---|---|---|---|
+| small | `haiku` | `gpt-6-luna` ("fast and affordable") | yes | `gpt-reserve` is also listed as "fast and affordable agentic coding". Worth comparing. |
+| medium | `sonnet` | `gpt-6.1-sol` ("workhorse", your current default) | yes | |
+| large | `opus` | `gpt-6-astra` ("frontier") | yes | Top of the escalation ladder by default. |
+| xlarge | `fable` | (none above Astra) | **no** | On the owner's Claude plan, Fable needs **usage credits**: it's billed at API rates, not covered by the plan. Enabled per install; see the rule below. |
+| writing | (uses medium) | `gpt-6.1-terra` | optional | Reportedly better than Sol at writing, below it in general. Try it on `docs`, PR descriptions and decision records. Let the Coach compare it with Sol on review results before making it a default. |
+
+**Rule for tiers that cost extra:** a tier marked `billing: credits` in the install's model map is never chosen by the routing table or the escalation ladder. When the ladder runs out at `large`, the Director stops and asks the user, as it does today. It can *offer* the xlarge tier with a cost note, and only uses it after a yes for that task. The log line records `tier: xlarge` and `billing: credits`, so the Coach can show what those tasks cost and whether they passed review.
+
+**Per-install model map** (a sketch; the restructure decides the file name):
+
+```toml
+[tiers.small]   claude = "haiku"   codex = "gpt-6-luna"
+[tiers.medium]  claude = "sonnet"  codex = "gpt-6.1-sol"
+[tiers.large]   claude = "opus"    codex = "gpt-6-astra"
+[tiers.xlarge]  claude = "fable"   billing = "credits"   enabled = false
+[tiers.writing] codex  = "gpt-6.1-terra"   fallback = "medium"
+```
+
+The routing table names tiers and task-type overrides (`docs → writing`). Each package resolves them through this map, so the core routing file stays shared. A work install simply has no `claude` keys.
 
 | Effort tier | Claude | Codex |
 |---|---|---|
 | low / medium / high | `low` / `medium` / `high` | `low` / `medium` / `high` |
 | (unused at first) | `xhigh`, `max` | `xhigh`, `max`, `ultra` (model-dependent) |
+
+Higher effort levels cost more on both plans. They stay off the ladder at first, like the xlarge tier, until the Coach has data that `high` isn't enough for some task type.
 
 The routing table should name **tiers**. Each package maps tiers to models in one small, per-install config file, because the work account may expose different models. Logs record both the tier and the `model` Codex reports.
 
