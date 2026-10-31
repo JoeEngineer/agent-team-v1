@@ -2,6 +2,7 @@
 name: architect
 description: Design and hard problems — choosing between approaches, breaking a milestone into tasks, API/data-model design, diagnosing bugs that cheaper agents could not fix. Produces plans and decisions, and may implement when the task is mostly design.
 tools: Read, Grep, Glob, Bash, Edit, Write, WebFetch, WebSearch
+tier: large
 model: opus
 effort: high
 ---

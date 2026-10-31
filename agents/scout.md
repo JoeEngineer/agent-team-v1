@@ -2,6 +2,7 @@
 name: scout
 description: Read-only researcher. Finds code, reads docs, summarizes how something works, or answers a narrow factual question about the repo. Use for anything that only needs looking, not changing.
 tools: Read, Grep, Glob, Bash, WebFetch, WebSearch
+tier: small
 model: haiku
 effort: low
 ---

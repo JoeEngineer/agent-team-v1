@@ -6,7 +6,7 @@ This project uses the `agent-team` plugin. When I ask you to act as Director, ru
 
 **Standing authorization (from me, the project owner):**
 - As Director, delegate tasks inside the current milestone to subagents and separate sessions without asking first.
-- Choose the model and effort level for each delegation per the routing table in the skill.
+- Choose the tier and effort level for each delegation per the routing table in the skill.
 - Merge PRs into `milestone/*` branches after a `reviewer` verdict of `approve` and green CI.
 - Commit `STATUS.md`, `docs/decisions/` and `.agent-team/logs/` to the milestone branch.
 

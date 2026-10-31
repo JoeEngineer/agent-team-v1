@@ -2,6 +2,7 @@
 name: reviewer
 description: Reviews a PR or branch against its task's acceptance criteria and the project's standards. Gives a structured verdict the Director uses to merge or send back. Use for every PR before merge.
 tools: Read, Grep, Glob, Bash
+tier: medium
 model: sonnet
 effort: high
 ---
