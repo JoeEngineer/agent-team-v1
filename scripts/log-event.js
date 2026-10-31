@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 // Manually append an event to the team logs.
 //   node log-event.js <kind> '<json>'
+//   node log-event.js <kind> -              (JSON read from stdin)
+//   node log-event.js <kind> --file <path>  (JSON read from a file)
+// The stdin and --file forms keep the JSON out of shell quoting.
 // kind: decision | escalation | merge | note | milestone | tier_fallback | delegation | review
 //   tier_fallback e.g. '{"task":"X-1","from":"large","to":"medium","tool":"claude","reason":"model unavailable"}'
 //   delegation   e.g. '{"card":"TASK id=X-1 ... \nWHY ...","tool":"codex","task_name":"x_1_a1","agent":"implementer-medium","model":"gpt-6.1-terra","effort":"medium"}'
@@ -10,21 +13,55 @@
 // Writes to <project>/.agent-team/logs/<kind>s.jsonl, adding ts and guidance_version.
 'use strict';
 
+const fs = require('fs');
 const lib = require('./lib');
 const records = require('./records');
 
 const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review']);
 
+const USAGE = [
+  `usage: log-event.js <${[...KINDS].join('|')}> <form>`,
+  "  form: '<json>'             JSON as an argument",
+  '        -                    JSON on stdin',
+  '        --file <path>        JSON from a file',
+].join('\n');
+
+// Returns { json, fromArg } with the JSON text, { usage: true } for a bad form,
+// or { error } if the file can't be read. Only the argument form may be empty (no JSON).
+function jsonSource(args) {
+  const [first, second] = args;
+  if (first === '-') return { json: fs.readFileSync(0, 'utf8'), fromArg: false };
+  if (first === '--file') {
+    if (!second) return { usage: true };
+    try {
+      return { json: fs.readFileSync(second, 'utf8'), fromArg: false };
+    } catch (err) {
+      return { error: `cannot read ${second}: ${err.code || err.message}` };
+    }
+  }
+  return { json: first, fromArg: true };
+}
+
 function main(argv) {
-  const [kind, json] = argv;
+  const [kind, ...args] = argv;
   if (!KINDS.has(kind)) {
-    console.error(`usage: log-event.js <${[...KINDS].join('|')}> '<json>'`);
+    console.error(USAGE);
+    return 1;
+  }
+  const src = jsonSource(args);
+  if (src.usage) {
+    console.error(USAGE);
+    return 1;
+  }
+  if (src.error) {
+    console.error(src.error);
     return 1;
   }
   let data = {};
-  if (json) {
+  // An empty argument means no JSON, as before. Empty stdin or file is invalid JSON.
+  if (src.json || !src.fromArg) {
     try {
-      data = JSON.parse(json);
+      data = JSON.parse(src.json);
     } catch (err) {
       console.error(`invalid JSON: ${err.message}`);
       return 1;

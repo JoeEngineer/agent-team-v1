@@ -22,7 +22,7 @@ plain text and the subagent transcript carries the same name in
 - **Director-first logging.** The Director writes the task card itself, before
   spawning, with `log-event.js delegation '{"card":"TASK ...","tool":"codex","task_name":"..."}'`
   (and `log-event.js review ...`). Those lines carry `source: "director"`, the
-  parsed `task` and the `WHY`.
+  parsed `task` and the `WHY`. In PowerShell, or for JSON with quotes or newlines, pass `-` and pipe the JSON on stdin (see [codex.md](../../skills/director/references/codex.md)).
 - **Hook fallback.** On a spawn the hook writes a `kind: "subagent"` line with
   `source: "hook"` (agent, effort, model and tier from
   `.codex/agents/<agent_type>.toml`, else from the `<role>-<tier>` name through
