@@ -14,17 +14,17 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-0 | Breakdown | architect | large (opus) / high | 1 | done | #28 | |
 | CD-1 | Live spike: plugin hooks, matchers, skill names | implementer | medium (sonnet) / low | 1 | done | #28 | |
 | CD-2 | Review-logging diagnosis | scout | medium (sonnet) / medium | 1 | done | #28 | |
-| CD-3 | `models.js up/down` + routing.md | implementer | small (haiku) / medium | 1 | in progress | #29 | |
-| CD-4 | Extract record helpers to `records.js` | implementer | medium (sonnet) / medium | 1 | in progress | #30 | |
-| CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | | planned | #31 | |
+| CD-3 | `models.js up/down` + routing.md | implementer | small (haiku) / medium | 1 | merged | #29 | #48 |
+| CD-4 | Extract record helpers to `records.js` | implementer | medium (sonnet) / medium | 1 | merged | #30 | #49 |
+| CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | 1 | in progress | #31 | |
 | CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | | planned | #32 | |
-| CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | | planned | #33 | |
-| CD-8 | Codex agent TOML generator | implementer | medium (sonnet) / medium | 1 | in progress | #34 | |
-| CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | in progress | #35 | |
-| CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | | planned | #36 | |
+| CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | 1 | in progress | #33 | |
+| CD-8 | Codex agent TOML generator | implementer | medium (sonnet) / medium | 1 | merged | #34 | #51 |
+| CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | merged | #35 | #47 |
+| CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | in review | #36 | #53 |
 | CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | | planned | #37 | |
 | CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | | planned | #38 | |
-| CD-13 | `archive-logs.js` | implementer | medium (sonnet) / medium | 1 | in progress | #39 | |
+| CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | changes requested | #39 | #50 |
 | CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / medium | | planned | #40 | |
 | CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | | planned | #41 | |
 | CD-16 | Codex live test harness | implementer | medium (sonnet) / low | | planned | #42 | |
