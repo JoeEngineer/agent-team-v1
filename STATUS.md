@@ -17,8 +17,8 @@ Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
 | SS-3 | Model map + `scripts/models.js` resolver | implementer | medium (sonnet) / medium | 2 | merged | #9 | #19 |
 | SS-4 | Tool detection, Codex stub, hook matchers | implementer | medium (sonnet) / medium | 2 | merged | #10 | #18 |
 | SS-5 | Commands → skills | implementer | medium (sonnet) / medium | 2 | merged | #11 | #20 |
-| SS-6 | Tier + resolved model in logs; `tier_fallback` | implementer | medium (sonnet) / medium | | planned | #12 | |
-| SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | | planned | #13 | |
+| SS-6 | Tier + resolved model in logs; `tier_fallback` | implementer | medium (sonnet) / medium | 1 | in progress | #12 | |
+| SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | 1 | in progress | #13 | |
 | SS-8 | README + 0.3.0 | implementer | small (haiku) / low | | planned | #14 | |
 | SS-9 | Live verification (Claude + Codex) | implementer | medium (sonnet) / low | | planned | #15 | |
 | SS-10 | Milestone final review | reviewer | large (opus) / high | | planned | #16 | |
@@ -29,12 +29,9 @@ Dependencies: SS-1 → SS-2…SS-5 (parallel) → SS-6 (needs SS-3, SS-4), SS-7 
 
 ## Capacity
 
-Before each wave, the Director checks `runway --refresh --json` (Claude 5-hour window and `blockedBy`):
-- more than 40% left in the 5-hour window: start the whole wave;
-- 20–40% left: start at most two tasks, and keep the rest for after the window renews;
-- under 20% left, or anything in `blockedBy`: `runway wait` (in the background) before starting.
+Before each wave, the Director checks `runway --refresh --json` (Claude 5-hour window and `blockedBy`). Rule set by the user on 2026-10-31: keep going while the 5-hour window has 10% or more left; below 10%, or with anything in `blockedBy`, wait for the window to renew before starting more work.
 
-Last check 2026-10-31 12:48 UTC: 5-hour window 17% left (renews ~15:20 UTC) → under 20%, so SS-6 and SS-7 wait for the window to renew.
+Last check 2026-10-31 12:50 UTC: 5-hour window 17% left (renews ~15:20 UTC) → SS-6 and SS-7 started.
 
 ## Blocked
 
