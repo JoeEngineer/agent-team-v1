@@ -78,13 +78,36 @@ const blocked = [
   ['repo delete', 'gh repo delete o/r --yes'],
   ['release create', 'gh release create v1.0.0'],
   ['powershell-style chain', 'git status; git push origin main'],
+  ['push after a heredoc ends', "cat <<EOF > notes.txt\nsome text\nEOF\ngit push origin main"],
+  ['push after a quoted <<- heredoc', "cat <<-'EOF'\n\tgit status\n\tEOF\ngit push origin main"],
+  ['push chained after a heredoc line', "git commit -F - <<'EOF' && git push origin main\nmsg\nEOF"],
+  ['push after an arithmetic shift ($((1<<2)) is not a heredoc)', 'echo $((1<<2))\ngit push origin main'],
+  ['push after a (( )) shift with a variable', 'x=1; (( y = x<<n ))\ngit push origin main'],
 ];
+// The guard blocks with a JSON "deny" decision on stdout and exit 0, which both
+// Claude Code and Codex honour. Codex ignores exit code 2.
+function denial(r) {
+  if (!r.stdout.trim()) return null;
+  try {
+    const out = JSON.parse(r.stdout).hookSpecificOutput || {};
+    return out.hookEventName === 'PreToolUse' && out.permissionDecision === 'deny' ? out.permissionDecisionReason || '' : null;
+  } catch {
+    return null;
+  }
+}
+function assertBlocked(r, label, reasonRe = /agent-team guard blocked/) {
+  eq(r.status, 0, `exit code for ${label}`);
+  const reason = denial(r);
+  assert(reason !== null, `${label}: expected a JSON deny decision on stdout, got ${JSON.stringify(r.stdout)}`);
+  assert(reasonRe.test(reason), `${label}: reason explains the block`);
+}
+function assertAllowed(r, label) {
+  eq(r.status, 0, `exit code for ${label} (stderr: ${r.stderr.trim()})`);
+  eq(r.stdout, '', `${label}: no output, so nothing can be read as a decision`);
+}
+
 for (const [name, cmd] of blocked) {
-  test(`blocks: ${name}`, () => {
-    const r = guard(cmd);
-    eq(r.status, 2, `exit code for "${cmd}"`);
-    assert(/agent-team guard blocked/.test(r.stderr), 'stderr explains the block');
-  });
+  test(`blocks: ${name}`, () => assertBlocked(guard(cmd), `"${cmd}"`));
 }
 
 const allowed = [
@@ -96,35 +119,44 @@ const allowed = [
   ['pr list', 'gh pr list --state open'],
   ['pr view', 'gh pr view 12'],
   ['echo mentioning main', 'echo "git push origin main is blocked"'],
+  ['heredoc commit message mentioning a push', "git commit -q -F - <<'EOF'\nFix guard\n\nVerified live: git push origin main is blocked in Claude Code\nEOF"],
+  ['unquoted heredoc with CRLF', 'git commit -F - <<EOF\r\ngit push --force origin main\r\nEOF\r\n'],
+  ['multi-line -m message mentioning a push', 'git commit -m "Fix guard\n\ngit push origin main; git push -f\n"'],
+  ['multi-line echo mentioning a push', "echo 'first line\ngit push origin main'"],
   ['non-git command', 'npm test'],
 ];
 for (const [name, cmd] of allowed) {
-  test(`allows: ${name}`, () => {
-    const r = guard(cmd);
-    eq(r.status, 0, `exit code for "${cmd}" (stderr: ${r.stderr.trim()})`);
-  });
+  test(`allows: ${name}`, () => assertAllowed(guard(cmd), `"${cmd}"`));
 }
 
 test('blocks bare push while on main', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-main-'));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
   const r = run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, cwd: dir }, dir);
-  eq(r.status, 2, 'exit code');
+  assertBlocked(r, 'bare push on main');
 });
 
 test('git add -A / . blocked while .claude/worktrees/ exists unignored; allowed otherwise', () => {
   const dir = tmpProject();
   const g = (command) => run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: dir }, dir);
-  eq(g('git add -A').status, 0, 'no worktrees folder: allowed');
+  assertAllowed(g('git add -A'), 'no worktrees folder');
   fs.mkdirSync(path.join(dir, '.claude', 'worktrees', 'agent-x'), { recursive: true });
   for (const cmd of ['git add -A', 'git add .', 'git add --all', 'git commit -m x; git add -A']) {
-    const r = g(cmd);
-    eq(r.status, 2, `blocked: ${cmd}`);
-    assert(/explicit paths/.test(r.stderr), 'stderr explains');
+    assertBlocked(g(cmd), `"${cmd}"`, /explicit paths/);
   }
-  eq(g('git add STATUS.md docs/ .agent-team/logs/').status, 0, 'explicit paths allowed');
+  assertAllowed(g('git add STATUS.md docs/ .agent-team/logs/'), 'explicit paths');
   fs.writeFileSync(path.join(dir, '.gitignore'), '.claude/worktrees/\n');
-  eq(g('git add -A').status, 0, 'ignored: allowed');
+  assertAllowed(g('git add -A'), 'ignored worktrees');
+});
+
+test('a Codex-shaped PreToolUse input is blocked the same way', () => {
+  // Fields as captured from Codex 0.166 (docs/codex-mapping.md, live test).
+  const r = run('guard.js', {
+    session_id: 's', turn_id: 't', transcript_path: null, cwd: gproj, hook_event_name: 'PreToolUse',
+    model: 'gpt-6-luna', permission_mode: 'bypassPermissions', tool_name: 'Bash',
+    tool_input: { command: 'git push origin main' }, tool_use_id: 'exec-1',
+  }, gproj);
+  assertBlocked(r, 'Codex push to main');
 });
 
 // ---------------------------------------------------------------- logger

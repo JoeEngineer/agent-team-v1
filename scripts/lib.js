@@ -136,11 +136,39 @@ function usageFrom(resp) {
   return out;
 }
 
+// Read a heredoc delimiter word starting at cmd[i], dropping quotes and
+// backslashes (`EOF`, `'EOF'`, `"EOF"`, `\EOF`). Returns { word, end }.
+function heredocWord(cmd, i) {
+  let word = '', q = null;
+  for (; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (q) { if (c === q) q = null; else word += c; continue; }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (c === '\\') continue;
+    if (/[\s;&|<>()]/.test(c)) break;
+    word += c;
+  }
+  return { word, end: i };
+}
+
+// True when position i is inside an unclosed `$((` … `))` (or `((` … `))`) on
+// its line, where `<<` is a bit shift, not a heredoc. Treating a shift as a
+// heredoc would skip every following line, so a guard must not guess that way.
+function inArithmetic(cmd, i) {
+  const before = cmd.slice(cmd.lastIndexOf('\n', i - 1) + 1, i);
+  const opens = (before.match(/\(\(/g) || []).length;
+  const closes = (before.match(/\)\)/g) || []).length;
+  return opens > closes;
+}
+
 // Split a command line into segments on && || ; | and newlines, then tokenize
-// each segment with basic single/double quote handling.
+// each segment with basic single/double quote handling. Newlines inside quotes
+// stay in the token, and heredoc bodies (after `<<WORD`, `<<'WORD'`, `<<-WORD`)
+// are skipped, so text in a commit message isn't read as a command.
 function segments(cmd) {
   const out = [];
   let cur = [], tok = '', quote = null, hasTok = false;
+  const heredocs = []; // delimiters waiting for the end of the current line
   const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; };
   const pushSeg = () => { pushTok(); if (cur.length) out.push(cur); cur = []; };
   for (let i = 0; i < cmd.length; i++) {
@@ -150,6 +178,35 @@ function segments(cmd) {
       continue;
     }
     if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
+    if (c === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<' && !inArithmetic(cmd, i)) {
+      pushTok();
+      let j = i + 2;
+      const strip = cmd[j] === '-';
+      if (strip) j++;
+      while (cmd[j] === ' ' || cmd[j] === '\t') j++;
+      const { word, end } = heredocWord(cmd, j);
+      if (word) heredocs.push({ word, strip });
+      i = end - 1;
+      continue;
+    }
+    if (c === '\n' && heredocs.length) {
+      pushSeg();
+      // Skip each pending heredoc body, line by line, up to its closing line.
+      let pos = i + 1;
+      for (const { word, strip } of heredocs) {
+        while (pos < cmd.length) {
+          let nl = cmd.indexOf('\n', pos);
+          if (nl < 0) nl = cmd.length;
+          let line = cmd.slice(pos, nl).replace(/\r$/, '');
+          if (strip) line = line.replace(/^\t+/, '');
+          pos = nl + 1;
+          if (line === word) break;
+        }
+      }
+      heredocs.length = 0;
+      i = pos - 1;
+      continue;
+    }
     if (c === '\n' || c === ';' || c === '|' || c === '&') { pushSeg(); continue; }
     if (/\s/.test(c)) { pushTok(); continue; }
     tok += c; hasTok = true;

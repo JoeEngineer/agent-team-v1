@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// PreToolUse guard for Bash/PowerShell commands. Blocks (exit 2) actions the
-// Director is not authorized to take on its own:
+// PreToolUse guard for Bash/PowerShell commands. Blocks actions the Director is
+// not authorized to take on its own:
 //   - merging a PR whose base is a protected branch (default: main, master)
 //   - `gh pr merge --admin`
 //   - force-pushes, pushes to protected branches, deleting protected/milestone branches
@@ -20,12 +20,23 @@ const PROTECTED = (process.env.AGENT_TEAM_PROTECTED_BRANCHES || 'main,master')
   .split(',').map((s) => s.trim()).filter(Boolean);
 const isProtected = (b) => PROTECTED.includes(b);
 
+// Block by printing a PreToolUse "deny" decision as JSON and exiting 0.
+// Claude Code and Codex both honour this. Don't use exit code 2: Codex 0.166
+// ignores it and runs the command anyway (see docs/codex-mapping.md).
 function block(reason) {
-  process.stderr.write(
+  const message =
     `agent-team guard blocked this command: ${reason}\n` +
-    'This needs the user. Ask them to run it or to change the rule in the project\'s CLAUDE.md / guard settings.\n'
-  );
-  process.exit(2);
+    'This needs the user. Ask them to run it or to change the rule in the project\'s instructions file (CLAUDE.md / AGENTS.md) or guard settings.';
+  process.stdout.write(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: message,
+    },
+  }));
+  // Also on stderr, for anyone reading hook logs.
+  process.stderr.write(message + '\n');
+  process.exit(0);
 }
 
 // For `git [-C dir] [-c k=v] <sub> args...` return { sub, args, dir }.
