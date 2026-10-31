@@ -31,10 +31,10 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 2 | merged | #43 | #66 |
 | CD-18 | README + 0.4.0 | implementer | small (haiku) / low | 1 | merged | #44 | #63 |
 | CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | 1 | done (8/8 pass) | #45 | |
-| CD-20 | Milestone final review | reviewer | large (opus) / high | 1 | changes requested (log policy; fixes in CD-23) | #46 | |
+| CD-20 | Milestone final review | reviewer | large (opus) / high | 3 | approved | #46 | #69 |
 | CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
 | CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 2 | merged | #65 | #67 |
-| CD-23 | Final-review cleanups | implementer | medium (sonnet) / medium | 1 | in progress | #68 | |
+| CD-23 | Final-review cleanups | implementer | medium (sonnet) / medium | 2 | merged | #68 | #69 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -73,12 +73,17 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - CD-21 review: a SendMessage resume without a TASK line merges into the previous turn (cumulative tokens, stale handback); untested. `agents/coach.md` says "0.3.1"; CD-18 rewords it for 0.4.0.
 - CD-19: the Codex live harness failed once on its first run (the small model skipped the spawns) and passed on the rerun; consider making its prompt more robust.
 
+## Logs
+
+The Director ran `reconcile-logs.js` (backfilled 63 completions the earlier logger missed) and archived the logs at close with `archive-logs.js codex-director` (live logs left in place).
+
 ## Blocked
 
 - (none)
 
 ## Needs the user
 
+- Merge the milestone PR `milestone/codex-director` → `main` (open; the Director stops here), then publish the v0.4.0 release.
 - Delete the leftover CD-1 test folder (temporary Codex home with a copy of the Codex credentials, throwaway repo); the agent's delete was blocked by a permission check.
 - Close PR #52: folded into the milestone by CD-21 (#61), whose PR body has the kept/dropped table. The Director's close was blocked by a permission check.
 - Optional cleanup: the scratch folder the live verification left on a short path (scratch project, bare remote, test archive).
