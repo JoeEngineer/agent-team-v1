@@ -102,6 +102,7 @@ function reconcile({ dryRun = false } = {}) {
     const tPath = findTranscript(root, a.session, a.id);
     if (!tPath) { stats.notFound++; continue; }
     const meta = readMeta(tPath);
+    // Content match against lines that existed before this run only. The turn-keyed marker stops reruns; matching lines appended in this run would drop a turn with an identical report.
     const known = [...a.comps, ...a.dels.filter((d) => d.kind === 'subagent')].filter(hasContent);
     const agentType = (a.delegation && a.delegation.agent) || (a.comps.find((c) => c.agent) || {}).agent || meta.agentType || null;
     let added = 0;
@@ -124,7 +125,6 @@ function reconcile({ dryRun = false } = {}) {
       const record = completionRecord(sess, { agentType, agentId: a.id, meta, delegation: taskDel, t, reportSource: 'reconcile', report });
       lib.appendJsonl(input, 'completions.jsonl', record);
       if (record.review) { logReview(sess, record, record.review); stats.reviews++; }
-      known.push(record);
     }
     if (added) stats.backfilled += added; else stats.present++;
   }
