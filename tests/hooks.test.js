@@ -399,10 +399,18 @@ test('SubagentStop: no block ever appears, a role agent is logged once; a non-ro
   const cs = readLog(proj, 'completions.jsonl');
   eq(cs.length, 1, 'logged once');
   eq(cs[0].result, null, 'no result');
+  // The transcript text is the only source and it has no block; with an empty
+  // transcript there is no report at all.
+  const emptyT = path.join(tdir, 'agent-nb0.jsonl');
+  fs.writeFileSync(emptyT, '');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'nb0', agent_type: 'agent-team:reviewer', agent_transcript_path: emptyT }, proj);
+  const nb0 = readLog(proj, 'completions.jsonl').find((c) => c.agent_id === 'nb0');
+  assert(nb0, 'empty transcript still logged');
+  eq(nb0.report_source, 'none', 'retry found nothing: report_source none');
   const t0 = Date.now();
   run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'nb2', agent_type: 'general-purpose', agent_transcript_path: writeSubagentTranscript(tdir, 'nb2', 'x', 'y') }, proj, { AGENT_TEAM_STOP_RETRY_MS: '1500' });
   assert(Date.now() - t0 < 1500, 'no retry for an agent that is not a role agent');
-  eq(readLog(proj, 'completions.jsonl').length, 2, 'the non-role agent was still logged');
+  eq(readLog(proj, 'completions.jsonl').length, 3, 'the non-role agent was still logged');
 });
 
 test('SubagentStop: isMeta resume prompt starts a turn; a stale read claims nothing; attempt 2 has its own tokens and duration', () => {
