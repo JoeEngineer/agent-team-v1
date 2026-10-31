@@ -48,6 +48,7 @@ Each escalation is a new delegation with the same task `id` and `attempt` increm
 The table and ladder name tiers (small, medium, large; xlarge is opt-in). Each tier maps to a model per tool.
 
 - Read the effective map with `node "${CLAUDE_PLUGIN_ROOT}/scripts/models.js" show`. The shipped default is `config/models.json`; `AGENT_TEAM_MODELS` or `~/.agent-team/models.json` replaces it as a whole file.
+- To get the model for a tier, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/models.js" resolve <tier> --tool claude`.
 - xlarge, and any entry with `enabled: false` or `billing: "credits"`, is never chosen by the routing table or the ladder.
 - A tool with no entries in the map is never routed to.
 - If a mapped model is missing at run time, fall back one tier down, log it with `node "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.js" tier_fallback '{"task":…,"from":…,"to":…,"tool":…,"reason":…}'`, and tell the user. Never fall back up.
