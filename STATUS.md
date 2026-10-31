@@ -20,8 +20,8 @@ Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
 | SS-6 | Tier + resolved model in logs; `tier_fallback` | implementer | medium (sonnet) / medium | 2 | merged | #12 | #22 |
 | SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | 1 | merged | #13 | #23 |
 | SS-8 | README + 0.3.0 | implementer | small (haiku) / low | 2 | merged | #14 | #24 |
-| SS-9 | Live verification (Claude + Codex) | implementer | medium (sonnet) / low | 1 | in progress | #15 | |
-| SS-10 | Milestone final review | reviewer | large (opus) / high | | planned | #16 | |
+| SS-9 | Live verification (Claude + Codex) | implementer | medium (sonnet) / low | 1 | done (9 pass, 1 open) | #15 | |
+| SS-10 | Milestone final review | reviewer | large (opus) / high | 1 | in progress | #16 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -41,7 +41,8 @@ Last check 2026-10-31 15:40 UTC: 5-hour window 91% left, weekly 24% → SS-9 sta
 
 - SS-7 review: routing.md could mention `models.js resolve <tier> --tool <t>` for getting the model to pass — fold into SS-8.
 - SS-6 decision: an agent with `model: inherit` gets its tier from the model that actually ran, not its `tier:` key.
-- SS-4: `SubagentStart` hook entry not added (Claude Code acceptance unconfirmed) — check in SS-9.
+- SS-4: `SubagentStart` hook entry not added. SS-9 found Claude Code 2.1.314 accepts it in a plugin hooks.json (firing not tested) — candidate for milestone B.
+- Open: whether the Codex CLI runs *plugin* hooks (SS-9 could not check without a model run) — milestone B live tests.
 
 ## Needs the user
 
