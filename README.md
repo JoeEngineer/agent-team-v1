@@ -10,7 +10,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `agents/` | Role agents with a default tier and effort: `scout` (small/low), `implementer` (medium/medium), `architect` (large/high), `reviewer` (medium/high), `coach` (large/high). Each tier maps to a model per tool via `config/models.json` |
 | `skills/` | `director` plus `team-init`, `milestone`, `status`, `coach`. In Claude Code they're invoked as `/agent-team:<name>` (same names as before); in Codex, as skills |
 | `config/models.json` | Tier → model map per tool, with `enabled` and `billing` (see [Models and tiers](#models-and-tiers)) |
-| `hooks/hooks.json` | Wires up the logger and the guard for Claude Code and Codex; the logger also matches Codex's spawn tools |
+| `hooks/hooks.json` | Wires up the logger and the guard for Claude Code and Codex; the logger also matches Codex's spawn tools. Whether the Codex CLI runs plugin hooks is not yet confirmed ([details](#codex)) |
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
 | `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist |
 | `scripts/log-event.js` | Manual logging (decisions, escalations, notes) |
@@ -56,6 +56,8 @@ Agents and the routing table name tiers, not models. Each tier maps to a model p
 
 ## Install
 
+**Before you install:** the plugin's hooks run Node scripts on your machine on every subagent, session, shell and bridge call, in both Claude Code and Codex. They're short and dependency-free. Read [`scripts/`](scripts/) first, as you would for any plugin with hooks.
+
 ### Claude Code
 
 This repo is its own one-plugin marketplace. In Claude Code (2.1.275 or later):
@@ -87,8 +89,6 @@ claude plugin install agent-team@agent-team
 
 Then in the project: `/agent-team:team-init`, then `/agent-team:milestone <slug> <tasking>`.
 
-**Before you install:** the plugin's hooks run Node scripts on your machine on every subagent, session, shell and bridge call. They're short and dependency-free. Read [`scripts/`](scripts/) first, as you would for any plugin with hooks.
-
 ### Codex
 
 ```bash
@@ -101,11 +101,7 @@ codex plugin add agent-team@agent-team
 
 Codex asks you to trust the plugin's hooks once, and again after an update that changes `hooks/hooks.json`. The hooks don't run until you trust them.
 
-In Codex 0.3.0 this works:
-
-- the skills, all five: `director`, `team-init`, `milestone`, `status`, `coach`
-- the guard, which blocks pushes and merges to `main`
-- raw logging of subagent spawns, to `.agent-team/logs/codex-events.jsonl`
+In plugin version 0.3.0, the skills (all five: `director`, `team-init`, `milestone`, `status`, `coach`) install into Codex. The guard (blocks pushes and merges to `main`) and raw logging of subagent spawns (to `.agent-team/logs/codex-events.jsonl`) are in the plugin's `hooks/hooks.json`. The guard was verified in Codex through project hooks. Whether the Codex CLI runs *plugin* hooks is not yet confirmed (see "Still open" in [`docs/codex-mapping.md`](docs/codex-mapping.md)). If it doesn't, `team-init` will need to write `.codex/hooks.json` into each project, planned for the next milestone. Check with `/hooks` that the hooks are listed and trusted.
 
 Not yet: Codex agent definitions, `team-init` writing `.codex/`, and full Codex logging. These are planned for the next milestone.
 
@@ -232,7 +228,7 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 - **Retries by `SendMessage`** are logged as `kind: "resume"` delegations only when the message carries a TASK line.
 - **Sessions:** token usage of separate sessions isn't captured automatically yet.
 - **Effort of the Director itself** isn't visible to hooks. Decision records say `unknown` unless the Director knows it.
-- **Codex gaps:** Codex has no per-agent worktrees, plugins can't ship agents, and admins can disable hooks, which turns off the guard and logging. See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
+- **Codex gaps:** Codex has no per-agent worktrees, plugins can't ship agents, and admins can disable hooks, which turns off the guard and logging. Whether the Codex CLI runs plugin hooks is not yet confirmed ([details](#codex)). See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.
 
 ## License
