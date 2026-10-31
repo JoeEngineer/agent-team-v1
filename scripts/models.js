@@ -17,24 +17,36 @@ function isMap(m) {
   return m && typeof m === 'object' && !Array.isArray(m);
 }
 
-function loadMap({ env = process.env, home = os.homedir() } = {}) {
-  const def = () => readJson(DEFAULT_PATH);
+function loadMap({ env = process.env, home = os.homedir(), defaultPath = DEFAULT_PATH } = {}) {
+  // A corrupt shipped default must not throw: return an empty map plus an error.
+  const def = (prevErr) => {
+    try {
+      const map = readJson(defaultPath);
+      if (!isMap(map)) throw new Error('top level must be an object');
+      const r = { map, source: 'default', path: defaultPath };
+      if (prevErr) r.error = prevErr;
+      return r;
+    } catch (e) {
+      const error = [prevErr, `${defaultPath}: ${e.message}`].filter(Boolean).join('; ');
+      return { map: {}, source: 'default', path: defaultPath, error };
+    }
+  };
   const tryFile = (p, source) => {
     try {
       const map = readJson(p);
       if (!isMap(map)) throw new Error('top level must be an object');
       return { map, source, path: p };
     } catch (e) {
-      return { map: def(), source: 'default', path: DEFAULT_PATH, error: `${p}: ${e.message}` };
+      return def(`${p}: ${e.message}`);
     }
   };
   if (env.AGENT_TEAM_MODELS) {
     if (fs.existsSync(env.AGENT_TEAM_MODELS)) return tryFile(env.AGENT_TEAM_MODELS, 'env');
-    return { map: def(), source: 'default', path: DEFAULT_PATH };
+    return def();
   }
   const userPath = path.join(home, '.agent-team', 'models.json');
   if (fs.existsSync(userPath)) return tryFile(userPath, 'user');
-  return { map: def(), source: 'default', path: DEFAULT_PATH };
+  return def();
 }
 
 function entry(map, tool, tier) {
@@ -106,14 +118,20 @@ function cli(argv) {
   let tool = 'claude';
   const pos = [];
   for (let i = 0; i < rest.length; i++) {
-    if (rest[i] === '--tool') tool = rest[++i];
-    else pos.push(rest[i]);
+    if (rest[i] === '--tool') {
+      tool = rest[++i];
+      if (!tool || tool.startsWith('-')) {
+        console.error('--tool requires a value');
+        return 1;
+      }
+    } else pos.push(rest[i]);
   }
   const loaded = loadMap();
   const base = { source: loaded.source, path: loaded.path };
   if (loaded.error) base.error = loaded.error;
   if (cmd === 'show') {
-    const defMap = readJson(DEFAULT_PATH);
+    let defMap = {};
+    try { defMap = readJson(DEFAULT_PATH); } catch (e) { /* corrupt default: error already reported via loadMap */ }
     const toolList = argv.includes('--tool') ? [tool] : tools(loaded.map);
     const tiers = {};
     for (const t of TIERS) {

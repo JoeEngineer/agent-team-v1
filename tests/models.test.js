@@ -10,7 +10,12 @@ const M = require(path.join(SCRIPTS, 'models.js'));
 
 console.log('models');
 
-const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-models-'));
+const made = [];
+const tmp = () => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-models-'));
+  made.push(d);
+  return d;
+};
 const DEF = JSON.parse(fs.readFileSync(path.join(ROOT, 'config', 'models.json'), 'utf8'));
 const MISSING = path.join(tmp(), 'nope.json');
 
@@ -124,6 +129,8 @@ test('modelToTier: alias, full id, unknown', () => {
   eq(M.modelToTier(DEF, 'claude', 'sonnet'), 'medium');
   eq(M.modelToTier(DEF, 'claude', 'claude-sonnet-5-5'), 'medium');
   eq(M.modelToTier(DEF, 'claude', 'claude-opus-4'), 'large');
+  eq(M.modelToTier(DEF, 'claude', 'claude-haiku-5-5'), 'small');
+  eq(M.modelToTier(DEF, 'claude', 'claude-opus-5-5'), 'large');
   eq(M.modelToTier(DEF, 'codex', 'gpt-6.1-terra-2026'), 'medium');
   eq(M.modelToTier(DEF, 'codex', 'gpt-6-luna'), 'small');
   eq(M.modelToTier(DEF, 'claude', 'mystery'), null);
@@ -164,3 +171,37 @@ test('CLI resolve succeeds and fails with exit 1', () => {
   eq(r.status, 1);
   assert(r.stderr.includes('gemini'), 'tool message');
 });
+
+test('CLI --tool without a value exits 1 for show and resolve', () => {
+  for (const args of [['show', '--tool'], ['resolve', 'small', '--tool'], ['show', '--tool', '--x'], ['resolve', 'small', '--tool', '--x']]) {
+    const r = cli(args);
+    eq(r.status, 1, args.join(' '));
+    assert(r.stderr.includes('--tool requires a value'), 'message for ' + args.join(' '));
+    eq(r.stdout, '', 'no stdout for ' + args.join(' '));
+  }
+});
+
+test('corrupt shipped default: empty map plus error, no throw', () => {
+  const bad = path.join(tmp(), 'default.json');
+  fs.writeFileSync(bad, '{oops');
+  let r = M.loadMap({ env: { AGENT_TEAM_MODELS: MISSING }, home: tmp(), defaultPath: bad });
+  eq(r.source, 'default');
+  eq(r.path, bad);
+  eq(r.map, {});
+  assert(r.error && r.error.includes(bad), 'error reported');
+  eq(M.tools(r.map), []);
+  // Bad override and bad default: both errors are reported.
+  const badEnv = path.join(tmp(), 'env.json');
+  fs.writeFileSync(badEnv, 'nope');
+  r = M.loadMap({ env: { AGENT_TEAM_MODELS: badEnv }, home: tmp(), defaultPath: bad });
+  eq(r.map, {});
+  assert(r.error.includes(badEnv) && r.error.includes(bad), 'both errors');
+  // Missing default file too.
+  r = M.loadMap({ env: { AGENT_TEAM_MODELS: MISSING }, home: tmp(), defaultPath: path.join(tmp(), 'absent.json') });
+  eq(r.map, {});
+  assert(r.error, 'missing default reported');
+});
+
+for (const d of made) {
+  try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+}
