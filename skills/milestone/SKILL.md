@@ -1,6 +1,6 @@
 ---
 name: milestone
-description: Start a milestone as Director — turn broad tasking into a plan and begin delegating. Use when the user wants to start a milestone or hand the team a broad piece of work.
+description: Start a milestone as Director — turn broad tasking into a plan and begin delegating. Use only when the user explicitly asks to start a milestone as Director or invokes this skill with a slug and goal.
 argument-hint: <slug> <what to build, in plain words>
 ---
 
