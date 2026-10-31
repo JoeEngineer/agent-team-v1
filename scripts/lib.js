@@ -252,8 +252,20 @@ function findPrMerges(cmd) {
   return out;
 }
 
+// Which tool sent this hook event: 'claude' (default) or 'codex'.
+const CODEX_ONLY_TOOLS = new Set(['send_input', 'resume_agent', 'wait_agent', 'close_agent', 'list_agents', 'apply_patch']);
+function detectTool(input, env = process.env) {
+  const forced = env && env.AGENT_TEAM_TOOL;
+  if (forced === 'claude' || forced === 'codex') return forced;
+  if (!input || typeof input !== 'object') return 'claude';
+  const name = typeof input.tool_name === 'string' ? input.tool_name : '';
+  if (!name.startsWith('mcp__') && (/^collaboration/.test(name) || /^spawn_agent$/.test(name) || CODEX_ONLY_TOOLS.has(name))) return 'codex';
+  if (input.turn_id !== undefined && input.turn_id !== null) return 'codex';
+  return 'claude';
+}
+
 module.exports = {
-  PLUGIN_ROOT, readStdin, projectDir, logDir, appendJsonl, guidanceVersion,
+  detectTool, PLUGIN_ROOT, readStdin, projectDir, logDir, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, ghParts, prMergeTarget, findPrMerges,
 };

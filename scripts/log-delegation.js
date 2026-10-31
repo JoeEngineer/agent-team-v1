@@ -44,6 +44,7 @@ function takeDuration(input) {
 function base(input) {
   return {
     ts: new Date().toISOString(),
+    tool: 'claude',
     session_id: input.session_id,
     guidance_version: lib.guidanceVersion(),
   };
@@ -387,6 +388,7 @@ function onSubagentStop(input) {
 
 function main() {
   const input = lib.readStdin();
+  if (lib.detectTool(input) === 'codex') return require('./codex-log').handle(input);
   const event = input.hook_event_name;
   const tool = input.tool_name || '';
   if (event === 'PreToolUse') return onPre(input);
