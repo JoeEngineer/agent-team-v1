@@ -78,6 +78,9 @@ const blocked = [
   ['repo delete', 'gh repo delete o/r --yes'],
   ['release create', 'gh release create v1.0.0'],
   ['powershell-style chain', 'git status; git push origin main'],
+  ['push after a heredoc ends', "cat <<EOF > notes.txt\nsome text\nEOF\ngit push origin main"],
+  ['push after a quoted <<- heredoc', "cat <<-'EOF'\n\tgit status\n\tEOF\ngit push origin main"],
+  ['push chained after a heredoc line', "git commit -F - <<'EOF' && git push origin main\nmsg\nEOF"],
 ];
 // The guard blocks with a JSON "deny" decision on stdout and exit 0, which both
 // Claude Code and Codex honour. Codex ignores exit code 2.
@@ -114,6 +117,10 @@ const allowed = [
   ['pr list', 'gh pr list --state open'],
   ['pr view', 'gh pr view 12'],
   ['echo mentioning main', 'echo "git push origin main is blocked"'],
+  ['heredoc commit message mentioning a push', "git commit -q -F - <<'EOF'\nFix guard\n\nVerified live: git push origin main is blocked in Claude Code\nEOF"],
+  ['unquoted heredoc with CRLF', 'git commit -F - <<EOF\r\ngit push --force origin main\r\nEOF\r\n'],
+  ['multi-line -m message mentioning a push', 'git commit -m "Fix guard\n\ngit push origin main; git push -f\n"'],
+  ['multi-line echo mentioning a push', "echo 'first line\ngit push origin main'"],
   ['non-git command', 'npm test'],
 ];
 for (const [name, cmd] of allowed) {
