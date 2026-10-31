@@ -21,7 +21,8 @@ Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
 | SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | 1 | merged | #13 | #23 |
 | SS-8 | README + 0.3.0 | implementer | small (haiku) / low | 2 | merged | #14 | #24 |
 | SS-9 | Live verification (Claude + Codex) | implementer | medium (sonnet) / low | 1 | done (9 pass, 1 open) | #15 | |
-| SS-10 | Milestone final review | reviewer | large (opus) / high | 1 | in progress | #16 | |
+| SS-10 | Milestone final review | reviewer | large (opus) / high | 1 | approved (7 minor findings) | #16 | |
+| SS-11 | Final-review cleanups | implementer | small (haiku) / medium | 1 | in progress | #25 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -29,9 +30,7 @@ Dependencies: SS-1 → SS-2…SS-5 (parallel) → SS-6 (needs SS-3, SS-4), SS-7 
 
 ## Capacity
 
-Before each wave, the Director checks `runway --refresh --json` (Claude 5-hour window and `blockedBy`). Rule set by the user on 2026-10-31: keep going while the 5-hour window has 10% or more left; below 10%, or with anything in `blockedBy`, wait for the window to renew before starting more work.
-
-Last check 2026-10-31 15:40 UTC: 5-hour window 91% left, weekly 24% → SS-9 started.
+The Director checks remaining plan capacity before each wave and pauses below a threshold the user sets, resuming when the usage window renews. This milestone paused once and resumed after the renewal.
 
 ## Blocked
 
@@ -42,6 +41,7 @@ Last check 2026-10-31 15:40 UTC: 5-hour window 91% left, weekly 24% → SS-9 sta
 - SS-7 review: routing.md could mention `models.js resolve <tier> --tool <t>` for getting the model to pass — fold into SS-8.
 - SS-6 decision: an agent with `model: inherit` gets its tier from the model that actually ran, not its `tier:` key.
 - SS-4: `SubagentStart` hook entry not added. SS-9 found Claude Code 2.1.314 accepts it in a plugin hooks.json (firing not tested) — candidate for milestone B.
+- SS-10: `models.js` has tested `ladderUp`/`fallbackDown`/`autoTier` that nothing calls; add CLI commands (e.g. `up`/`down <tier>`) and point routing.md at them — milestone B.
 - Open: whether the Codex CLI runs *plugin* hooks (SS-9 could not check without a model run) — milestone B live tests.
 
 ## Needs the user
