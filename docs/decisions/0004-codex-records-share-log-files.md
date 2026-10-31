@@ -30,8 +30,9 @@ plain text and the subagent transcript carries the same name in
   follow-up tool (`followup_task`, or `send_input`/`resume_agent` on other
   versions) with a known target writes a `kind: "resume"` fallback, unless the
   latest line for that name is already a Director `resume`. If the Director logs
-  after spawning, both lines exist; the Coach dedupes by `task_name` +
-  `task.attempt`, preferring `source: "director"`.
+  after spawning, both lines exist; the Coach merges the hook fallback
+  line into the Director line with the same `task_name` (hook lines have
+  `task: {}`); when there is no Director line, it counts the hook line once.
 - **Completions.** `SubagentStop` writes a `completions.jsonl` line:
   `task_name` from the agent transcript, `resolved_model` / `resolved_effort`
   from the last `turn_context`, `tokens` (this turn's `total_tokens`, so a

@@ -296,6 +296,22 @@ test('codex: a review block in the final message writes one reviews.jsonl line w
   eq(readLog(p, 'completions.jsonl')[0].review.verdict, 'approve', 'completion carries review');
 });
 
+test('codex: a hook run prunes old stop-/resume- markers, keeps a fresh one and hooks-alive.json', () => {
+  const p = tmpProject();
+  const dir = path.join(p, '.agent-team', 'logs', '.pending');
+  fs.mkdirSync(dir, { recursive: true });
+  const old = new Date(Date.now() - 25 * 3600 * 1000);
+  for (const n of ['stop-old', 'resume-old']) { fs.writeFileSync(path.join(dir, n), ''); fs.utimesSync(path.join(dir, n), old, old); }
+  fs.writeFileSync(path.join(dir, 'resume-new'), '');
+  fs.writeFileSync(path.join(dir, 'hooks-alive.json'), '{}');
+  fs.utimesSync(path.join(dir, 'hooks-alive.json'), old, old);
+  assert(fs.existsSync(path.join(dir, 'stop-old')) && fs.existsSync(path.join(dir, 'resume-old')), 'precondition: old markers exist');
+  hook(p, spawn());
+  eq(fs.readdirSync(dir).sort().join(','), 'hooks-alive.json,resume-new', 'old markers pruned, fresh marker and hooks-alive.json kept');
+  hook(p, spawn({ tool_use_id: 'call_2' }));
+  eq(fs.readdirSync(dir).sort().join(','), 'hooks-alive.json,resume-new', 'a further run changes nothing');
+});
+
 // --- follow-up ---------------------------------------------------------------
 
 test('codex: follow-up to a known task_name writes one resume fallback, never the message', () => {

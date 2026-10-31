@@ -5,7 +5,7 @@
 It skips with a message when `codex` is not on PATH, the model map has no Codex small tier, or no `auth.json` is found.
 
 ## What it does
-1. Temp dirs on a short path (`C:\cx2\<pid>` on Windows, `<tmpdir>/cx2/<pid>` elsewhere): a git project with a local bare `origin`, and a temp `CODEX_HOME`.
+1. Temp dirs on a short path (override the base folder with `AGENT_TEAM_LIVE_TMP`; `C:\cx2\<pid>` on Windows, `<tmpdir>/cx2/<pid>` elsewhere by default): a git project with a local bare `origin`, and a temp `CODEX_HOME`.
 2. Copies your `auth.json` into the temp home (it never writes to your real Codex home) and deletes it at cleanup.
 3. Runs `codex plugin marketplace add <this checkout>` and `codex plugin add agent-team@agent-team`, then `scripts/codex-agents.js` and `scripts/codex-hooks.js` on the project.
 4. Trust, the way a user's trust is recorded: marks the project trusted and writes one `[hooks.state.'<key>'] trusted_hash` per hook into the temp `config.toml`, with the hash from `codex app-server` `hooks/list` (`currentHash`). No flag that skips hook trust is used.
