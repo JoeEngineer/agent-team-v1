@@ -86,29 +86,44 @@ Both families have **four** models, largest first:
 - **Claude:** Fable → Opus → Sonnet → Haiku.
 - **OpenAI:** Astra → Sol → Terra → Luna. Terra is the newest and reportedly better than Sol at writing.
 
-The orderings come from the project owner; `models_cache.json` only gives short descriptions. The fourth model plays a different role in each: Fable sits above Opus, while Terra sits between Sol and Luna. So routing uses three **standard** tiers plus two optional ones:
+The orderings come from the project owner; `models_cache.json` only gives short descriptions. The top model of each family is off-limits by default:
+- **Fable** needs **usage credits** on the owner's Claude plan (billed at API rates, not covered by the plan).
+- **Astra** isn't available in the owner's work environment.
 
-| Tier | Claude | Codex (models on this account) | On by default? | Notes |
+So both families get the same shape: three **standard** tiers built from models every install can use, plus an opt-in **xlarge** tier.
+
+| Tier | Claude | Codex | On by default? | Notes |
 |---|---|---|---|---|
 | small | `haiku` | `gpt-6-luna` ("fast and affordable") | yes | `gpt-reserve` is also listed as "fast and affordable agentic coding". Worth comparing. |
-| medium | `sonnet` | `gpt-6.1-sol` ("workhorse", your current default) | yes | |
-| large | `opus` | `gpt-6-astra` ("frontier") | yes | Top of the escalation ladder by default. |
-| xlarge | `fable` | (none above Astra) | **no** | On the owner's Claude plan, Fable needs **usage credits**: it's billed at API rates, not covered by the plan. Enabled per install; see the rule below. |
-| writing | (uses medium) | `gpt-6.1-terra` | optional | Reportedly better than Sol at writing, below it in general. Try it on `docs`, PR descriptions and decision records. Let the Coach compare it with Sol on review results before making it a default. |
+| medium | `sonnet` | `gpt-6.1-terra` | yes | Below Sol in general ability, reportedly better than Sol at writing. A good fit for `docs`, PR descriptions and decision records. |
+| large | `opus` | `gpt-6.1-sol` ("workhorse", the owner's current default) | yes | **Top of the escalation ladder.** Available at work. |
+| xlarge | `fable` | `gpt-6-astra` ("frontier") | **no** | Opt-in per install, and per task (see the rule below). A work install leaves the Codex entry out entirely. |
 
-**Rule for tiers that cost extra:** a tier marked `billing: credits` in the install's model map is never chosen by the routing table or the escalation ladder. When the ladder runs out at `large`, the Director stops and asks the user, as it does today. It can *offer* the xlarge tier with a cost note, and only uses it after a yes for that task. The log line records `tier: xlarge` and `billing: credits`, so the Coach can show what those tasks cost and whether they passed review.
+**The tiers aren't equal across families.** Codex `large` (Sol) is a step below the top of its family, while Claude `large` (Opus) is the top of what the plan covers. Expect Codex installs to escalate sooner, and to need `high` effort more often. The Coach should compare results **per model**, using the `model` field Codex reports, not per tier name across tools.
+
+**Rule for opt-in tiers:** an xlarge tier, or any tier marked `billing = "credits"` or `enabled = false`, is never chosen by the routing table or the escalation ladder.
+- When the ladder runs out at `large`, the Director stops and asks the user, as it does today.
+- It can *offer* xlarge with a note on cost or availability, and only uses it after a yes for that task.
+- The log line records `tier: xlarge` and the billing flag, so the Coach can show what those tasks cost and whether they passed review.
 
 **Per-install model map** (a sketch; the restructure decides the file name):
 
 ```toml
+# personal machine
 [tiers.small]   claude = "haiku"   codex = "gpt-6-luna"
-[tiers.medium]  claude = "sonnet"  codex = "gpt-6.1-sol"
-[tiers.large]   claude = "opus"    codex = "gpt-6-astra"
-[tiers.xlarge]  claude = "fable"   billing = "credits"   enabled = false
-[tiers.writing] codex  = "gpt-6.1-terra"   fallback = "medium"
+[tiers.medium]  claude = "sonnet"  codex = "gpt-6.1-terra"
+[tiers.large]   claude = "opus"    codex = "gpt-6.1-sol"
+[tiers.xlarge]  enabled = false
+  claude = { model = "fable", billing = "credits" }   # API-rate usage credits
+  codex  = { model = "gpt-6-astra" }                  # personal account only
+
+# work machine: no claude keys, no xlarge
+[tiers.small]   codex = "gpt-6-luna"
+[tiers.medium]  codex = "gpt-6.1-terra"
+[tiers.large]   codex = "gpt-6.1-sol"
 ```
 
-The routing table names tiers and task-type overrides (`docs → writing`). Each package resolves them through this map, so the core routing file stays shared. A work install simply has no `claude` keys.
+The routing table names tiers only. Each package resolves them through this map, so the core routing file stays shared. If a mapped model is missing at run time (models change), the Director falls back one tier down, logs `"tier_fallback"`, and tells the user. It never falls back up.
 
 | Effort tier | Claude | Codex |
 |---|---|---|
