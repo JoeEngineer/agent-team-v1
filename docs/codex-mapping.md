@@ -24,7 +24,7 @@ How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting
    - Codex subagents share the parent's workspace, so there are no per-agent worktrees.
    - Plugins can't ship custom agents.
    - Codex has no "separate session" tool. `codex exec` is the closest equivalent.
-5. **At work, hooks may be switched off by policy** (`requirements.toml`). The Codex Director has to keep working, logging by hand, when they are.
+5. **Admins can switch hooks off by policy** (managed `requirements.toml`). The Codex Director has to keep working, logging by hand, when they are.
 
 ## Concept-by-concept mapping
 
@@ -61,7 +61,7 @@ How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting
 | Background subagents | Parallel by default; the parent waits for all results, then answers | 📄 | Up to `agents.max_concurrent_threads_per_session` (default not stated; `max_threads` is the old name). |
 | `SendMessage` (resume a subagent) | `send_input` / `resume_agent` (also `wait_agent`, `close_agent`, `list_agents`) | ✅ names in the program · ❓ fields | Log a retry as `kind: "resume"` the same way. |
 | Separate session (`start_session`) | `codex exec -C <worktree> -m <model> -c model_reasoning_effort=… --output-schema <file> --json`, run from the shell | ✅ flags exist | Arguably **better** for logging: `--json` streams events and `--output-schema` enforces `result-json`/`review-json`. It runs as the user's account like any shell command. Codex Cloud tasks exist too (experimental), but are out of scope at first. |
-| Claude → Codex bridge (personal) | n/a | | Stays a routing row in the Claude package only. Never in the Codex package (work = OpenAI only). |
+| Claude → Codex bridge (optional) | n/a | | Stays an optional routing row in the Claude package only. The Codex package never routes outside OpenAI models, so it suits environments without Claude. |
 
 ### Hooks (guard and logger)
 
@@ -69,7 +69,7 @@ How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting
 |---|---|---|---|
 | `hooks/hooks.json` in the plugin | Same default path, or a `hooks` entry in the manifest; also `.codex/hooks.json` and `[hooks]` in `config.toml` | 📄 · ✅ inline hooks in bundled plugins | Docs: plugin hooks are supported **only for manually installed Codex Desktop plugins**, and plugins with hooks can't be listed in the public directory. ❓ Whether CLI sessions run plugin hooks. Fallback: `team-init` writes project `.codex/hooks.json`. |
 | Hooks run without asking | **Must be trusted.** Codex asks when it first starts in the project; `/hooks` reviews them later. Trust is stored in `~/.codex/config.toml` under `[hooks.state]`, one `trusted_hash` per hook entry (`<file>:<event>:<group>:<index>`). Installing a plugin doesn't trust its hooks | ✅ | The hash covers the hook **definition** (its command), not the script it runs: editing `guard.js` didn't need new trust, editing `hooks.json` would. So keep hook commands stable and put logic in scripts. One trust step per machine. `--dangerously-bypass-hook-trust` exists but shouldn't be used. |
-| Admins can't disable | `[features] hooks = false`, enforceable through managed `requirements.toml` | 📄 | **Work risk.** If hooks are off, there's no guard and no automatic logs. The Codex Director must check (SessionStart marker missing → warn), log by hand with `scripts/log-event.js`, and rely on GitHub rulesets. |
+| Admins can't disable | `[features] hooks = false`, enforceable through managed `requirements.toml` | 📄 | **Risk in managed environments.** If hooks are off, there's no guard and no automatic logs. The Codex Director must check (SessionStart marker missing → warn), log by hand with `scripts/log-event.js`, and rely on GitHub rulesets. |
 | `PreToolUse` / `PostToolUse` | Same names | ✅ | Shell is **`Bash` even when the command is PowerShell** (`Get-ChildItem …` reported as `Bash`). File edits are `apply_patch`, MCP is `mcp__server__tool`, and spawns are `collaborationspawn_agent`. **They also fire for tool calls inside subagents:** the event's `transcript_path` is then the subagent's transcript, so the logger can tell who made the call. `session_id` is the parent's for both. |
 | Block with exit 2 + stderr | **Exit 2 is ignored**; JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}` on stdout with exit 0 **blocks** | ❌ / ✅ | Tested both against `git push origin main`. With exit 2 (`guard.js` 0.2.0, and again through a wrapper) the push ran. With the JSON response it was blocked, and the agent reported the guard's reason. `guard.js` 0.2.1 uses the JSON response and was re-tested as the only blocking hook: blocked, and no `PostToolUse` fired. Run in `codex exec --sandbox workspace-write` (hook `permission_mode: bypassPermissions`). ❓ Whether exit 2 works in other approval modes. Don't depend on it. |
 | `SubagentStop` + transcript parsing | `SubagentStop` with `agent_id`, `agent_type`, `agent_transcript_path`, `last_assistant_message` | ✅ | `last_assistant_message` held the scout's full reply, including its `result-json` block. Read results from it directly, without parsing the transcript. |
@@ -86,7 +86,7 @@ How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting
 | agent-team (Claude) | Codex | Status | Notes |
 |---|---|---|---|
 | Permission modes, auto mode | `approval_policy`, `sandbox_mode`, and a `PermissionRequest` hook | 📄 | A `PermissionRequest` hook could auto-approve narrow, known-safe actions for the Director. Leave that until later. |
-| Remote Control (phone) | `codex remote-control` (experimental); the ChatGPT web sidebar shows subagents **read-only** | ✅ command exists | Not a goal for the work setup. |
+| Remote Control (phone) | `codex remote-control` (experimental); the ChatGPT web sidebar shows subagents **read-only** | ✅ command exists | Not needed for the Codex adapter at first. |
 | Subagent visibility | CLI `/subagents`; Desktop has a Subagents panel (Active / Done) | 📄 | |
 
 ### Models and effort
@@ -95,20 +95,20 @@ Both families have **four** models, largest first:
 - **Claude:** Fable → Opus → Sonnet → Haiku.
 - **OpenAI:** Astra → Sol → Terra → Luna. Terra is the newest and reportedly better than Sol at writing.
 
-The orderings come from the project owner; `models_cache.json` only gives short descriptions. The top model of each family is off-limits by default:
-- **Fable** needs **usage credits** on the owner's Claude plan (billed at API rates, not covered by the plan).
-- **Astra** isn't available in the owner's work environment.
+`models_cache.json` only gives short descriptions, so the orderings come from user reports. The top model of each family is off by default, because not every user can use it:
+- **Fable** is billed as **usage credits** (API rates) on some Claude plans, not covered by the plan.
+- **Astra** isn't available in every OpenAI environment.
 
-So both families get the same shape: three **standard** tiers built from models every install can use, plus an opt-in **xlarge** tier.
+Some environments don't have Claude at all, or have only some OpenAI models. So both families get the same shape: three **standard** tiers built from widely available models, plus an opt-in **xlarge** tier.
 
 | Tier | Claude | Codex | On by default? | Notes |
 |---|---|---|---|---|
 | small | `haiku` | `gpt-6-luna` ("fast and affordable") | yes | `gpt-reserve` is also listed as "fast and affordable agentic coding". Worth comparing. |
 | medium | `sonnet` | `gpt-6.1-terra` | yes | Below Sol in general ability, reportedly better than Sol at writing. A good fit for `docs`, PR descriptions and decision records. |
-| large | `opus` | `gpt-6.1-sol` ("workhorse", the owner's current default) | yes | **Top of the escalation ladder.** Available at work. |
-| xlarge | `fable` | `gpt-6-astra` ("frontier") | **no** | Opt-in per install, and per task (see the rule below). A work install leaves the Codex entry out entirely. |
+| large | `opus` | `gpt-6.1-sol` ("workhorse") | yes | **Top of the escalation ladder.** |
+| xlarge | `fable` | `gpt-6-astra` ("frontier") | **no** | Opt-in per install, and per task (see the rule below). Installs without access to these models leave the entries out. |
 
-**The tiers aren't equal across families.** Codex `large` (Sol) is a step below the top of its family, while Claude `large` (Opus) is the top of what the plan covers. Expect Codex installs to escalate sooner, and to need `high` effort more often. The Coach should compare results **per model**, using the `model` field Codex reports, not per tier name across tools.
+**The tiers aren't equal across families.** Codex `large` (Sol) is a step below the top of its family, while Claude `large` (Opus) is the top of what most plans cover. Expect Codex installs to escalate sooner, and to need `high` effort more often. The Coach should compare results **per model**, using the `model` field Codex reports, not per tier name across tools.
 
 **Rule for opt-in tiers:** an xlarge tier, or any tier marked `billing = "credits"` or `enabled = false`, is never chosen by the routing table or the escalation ladder.
 - When the ladder runs out at `large`, the Director stops and asks the user, as it does today.
@@ -118,30 +118,30 @@ So both families get the same shape: three **standard** tiers built from models 
 **Per-install model map** (a sketch; the restructure decides the file name):
 
 ```toml
-# personal machine
+# Both tools available, with access to the top models
 [tiers.small]   claude = "haiku"   codex = "gpt-6-luna"
 [tiers.medium]  claude = "sonnet"  codex = "gpt-6.1-terra"
 [tiers.large]   claude = "opus"    codex = "gpt-6.1-sol"
 [tiers.xlarge]  enabled = false
-  claude = { model = "fable", billing = "credits" }   # API-rate usage credits
-  codex  = { model = "gpt-6-astra" }                  # personal account only
+  claude = { model = "fable", billing = "credits" }   # API-rate usage credits on some plans
+  codex  = { model = "gpt-6-astra" }                  # only where Astra is available
 
-# work machine: no claude keys, no xlarge
+# Codex only, without Astra: no claude keys, no xlarge
 [tiers.small]   codex = "gpt-6-luna"
 [tiers.medium]  codex = "gpt-6.1-terra"
 [tiers.large]   codex = "gpt-6.1-sol"
 ```
 
-The routing table names tiers only. Each package resolves them through this map, so the core routing file stays shared. If a mapped model is missing at run time (models change), the Director falls back one tier down, logs `"tier_fallback"`, and tells the user. It never falls back up.
+The routing table names tiers only. Each package resolves them through this map, so the core routing file stays shared. A tool with no entries in the map is simply never routed to. If a mapped model is missing at run time (models change, or an environment doesn't offer it), the Director falls back one tier down, logs `"tier_fallback"`, and tells the user. It never falls back up.
 
 | Effort tier | Claude | Codex |
 |---|---|---|
 | low / medium / high | `low` / `medium` / `high` | `low` / `medium` / `high` |
 | (unused at first) | `xhigh`, `max` | `xhigh`, `max`, `ultra` (model-dependent) |
 
-Higher effort levels cost more on both plans. They stay off the ladder at first, like the xlarge tier, until the Coach has data that `high` isn't enough for some task type.
+Higher effort levels cost more with both tools. They stay off the ladder at first, like the xlarge tier, until the Coach has data that `high` isn't enough for some task type.
 
-The routing table should name **tiers**. Each package maps tiers to models in one small, per-install config file, because the work account may expose different models. Logs record both the tier and the `model` Codex reports.
+The routing table should name **tiers**. Each package maps tiers to models in one small, per-install config file, because accounts and environments expose different models. Logs record both the tier and the `model` Codex reports.
 
 ## What this means for the restructure (step 3)
 
