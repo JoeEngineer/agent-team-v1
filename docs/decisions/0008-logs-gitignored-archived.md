@@ -28,6 +28,8 @@ archive keeps the history for the Coach, outside the repo.
   undo once the logs are in history.
 
 ## Consequences
-- `archive-logs.js --clear` never deletes tracked files, so a project that
-  committed logs earlier keeps them.
+- `archive-logs.js --clear` deletes every log file it verified, tracked or not.
+  A project that committed logs before 0.4.0 should run
+  `git rm --cached .agent-team/logs/*.jsonl` and commit that before using
+  `--clear`; the files stay in git history.
 - Logs are lost if the folder is deleted before archiving; archive at close.
