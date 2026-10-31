@@ -163,7 +163,21 @@ function cli(argv) {
     console.log(JSON.stringify(e));
     return 0;
   }
-  console.error('usage: models.js show [--tool t] | resolve <tier> [--tool t]');
+  if (cmd === 'up' || cmd === 'down') {
+    const tier = pos[0];
+    if (!TIERS.includes(tier)) {
+      console.error(`unknown tier "${tier}" (expected ${TIERS.join(', ')})`);
+      return 1;
+    }
+    const e = (cmd === 'up' ? ladderUp : fallbackDown)(loaded.map, tool, tier);
+    if (!e) {
+      console.error(`no auto-eligible tier ${cmd === 'up' ? 'above' : 'below'} ${tier} for ${tool}; ask the user`);
+      return 1;
+    }
+    console.log(JSON.stringify(e));
+    return 0;
+  }
+  console.error('usage: models.js show [--tool t] | resolve <tier> [--tool t] | up <tier> [--tool t] | down <tier> [--tool t]');
   return 1;
 }
 
