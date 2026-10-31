@@ -12,10 +12,10 @@ Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | Issue | PR |
 |---|---|---|---|---|---|---|---|
 | SS-0 | Breakdown | architect | large (opus) / high | 1 | done | #6 | |
-| SS-1 | Split test harness into per-area files | implementer | small (haiku) / medium | 1 | in progress | #7 | |
+| SS-1 | Split test harness into per-area files | implementer | small (haiku) / medium | 1 | merged | #7 | #17 |
 | SS-2 | Root `plugin.json` + manifest sync test | implementer | small (haiku) / medium | | planned | #8 | |
-| SS-3 | Model map + `scripts/models.js` resolver | implementer | medium (sonnet) / medium | | planned | #9 | |
-| SS-4 | Tool detection, Codex stub, hook matchers | implementer | medium (sonnet) / medium | | planned | #10 | |
+| SS-3 | Model map + `scripts/models.js` resolver | implementer | medium (sonnet) / medium | 1 | in progress | #9 | |
+| SS-4 | Tool detection, Codex stub, hook matchers | implementer | medium (sonnet) / medium | 1 | in progress | #10 | |
 | SS-5 | Commands → skills | implementer | medium (sonnet) / medium | | planned | #11 | |
 | SS-6 | Tier + resolved model in logs; `tier_fallback` | implementer | medium (sonnet) / medium | | planned | #12 | |
 | SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | | planned | #13 | |
@@ -34,7 +34,7 @@ Before each wave, the Director checks `runway --refresh --json` (Claude 5-hour w
 - 20–40% left: start at most two tasks, and keep the rest for after the window renews;
 - under 20% left, or anything in `blockedBy`: `runway wait` (in the background) before starting.
 
-Last check 2026-10-31 12:10 UTC: 5-hour window 34% left (renews 15:20 UTC), weekly 29% left (lasts to renewal).
+Last check 2026-10-31 12:15 UTC: 5-hour window 32% left (renews ~15:20 UTC) → wave 2 started with SS-3 and SS-4 only; SS-2 and SS-5 held until the window renews.
 
 ## Blocked
 
