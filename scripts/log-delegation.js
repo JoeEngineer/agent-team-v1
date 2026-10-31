@@ -192,8 +192,12 @@ function prState(input, { target, repo }) {
   if (target) args.push(target);
   if (repo) args.push('--repo', repo);
   args.push('--json', 'number,state,autoMergeRequest');
+  // Tests point AGENT_TEAM_FAKE_GH at a Node script: on Windows, execFileSync
+  // only finds gh.exe on PATH, so a fake `gh` script there would be skipped.
+  const fake = process.env.AGENT_TEAM_FAKE_GH;
+  const [bin, binArgs] = fake ? [process.execPath, [fake, ...args]] : ['gh', args];
   try {
-    const out = execFileSync('gh', args, {
+    const out = execFileSync(bin, binArgs, {
       cwd: input.cwd || lib.projectDir(input),
       encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 7000,
     });
@@ -252,10 +256,13 @@ function onPostSendMessage(input) {
   });
 }
 
+const isToolResults = (content) =>
+  Array.isArray(content) && content.length > 0 && content.every((c) => c && c.type === 'tool_result');
+
 // Read a subagent transcript: task card from its first prompt, model, tokens
 // (each API message counted once), wall time, and the final report. The report
 // is the SubagentHandback tool's message when the agent used it, else the last
-// assistant text.
+// assistant text, both from the latest turn only.
 function readSubagentTranscript(file) {
   const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null };
   const seen = new Set();
@@ -268,6 +275,14 @@ function readSubagentTranscript(file) {
     if (e.type === 'user' && !out.prompt) {
       out.prompt = lib.responseText(m.content);
       if (e.timestamp) out.first = Date.parse(e.timestamp);
+    }
+    // A new prompt (not a tool result) starts a new turn, e.g. a SendMessage
+    // resume. Forget the previous turn's report, so a lagging transcript can't
+    // hand back attempt 1's report for attempt 2.
+    if (e.type === 'user' && !e.isMeta && !isToolResults(m.content)) {
+      out.handback = null;
+      out.lastText = '';
+      lastMsgId = null;
     }
     if (e.type !== 'assistant') continue;
     if (e.timestamp) out.last = Date.parse(e.timestamp);

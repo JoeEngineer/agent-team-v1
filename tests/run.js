@@ -25,17 +25,15 @@ function run(script, input, projectDir, env = {}) {
   });
 }
 
-// A fake `gh` on PATH that prints FAKE_GH_OUT and exits FAKE_GH_EXIT, and
+// A fake `gh` (a Node script the logger runs via AGENT_TEAM_FAKE_GH, so it
+// works on Windows too) that prints FAKE_GH_OUT, exits FAKE_GH_EXIT, and
 // records its arguments in FAKE_GH_ARGS.
-const FAKE_BIN = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-bin-'));
-fs.writeFileSync(path.join(FAKE_BIN, 'gh'),
-  '#!/usr/bin/env node\n' +
+const FAKE_GH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-bin-')), 'fake-gh.js');
+fs.writeFileSync(FAKE_GH,
   "if (process.env.FAKE_GH_ARGS) require('fs').appendFileSync(process.env.FAKE_GH_ARGS, JSON.stringify(process.argv.slice(2)) + '\\n');\n" +
   "process.stdout.write(process.env.FAKE_GH_OUT || '');\n" +
   "process.exit(Number(process.env.FAKE_GH_EXIT || 0));\n");
-fs.chmodSync(path.join(FAKE_BIN, 'gh'), 0o755);
-fs.writeFileSync(path.join(FAKE_BIN, 'gh.cmd'), '@node "%~dp0gh" %*\r\n');
-const fakeGh = (out, exit = 0, extra = {}) => ({ PATH: FAKE_BIN + path.delimiter + process.env.PATH, FAKE_GH_OUT: out, FAKE_GH_EXIT: String(exit), ...extra });
+const fakeGh = (out, exit = 0, extra = {}) => ({ AGENT_TEAM_FAKE_GH: FAKE_GH, FAKE_GH_OUT: out, FAKE_GH_EXIT: String(exit), ...extra });
 
 function readLog(projectDir, file) {
   const p = path.join(projectDir, '.agent-team', 'logs', file);
@@ -306,6 +304,29 @@ test('SubagentStop: handback review-json reaches reviews.jsonl with findings', (
   eq(r.task_id, 'H-2', 'task id');
   eq(r.findings.length, 1, 'findings carried through');
   eq(r.ci, 'green', 'ci field');
+});
+
+test('SubagentStop: a resume after a handback reports attempt 2, never attempt 1 again', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const card = 'TASK id=R-1 type=implement difficulty=easy milestone=r attempt=1';
+  const tPath = writeSubagentTranscript(tdir, 'r1', card, 'a1\n```result-json\n{"status":"done","summary":"attempt 1"}\n```', 'claude-haiku-5-5', { handback: true });
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'r1', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  const add = (l) => fs.appendFileSync(tPath, JSON.stringify(l) + '\n');
+  // The SendMessage resume arrives; attempt 2's report isn't in the file yet (lag).
+  add({ type: 'user', timestamp: '2026-10-30T18:40:00.000Z', message: { role: 'user', content: 'TASK id=R-1 type=implement difficulty=easy milestone=r attempt=2' } });
+  add({ type: 'assistant', timestamp: '2026-10-30T18:40:05.000Z', message: { id: 'msg_3', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'Working on it.' }] } });
+  run('log-delegation.js', stop, proj);
+  let cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'attempt 2 stop logged, not dropped as a duplicate of attempt 1');
+  eq(cs[1].result, null, 'no stale attempt 1 result');
+  // Once attempt 2's handback is in the file, it is the report.
+  add({ type: 'assistant', timestamp: '2026-10-30T18:40:09.000Z', message: { id: 'msg_4', model: 'claude-haiku-5-5', content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: 'a2\n```result-json\n{"status":"done","summary":"attempt 2"}\n```' } }] } });
+  run('log-delegation.js', stop, proj);
+  cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 3, 'complete attempt 2 logged');
+  eq(cs[2].result.summary, 'attempt 2', 'attempt 2 result');
 });
 
 test('SubagentStop: duplicate stop logged once; a resumed agent finishing again is logged', () => {
