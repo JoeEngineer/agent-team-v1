@@ -17,13 +17,23 @@ function tmpProject() {
   return dir;
 }
 
-function run(script, input, projectDir) {
+function run(script, input, projectDir, env = {}) {
   return spawnSync('node', [path.join(SCRIPTS, script)], {
     input: JSON.stringify(input),
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, CLAUDE_PLUGIN_ROOT: ROOT },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, CLAUDE_PLUGIN_ROOT: ROOT, ...env },
   });
 }
+
+// A fake `gh` (a Node script the logger runs via AGENT_TEAM_FAKE_GH, so it
+// works on Windows too) that prints FAKE_GH_OUT, exits FAKE_GH_EXIT, and
+// records its arguments in FAKE_GH_ARGS.
+const FAKE_GH = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-bin-')), 'fake-gh.js');
+fs.writeFileSync(FAKE_GH,
+  "if (process.env.FAKE_GH_ARGS) require('fs').appendFileSync(process.env.FAKE_GH_ARGS, JSON.stringify(process.argv.slice(2)) + '\\n');\n" +
+  "process.stdout.write(process.env.FAKE_GH_OUT || '');\n" +
+  "process.exit(Number(process.env.FAKE_GH_EXIT || 0));\n");
+const fakeGh = (out, exit = 0, extra = {}) => ({ AGENT_TEAM_FAKE_GH: FAKE_GH, FAKE_GH_OUT: out, FAKE_GH_EXIT: String(exit), ...extra });
 
 function readLog(projectDir, file) {
   const p = path.join(projectDir, '.agent-team', 'logs', file);
@@ -102,6 +112,21 @@ test('blocks bare push while on main', () => {
   eq(r.status, 2, 'exit code');
 });
 
+test('git add -A / . blocked while .claude/worktrees/ exists unignored; allowed otherwise', () => {
+  const dir = tmpProject();
+  const g = (command) => run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: dir }, dir);
+  eq(g('git add -A').status, 0, 'no worktrees folder: allowed');
+  fs.mkdirSync(path.join(dir, '.claude', 'worktrees', 'agent-x'), { recursive: true });
+  for (const cmd of ['git add -A', 'git add .', 'git add --all', 'git commit -m x; git add -A']) {
+    const r = g(cmd);
+    eq(r.status, 2, `blocked: ${cmd}`);
+    assert(/explicit paths/.test(r.stderr), 'stderr explains');
+  }
+  eq(g('git add STATUS.md docs/ .agent-team/logs/').status, 0, 'explicit paths allowed');
+  fs.writeFileSync(path.join(dir, '.gitignore'), '.claude/worktrees/\n');
+  eq(g('git add -A').status, 0, 'ignored: allowed');
+});
+
 // ---------------------------------------------------------------- logger
 console.log('log-delegation.js');
 
@@ -174,7 +199,7 @@ test('background subagent: no result parsed', () => {
 });
 
 // Shapes below match what Claude Code 2.1.314 produced in a live run.
-function writeSubagentTranscript(dir, agentId, prompt, finalText, model = 'claude-haiku-5-5') {
+function writeSubagentTranscript(dir, agentId, prompt, finalText, model = 'claude-haiku-5-5', opts = {}) {
   const file = path.join(dir, `agent-${agentId}.jsonl`);
   const usage = { input_tokens: 2, cache_creation_input_tokens: 1000, cache_read_input_tokens: 500, output_tokens: 100 };
   const lines = [
@@ -183,7 +208,10 @@ function writeSubagentTranscript(dir, agentId, prompt, finalText, model = 'claud
     { type: 'assistant', timestamp: '2026-10-30T18:33:37.000Z', message: { id: 'msg_1', model, usage, content: [{ type: 'tool_use', name: 'Bash', input: {} }] } },
     { type: 'user', timestamp: '2026-10-30T18:33:38.000Z', message: { role: 'user', content: [{ type: 'tool_result', content: 'x' }] } },
     { type: 'assistant', timestamp: '2026-10-30T18:33:40.000Z', message: { id: 'msg_2', model, usage, content: [{ type: 'thinking', thinking: '' }] } },
-    { type: 'assistant', timestamp: '2026-10-30T18:33:41.000Z', message: { id: 'msg_2', model, usage, content: [{ type: 'text', text: finalText }] } },
+    opts.handback
+      // Seen in Claude Code 2.1.314: subagents report through this tool, with no final text block.
+      ? { type: 'assistant', timestamp: '2026-10-30T18:33:41.000Z', message: { id: 'msg_2', model, usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: finalText } }] } }
+      : { type: 'assistant', timestamp: '2026-10-30T18:33:41.000Z', message: { id: 'msg_2', model, usage, content: [{ type: 'text', text: finalText }] } },
   ];
   fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
   fs.writeFileSync(file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ agentType: 'agent-team:reviewer', toolUseId: 'toolu_X', requestShape: 'background' }));
@@ -242,6 +270,143 @@ test('SubagentStop without a delegation record falls back to transcript task car
   eq(c.result.status, 'done', 'result');
 });
 
+test('SubagentStop: report taken from SubagentHandback message', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const report = 'Done.\n```result-json\n{"status":"done","summary":"via handback"}\n```';
+  const tPath = writeSubagentTranscript(tdir, 'h1', 'TASK id=H-1 type=implement difficulty=easy milestone=h attempt=1', report, 'claude-haiku-5-5', { handback: true });
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'h1', agent_type: 'agent-team:implementer', agent_transcript_path: tPath }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.report_source, 'handback', 'report source');
+  eq(c.result && c.result.summary, 'via handback', 'result parsed from handback');
+});
+
+test('SubagentStop: last_assistant_message wins over a lagging transcript; effort recorded', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  // Transcript still holds the previous (attempt 1) report.
+  const tPath = writeSubagentTranscript(tdir, 'l1', 'TASK id=L-1 type=research difficulty=easy milestone=l attempt=1', 'old\n```result-json\n{"status":"done","summary":"attempt 1"}\n```');
+  const fresh = 'new\n```result-json\n{"status":"done","summary":"attempt 2"}\n```';
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'l1', agent_type: 'agent-team:scout', agent_transcript_path: tPath, last_assistant_message: fresh, effort: { level: 'low' } }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.report_source, 'hook-input', 'report source');
+  eq(c.result.summary, 'attempt 2', 'fresh result');
+  eq(c.resolved_effort, 'low', 'resolved effort');
+});
+
+test('SubagentStop: handback review-json reaches reviews.jsonl with findings', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const report = 'Findings.\n```review-json\n{"verdict":"approve","severity":"minor","issues":["docs"],"findings":[{"severity":"minor","category":"docs","path":"README.md","line":3,"blocking":false}],"ci":"green","tests_run":true,"tests_passed":true,"criteria_met":"all","summary":"ok"}\n```';
+  const tPath = writeSubagentTranscript(tdir, 'h2', 'TASK id=H-2 type=review difficulty=easy milestone=h attempt=1 pr=5', report, 'claude-sonnet-5-5', { handback: true });
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'h2', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath }, proj);
+  const [r] = readLog(proj, 'reviews.jsonl');
+  eq(r.task_id, 'H-2', 'task id');
+  eq(r.findings.length, 1, 'findings carried through');
+  eq(r.ci, 'green', 'ci field');
+});
+
+test('SubagentStop: a resume after a handback reports attempt 2, never attempt 1 again', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const card = 'TASK id=R-1 type=implement difficulty=easy milestone=r attempt=1';
+  const tPath = writeSubagentTranscript(tdir, 'r1', card, 'a1\n```result-json\n{"status":"done","summary":"attempt 1"}\n```', 'claude-haiku-5-5', { handback: true });
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'r1', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  const add = (l) => fs.appendFileSync(tPath, JSON.stringify(l) + '\n');
+  // The SendMessage resume arrives; attempt 2's report isn't in the file yet (lag).
+  add({ type: 'user', timestamp: '2026-10-30T18:40:00.000Z', message: { role: 'user', content: 'TASK id=R-1 type=implement difficulty=easy milestone=r attempt=2' } });
+  add({ type: 'assistant', timestamp: '2026-10-30T18:40:05.000Z', message: { id: 'msg_3', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'Working on it.' }] } });
+  run('log-delegation.js', stop, proj);
+  let cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'attempt 2 stop logged, not dropped as a duplicate of attempt 1');
+  eq(cs[1].result, null, 'no stale attempt 1 result');
+  // Once attempt 2's handback is in the file, it is the report.
+  add({ type: 'assistant', timestamp: '2026-10-30T18:40:09.000Z', message: { id: 'msg_4', model: 'claude-haiku-5-5', content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: 'a2\n```result-json\n{"status":"done","summary":"attempt 2"}\n```' } }] } });
+  run('log-delegation.js', stop, proj);
+  cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 3, 'complete attempt 2 logged');
+  eq(cs[2].result.summary, 'attempt 2', 'attempt 2 result');
+});
+
+test('SubagentStop: a resumed attempt counts only its own tokens and wall time', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const card = 'TASK id=R-2 type=implement difficulty=easy milestone=r attempt=1';
+  const tPath = writeSubagentTranscript(tdir, 'r2', card, 'a1\n```result-json\n{"status":"done"}\n```');
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'r2', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  const add = (l) => fs.appendFileSync(tPath, JSON.stringify(l) + '\n');
+  const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  // Resume ten minutes later: the idle gap and attempt 1's tokens must not count.
+  add({ type: 'user', timestamp: '2026-10-30T18:43:41.000Z', message: { role: 'user', content: 'TASK id=R-2 type=implement difficulty=easy milestone=r attempt=2' } });
+  add({ type: 'assistant', timestamp: '2026-10-30T18:43:44.000Z', message: { id: 'msg_9', model: 'claude-haiku-5-5', usage, content: [{ type: 'text', text: 'a2\n```result-json\n{"status":"done"}\n```' }] } });
+  run('log-delegation.js', stop, proj);
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'both attempts logged');
+  eq(cs[0].tokens_with_cache, 3204, 'attempt 1 tokens');
+  eq(cs[0].duration_ms, 6000, 'attempt 1 wall time');
+  eq(cs[1].tokens_with_cache, 30, 'attempt 2 tokens only');
+  eq(cs[1].duration_ms, 3000, 'attempt 2 wall time only, no idle gap');
+});
+
+test('SubagentStop: a resume not yet in the transcript has no duration, not a negative one', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'r3', 'TASK id=R-3 type=implement difficulty=easy milestone=r attempt=1', 'a1');
+  fs.appendFileSync(tPath, JSON.stringify({ type: 'user', timestamp: '2026-10-30T18:50:00.000Z', message: { role: 'user', content: 'TASK id=R-3 type=implement difficulty=easy milestone=r attempt=2' } }) + '\n');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'r3', agent_transcript_path: tPath, last_assistant_message: 'Blocked: need the CI log.' }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.duration_ms, null, 'no duration yet');
+  eq(c.tokens_with_cache, null, 'no tokens yet');
+  eq(c.report_source, 'hook-input', 'report from hook input');
+});
+
+test('SubagentStop: duplicate stop logged once; a resumed agent finishing again is logged', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const card = 'TASK id=D-1 type=implement difficulty=easy milestone=d attempt=1';
+  const tPath = writeSubagentTranscript(tdir, 'd1', card, 'first\n```result-json\n{"status":"done"}\n```');
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'd1', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'duplicate stop dropped');
+  fs.appendFileSync(tPath, JSON.stringify({ type: 'assistant', timestamp: '2026-10-30T18:40:00.000Z', message: { id: 'msg_3', model: 'claude-haiku-5-5', content: [{ type: 'text', text: 'second\n```result-json\n{"status":"partial"}\n```' }] } }) + '\n');
+  run('log-delegation.js', stop, proj);
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'resumed finish logged');
+  eq(cs[1].result.status, 'partial', 'second result');
+});
+
+test('reviews: a re-review by the same agent is logged; the same verdict seen twice is not', () => {
+  const proj = tmpProject();
+  const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=RR-1 type=review difficulty=easy milestone=r attempt=1 pr=9' };
+  const rv = (v) => ({ agentId: 'rv1', content: [{ type: 'text', text: '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[]}\n```' }] });
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: rv('changes_requested') }, proj);
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: rv('changes_requested') }, proj);
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: rv('approve') }, proj);
+  const verdicts = readLog(proj, 'reviews.jsonl').map((r) => r.verdict);
+  eq(verdicts.join(','), 'changes_requested,approve', 'verdicts');
+});
+
+test('SendMessage with a task card is logged as a resume delegation', () => {
+  const proj = tmpProject();
+  const ti = { subagent_type: 'agent-team:implementer', effort: 'low', prompt: 'TASK id=S-1 type=test difficulty=easy milestone=s attempt=1' };
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: { isAsync: true, status: 'async_launched', agentId: 'ag1', resolvedModel: 'claude-sonnet-5-5' } }, proj);
+  const msg = 'Attempt 2: wait for count >= 4.\nTASK id=S-1 type=test difficulty=easy milestone=s attempt=2\nWHY ladder step 1, same tier with findings';
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'SendMessage', tool_use_id: 'tu_s', tool_input: { to: 'ag1', summary: 'S-1 attempt 2', message: msg }, tool_response: 'sent' }, proj);
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'SendMessage', tool_input: { to: 'ag1', message: 'status?' }, tool_response: 'sent' }, proj);
+  const recs = readLog(proj, 'delegations.jsonl');
+  eq(recs.length, 2, 'launch + one resume (plain messages ignored)');
+  const r = recs[1];
+  eq(r.kind, 'resume', 'kind');
+  eq(r.agent_id, 'ag1', 'agent id');
+  eq(r.agent, 'agent-team:implementer', 'agent from prior delegation');
+  eq(r.effort, 'low', 'effort from prior delegation');
+  eq(r.task.attempt, 2, 'attempt');
+  eq(r.task.why, 'ladder step 1, same tier with findings', 'why');
+});
+
 test('session start logged with child session id', () => {
   const proj = tmpProject();
   const ti = { title: 'Auth API', initiation: 'user_asked', model: 'sonnet', use_worktree: true, prompt: 'TASK id=AUTH-2 type=implement difficulty=hard milestone=auth attempt=1\nWHY hard -> session' };
@@ -267,12 +432,52 @@ test('runway check is not logged as a delegation', () => {
   eq(readLog(proj, 'delegations.jsonl').length, 0, 'no records');
 });
 
-test('gh pr merge logged to merges.jsonl', () => {
+test('gh pr merge: outcome comes from gh pr view, not output text', () => {
   const proj = tmpProject();
-  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 212 --squash --delete-branch' }, tool_response: { stdout: 'Squashed and merged pull request #212' } }, proj);
+  const argsFile = path.join(proj, 'gh-args.jsonl');
+  // Chained bookkeeping whose output says "error"/"failed" must not mark the merge failed.
+  const cmd = 'gh pr comment 212 -b "Merged by Director" && gh pr merge 212 --squash --delete-branch && git pull -q && grep -c error log.txt';
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: cmd }, tool_response: { stdout: '3 errors; 1 failed', stderr: '' } }, proj,
+    fakeGh('{"number":212,"state":"MERGED","autoMergeRequest":null}', 0, { FAKE_GH_ARGS: argsFile }));
   const [m] = readLog(proj, 'merges.jsonl');
   eq(m.pr, '212', 'pr');
   eq(m.outcome, 'merged', 'outcome');
+  eq(m.outcome_source, 'gh pr view', 'outcome source');
+  eq(m.chained, true, 'chained');
+  const [args] = fs.readFileSync(argsFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  eq(args.slice(0, 3).join(' '), 'pr view 212', 'asked gh about the merged PR');
+});
+
+test('gh pr merge: --repo passed through; open PR is not-merged; auto-merge is queued', () => {
+  const proj = tmpProject();
+  const argsFile = path.join(proj, 'gh-args.jsonl');
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 7 -R o/r --squash' }, tool_response: { stdout: '' } }, proj,
+    fakeGh('{"number":7,"state":"OPEN","autoMergeRequest":null}', 0, { FAKE_GH_ARGS: argsFile }));
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 8 --auto --squash' }, tool_response: { stdout: '' } }, proj,
+    fakeGh('{"number":8,"state":"OPEN","autoMergeRequest":{"mergeMethod":"SQUASH"}}'));
+  const [a, b] = readLog(proj, 'merges.jsonl');
+  eq(a.outcome, 'not-merged', 'open PR');
+  eq(b.outcome, 'auto-merge-queued', 'auto-merge');
+  const [args] = fs.readFileSync(argsFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  assert(args.join(' ').includes('--repo o/r'), `repo passed to gh: ${args.join(' ')}`);
+});
+
+test('gh pr merge: unknown when gh cannot answer', () => {
+  const proj = tmpProject();
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 212 --squash' }, tool_response: { stdout: 'Squashed and merged pull request #212' } }, proj,
+    fakeGh('', 1));
+  const [m] = readLog(proj, 'merges.jsonl');
+  eq(m.pr, '212', 'pr from command');
+  eq(m.outcome, 'unknown', 'outcome');
+  eq(m.outcome_source, 'none', 'outcome source');
+});
+
+test('a merge command mentioned inside a quoted string is not logged', () => {
+  const proj = tmpProject();
+  const cmd = 'echo "next: gh pr merge 5 --squash" && grep -c "gh pr merge" notes.md';
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: cmd }, tool_response: 'x' }, proj,
+    fakeGh('{"number":5,"state":"MERGED"}'));
+  eq(readLog(proj, 'merges.jsonl').length, 0, 'no merge records');
 });
 
 test('other shell commands are ignored', () => {
