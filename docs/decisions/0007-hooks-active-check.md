@@ -21,6 +21,9 @@ way for a session to learn that the hooks are running. See
   already exists, so unrelated repos get no new folders. If Codex (or a future
   version) does not inject `additionalContext`, this marker file is the
   fallback check. A non-git project works the same: nothing here needs git.
+- SessionStart has no matcher, so it also fires on resume, clear and compact.
+  That is harmless: each run refreshes the marker. The marker is only written
+  when `.agent-team/` exists, so on Codex the context line is the primary check.
 - The script never throws and always exits 0.
 - No `SubagentStart` entry. `SubagentStop` plus the transcript give everything
   we need, and each extra hook entry costs Codex users another trust step

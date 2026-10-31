@@ -20,7 +20,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/codex-hooks.js` | Writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Both are committed |
 | `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run |
 | `scripts/archive-logs.js` | Milestone close: copies the project's logs to an archive folder outside the repo, and with `--clear` removes the live copies once the archive is verified |
-| `scripts/reconcile-logs.js` | Backfills completion and review records the stop hook missed, from subagent transcripts |
+| `scripts/reconcile-logs.js` | Backfills completion and review records the stop hook missed, from Claude Code subagent transcripts (Claude records only) |
 | `plugin.json` (root) | Portable Agent Plugins manifest that Codex reads; `.claude-plugin/` stays for Claude Code |
 | `templates/project/` | Files `/agent-team:team-init` copies into a project, including the Codex hook shim |
 
@@ -41,8 +41,9 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Codex logging:** Codex records go into the same log files as Claude's, with `tool: "codex"`. The spawn message is encrypted on Codex, so the Director logs each Codex delegation itself before spawning it (`log-event.js delegation` with the task card and a `task_name`). The hooks then link the subagent's completion and review to that line by `task_name`, and only add a fallback line if the Director didn't log one. `codex-events.jsonl` is a raw debug log, not used by the Coach.
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
+- **Script commands:** run them from the plugin root, with the path to the plugin in the command, as `team-init` does in a user project: `node "<plugin root>/scripts/…"`. The commands below are written relative to the plugin root.
 - **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
-- **Backfill:** if the stop hook missed a completion or review (a crash, or a hook that was off), `node scripts/reconcile-logs.js` rebuilds it from the subagent transcripts. `--dry-run` shows what it would add. Backfilled lines are marked `report_source: "reconcile"`.
+- **Backfill:** if the stop hook missed a completion or review (a crash, or a hook that was off), `node scripts/reconcile-logs.js` rebuilds it from the Claude Code subagent transcripts. It backfills Claude records only, since it reads Claude transcripts; Codex records come from its hooks. `--dry-run` shows what it would add. Backfilled lines are marked `report_source: "reconcile"`.
 
 ## Models and tiers
 
