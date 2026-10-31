@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, shortHash, logReview, findDelegation: findDelegationBy, logMerges } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -127,6 +127,7 @@ function onPostSubagent(input) {
 }
 
 function onPostSession(input) {
+  takeDuration(input); // release the start file; sessions log no duration
   const ti = input.tool_input || {};
   const text = lib.responseText(input.tool_response);
   const sessionId = (text.match(/local_[\w-]+/) || [])[0] || null;
@@ -203,15 +204,21 @@ function onPostSendMessage(input) {
   });
 }
 
-const isToolResults = (content) =>
-  Array.isArray(content) && content.length > 0 && content.every((c) => c && c.type === 'tool_result');
+// A real prompt: a string or a text part, not a tool result. The SendMessage
+// resume prompt is one of these even though Claude Code marks it isMeta.
+const isPrompt = (content) =>
+  typeof content === 'string' ? content.trim() !== ''
+    : Array.isArray(content) && content.some((c) => c && c.type === 'text' && c.text) &&
+      !content.some((c) => c && c.type === 'tool_result');
+
+const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 // Read a subagent transcript: task card from its first prompt, model, tokens
 // (each API message counted once), wall time, and the final report. The report
 // is the SubagentHandback tool's message when the agent used it, else the last
 // assistant text, both from the latest turn only.
 function readSubagentTranscript(file) {
-  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null };
+  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null, turn: 0 };
   const seen = new Set();
   let lastMsgId = null;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -220,11 +227,12 @@ function readSubagentTranscript(file) {
     try { e = JSON.parse(line); } catch { continue; }
     const m = e.message || {};
     if (e.type === 'user' && !out.prompt) out.prompt = lib.responseText(m.content);
-    // A new prompt (not a tool result) starts a new turn, e.g. a SendMessage
-    // resume. Report, tokens and wall time cover the latest turn only, so a
-    // lagging transcript can't hand back attempt 1's report for attempt 2, and
-    // attempt 2's tokens and duration don't include attempt 1's.
-    if (e.type === 'user' && !e.isMeta && !isToolResults(m.content)) {
+    // A new prompt (not a tool result; isMeta or not) starts a new turn, e.g. a
+    // SendMessage resume. Report, tokens and wall time cover the latest turn
+    // only, so a lagging transcript can't hand back attempt 1's report for
+    // attempt 2, and attempt 2's tokens and duration don't include attempt 1's.
+    if (e.type === 'user' && isPrompt(m.content)) {
+      out.turn++;
       out.handback = null;
       out.lastText = '';
       lastMsgId = null;
@@ -274,24 +282,49 @@ function readMeta(transcriptPath) {
 function onSubagentStop(input) {
   const tPath = input.agent_transcript_path;
   if (!tPath || !fs.existsSync(tPath)) return;
-  const t = readSubagentTranscript(tPath);
   const meta = readMeta(tPath);
   const agentId = input.agent_id || (path.basename(tPath).match(/^agent-(.+)\.jsonl$/) || [])[1] || null;
-  // The final report. `last_assistant_message` in the hook input is complete
-  // when the hook runs; the transcript file can lag one message behind (seen
-  // live in 2.1.314), so it's the fallback. Prefer a source with a JSON block.
-  const sources = [
-    ['hook-input', typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null],
-    ['handback', t.handback],
-    ['text', t.lastText],
-  ].filter(([, v]) => v);
-  const hasBlock = (v) => /```(result|review)-json/.test(v);
-  const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
-  // SubagentStop can fire more than once for the same finish. A resumed agent
-  // finishes again with a new report, so it's still logged.
-  if (agentId && !claimOnce(input, `stop-${agentId}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const agentType = input.agent_type || meta.agentType || null;
   const delegation = findDelegation(input, agentId);
+  const hasBlock = (v) => /```(result|review)-json/.test(v);
+  // The final report. `last_assistant_message` in the hook input is complete
+  // when present; the transcript file can lag the live session (seen in
+  // 2.1.314), and handback-ending agents often have no hook-input message, so
+  // the transcript is the fallback. Prefer a source with a JSON block.
+  const choose = () => {
+    const t = readSubagentTranscript(tPath);
+    const sources = [
+      ['hook-input', typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null],
+      ['handback', t.handback],
+      ['text', t.lastText],
+    ].filter(([, v]) => v);
+    const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
+    return { t, reportSource, report };
+  };
+  let { t, reportSource, report } = choose();
+  // Role agents (agent-team:*) always report a result-json/review-json block,
+  // and a review task expects one; if it's missing the transcript probably
+  // lags, so re-read it up to 4 x 500 ms. Other agents may end without a block
+  // and shouldn't pay the wait on every stop. The delay is overridable for tests.
+  const expectBlock = (agentType && agentType.startsWith('agent-team:')) ||
+    (delegation && delegation.task && delegation.task.type === 'review');
+  if (expectBlock && !hasBlock(report)) {
+    const env = process.env.AGENT_TEAM_STOP_RETRY_MS;
+    const delay = env !== undefined && env !== '' && Number(env) >= 0 ? Number(env) : 500;
+    for (let i = 0; i < 4 && !hasBlock(report); i++) {
+      sleepMs(delay);
+      ({ t, reportSource, report } = choose());
+    }
+  }
+  // A resume whose prompt is in the file but has no assistant entry yet, and no
+  // hook-input report: nothing of attempt 2 to log. Don't claim its marker.
+  if (!report && t.turn > 1 && !t.last) return;
+  // SubagentStop can fire more than once for the same finish. The key has the
+  // turn and the report: a resumed agent's new attempt is still logged, and a
+  // stale read of an earlier attempt's report can't claim the new marker.
+  // Claimed only after the final choice, so a fenceless first read doesn't
+  // shadow a later read with the block (different report, different key).
+  if (agentId && !claimOnce(input, `stop-${agentId}-${t.turn}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
   const record = {
     ...base(input),
@@ -325,6 +358,7 @@ function onSubagentStop(input) {
 function main() {
   const input = lib.readStdin();
   if (lib.detectTool(input) === 'codex') return require('./codex-log').handle(input);
+  prunePending(input);
   const event = input.hook_event_name;
   const tool = input.tool_name || '';
   if (event === 'PreToolUse') return onPre(input);

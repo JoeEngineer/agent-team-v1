@@ -5,8 +5,12 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync, execFileSync } = require('child_process');
+const { spawn, spawnSync, execFileSync } = require('child_process');
 const { ROOT, SCRIPTS, tmpProject, run, fakeGh, readLog, test, assert, eq } = require('./helpers');
+
+// Keep the SubagentStop retry fast (production default is 4 x 500 ms).
+process.env.AGENT_TEAM_STOP_RETRY_MS = '10';
+const spawnDetached = (code) => spawn(process.execPath, ['-e', code], { detached: true, stdio: 'ignore' }).unref();
 
 // ---------------------------------------------------------------- guard
 console.log('guard.js');
@@ -361,6 +365,122 @@ test('SubagentStop: duplicate stop logged once; a resumed agent finishing again 
   const cs = readLog(proj, 'completions.jsonl');
   eq(cs.length, 2, 'resumed finish logged');
   eq(cs[1].result.status, 'partial', 'second result');
+});
+
+// ---- review-logging gaps (retry, resume turns, dedupe, .pending cleanup)
+const REVIEW = (v, s = 'ok') => '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[],"summary":"' + s + '"}\n```';
+const pendingDir = (proj) => path.join(proj, '.agent-team', 'logs', '.pending');
+const addLine = (file, l) => fs.appendFileSync(file, JSON.stringify(l) + '\n');
+const handbackLine = (id, ts, message, usage) => ({ type: 'assistant', timestamp: ts, message: { id, model: 'claude-sonnet-5-5', ...(usage ? { usage } : {}), content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message } }] } });
+
+test('SubagentStop: a handback written after the hook starts is found by the retry', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'late1', 'TASK id=LATE-1 type=review difficulty=easy milestone=l attempt=1 pr=3', 'checking...');
+  assert(!fs.readFileSync(tPath, 'utf8').includes('SubagentHandback'), 'precondition: no handback in the file when the hook starts');
+  const line = JSON.stringify(handbackLine('msg_late', '2026-10-30T18:33:42.000Z', REVIEW('approve'))) + '\n';
+  spawnDetached(`setTimeout(()=>require('fs').appendFileSync(${JSON.stringify(tPath)}, ${JSON.stringify(line)}), 300)`);
+  const t0 = Date.now();
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'late1', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath }, proj, { AGENT_TEAM_STOP_RETRY_MS: '250' });
+  assert(Date.now() - t0 >= 250, 'the hook waited at least one retry');
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 1, 'one completion');
+  eq(cs[0].report_source, 'handback', 'report from the late handback');
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'review logged after the retry');
+});
+
+test('SubagentStop: no block ever appears, a role agent is logged once; a non-role agent does not wait', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'nb1', 'TASK id=NB-1 type=research difficulty=easy milestone=n attempt=1', 'plain words');
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'nb1', agent_type: 'agent-team:scout', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  run('log-delegation.js', stop, proj); // one step past: still a single line
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 1, 'logged once');
+  eq(cs[0].result, null, 'no result');
+  const t0 = Date.now();
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'nb2', agent_type: 'general-purpose', agent_transcript_path: writeSubagentTranscript(tdir, 'nb2', 'x', 'y') }, proj, { AGENT_TEAM_STOP_RETRY_MS: '1500' });
+  assert(Date.now() - t0 < 1500, 'no retry for an agent that is not a role agent');
+  eq(readLog(proj, 'completions.jsonl').length, 2, 'the non-role agent was still logged');
+});
+
+test('SubagentStop: isMeta resume prompt starts a turn; a stale read claims nothing; attempt 2 has its own tokens and duration', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'meta1', 'TASK id=M-1 type=review difficulty=easy milestone=m attempt=1 pr=4', REVIEW('changes_requested', 'one'), 'claude-sonnet-5-5', { handback: true });
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'meta1', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'attempt 1 logged');
+  const markers = () => fs.readdirSync(pendingDir(proj)).filter((f) => f.startsWith('stop-')).length;
+  eq(markers(), 1, 'attempt 1 marker');
+  // Resume prompt (isMeta, string) three hours later; attempt 2 not flushed yet.
+  addLine(tPath, { type: 'user', isMeta: true, timestamp: '2026-10-30T21:33:41.000Z', message: { role: 'user', content: 'TASK id=M-1 type=review difficulty=easy milestone=m attempt=2 pr=4' } });
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'stale read logs nothing');
+  eq(markers(), 1, 'stale read claims no marker');
+  const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  addLine(tPath, handbackLine('msg_m2', '2026-10-30T21:33:46.000Z', REVIEW('approve', 'two'), usage));
+  run('log-delegation.js', stop, proj);
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'attempt 2 logged');
+  eq(cs[1].tokens_with_cache, 30, 'attempt-only tokens');
+  eq(cs[1].duration_ms, 5000, 'attempt-only duration');
+  assert(cs[1].duration_ms < 3 * 3600 * 1000, 'less than the idle gap');
+  eq(cs[1].review.verdict, 'approve', 'attempt 2 verdict');
+  eq(readLog(proj, 'reviews.jsonl').length, 2, 'both verdicts reach reviews.jsonl');
+});
+
+test('SubagentStop: first fire without a fence, second with one, is logged', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'fe1', 'TASK id=F-1 type=review difficulty=easy milestone=f attempt=1 pr=6', 'looking');
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'fe1', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'reviews.jsonl').length, 0, 'precondition: no review on the first fire');
+  addLine(tPath, handbackLine('msg_f', '2026-10-30T18:33:50.000Z', REVIEW('approve')));
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'second fire logged the review');
+});
+
+test('reviews: identical review JSON from a resumed agent is logged once, a different one is logged', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'id1', 'TASK id=I-1 type=review difficulty=easy milestone=i attempt=1 pr=8', REVIEW('approve'), 'claude-sonnet-5-5', { handback: true });
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'id1', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  const resume = (n, review) => {
+    addLine(tPath, { type: 'user', isMeta: true, timestamp: `2026-10-30T2${n}:00:00.000Z`, message: { role: 'user', content: 'TASK id=I-1 type=review attempt=' + (n + 1) } });
+    addLine(tPath, handbackLine('msg_i' + n, `2026-10-30T2${n}:00:05.000Z`, review));
+    run('log-delegation.js', stop, proj);
+  };
+  resume(1, REVIEW('approve'));
+  eq(readLog(proj, 'completions.jsonl').length, 2, 'precondition: the resumed finish was seen');
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'identical review logged once');
+  resume(2, REVIEW('changes_requested'));
+  eq(readLog(proj, 'reviews.jsonl').length, 2, 'different review logged');
+});
+
+test('onPostSession releases its start file', () => {
+  const proj = tmpProject();
+  const ev = { tool_name: 'mcp__ccd_session__start_session', tool_use_id: 'toolu_sess1', tool_input: { title: 't', prompt: 'x' } };
+  run('log-delegation.js', { ...ev, hook_event_name: 'PreToolUse' }, proj);
+  assert(fs.existsSync(path.join(pendingDir(proj), 'toolu_sess1.json')), 'precondition: start file written');
+  run('log-delegation.js', { ...ev, hook_event_name: 'PostToolUse', tool_response: 'Started session local_zz' }, proj);
+  assert(!fs.existsSync(path.join(pendingDir(proj), 'toolu_sess1.json')), 'start file removed');
+});
+
+test('.pending prune: markers and start files over 24 h go; fresh ones, dotfiles and other files stay', () => {
+  const proj = tmpProject();
+  const dir = pendingDir(proj);
+  fs.mkdirSync(dir, { recursive: true });
+  const old = new Date(Date.now() - 25 * 3600 * 1000);
+  const mk = (name, aged) => { const f = path.join(dir, name); fs.writeFileSync(f, ''); if (aged) fs.utimesSync(f, old, old); };
+  mk('stop-a-1-abc', true); mk('review-a-abc', true); mk('toolu_old.json', true);
+  mk('stop-a-1-new', false); mk('toolu_new.json', false);
+  mk('hooks-alive.json', true); mk('.hidden', true);
+  run('log-delegation.js', { hook_event_name: 'PreToolUse', tool_name: 'Read', tool_use_id: 'toolu_now', tool_input: {} }, proj);
+  eq(fs.readdirSync(dir).sort().join(','), '.hidden,hooks-alive.json,stop-a-1-new,toolu_new.json,toolu_now.json', 'only old markers and start files pruned');
 });
 
 test('reviews: a re-review by the same agent is logged; the same verdict seen twice is not', () => {
