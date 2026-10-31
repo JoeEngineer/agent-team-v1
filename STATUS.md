@@ -23,16 +23,17 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | merged | #35 | #47 |
 | CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | merged | #36 | #53 |
 | CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | 1 | merged | #37 | #60 |
-| CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | 1 | in progress | #38 | |
+| CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | 1 | merged | #38 | #62 |
 | CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | merged | #39 | #50 |
 | CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / high | 3 | merged | #40 | #59 |
 | CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | 1 | merged | #41 | #58 |
-| CD-16 | Codex live test harness | implementer | medium (sonnet) / low | | planned | #42 | |
-| CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | | planned | #43 | |
-| CD-18 | README + 0.4.0 | implementer | small (haiku) / low | | planned | #44 | |
+| CD-16 | Codex live test harness | implementer | medium (sonnet) / low | 1 | in review | #42 | #64 |
+| CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 1 | in progress | #43 | |
+| CD-18 | README + 0.4.0 | implementer | small (haiku) / low | 1 | merged | #44 | #63 |
 | CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | | planned | #45 | |
 | CD-20 | Milestone final review | reviewer | large (opus) / high | | planned | #46 | |
 | CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
+| CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 1 | in progress | #65 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -55,7 +56,8 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - `task_name` allows only `[a-z0-9_]`, so the link key is e.g. `cd_7_a1`.
 - Per-spawn `reasoning_effort` applies when the agent file pins only `model`.
 - SessionStart `additionalContext` reaches the model.
-- In the unelevated `workspace-write` sandbox `.git` is read-only (no worktree or commit). Needs a re-check under the elevated sandbox (CD-16).
+- In the unelevated `workspace-write` sandbox `.git` is read-only (no worktree or commit), confirmed again by the CD-16 harness; the Director runs those git commands outside the sandbox with approval. The elevated sandbox is untested.
+- CD-16 harness: 16 of 17 rows pass (install, agent files, project hooks, trust recipe, stable trust hash, Director-first delegation lines, completions with model/effort/tokens, review verdict, guard blocks push, hooks-active line). The failing row is the sandbox `.git` limitation above.
 
 ## Follow-ups
 
