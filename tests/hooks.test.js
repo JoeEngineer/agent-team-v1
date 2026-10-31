@@ -363,6 +363,136 @@ test('SubagentStop: duplicate stop logged once; a resumed agent finishing again 
   eq(cs[1].result.status, 'partial', 'second result');
 });
 
+// ---- Real SendMessage resume shape (Claude Code 2.1.314): an isMeta user entry
+// starting "The coordinator sent a message while you were working:", with the
+// content as an array of text blocks (or a plain string). The older tests above
+// write the resume as a plain user entry, which production never does.
+const RESUME_PREFIX = 'The coordinator sent a message while you were working:\n\n';
+function addRealResume(file, ts, card, asString = false) {
+  const text = RESUME_PREFIX + 'Attempt 2, fix the findings.\n' + card;
+  const content = asString ? text : [{ type: 'text', text }];
+  fs.appendFileSync(file, JSON.stringify({ type: 'user', isMeta: true, timestamp: ts, message: { role: 'user', content } }) + '\n');
+}
+const addLine = (file, l) => fs.appendFileSync(file, JSON.stringify(l) + '\n');
+const asstText = (ts, id, text, usage) => ({ type: 'assistant', timestamp: ts, message: { id, model: 'claude-haiku-5-5', ...(usage ? { usage } : {}), content: [{ type: 'text', text }] } });
+const asstHandback = (ts, id, message) => ({ type: 'assistant', timestamp: ts, message: { id, model: 'claude-haiku-5-5', content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message } }] } });
+
+for (const asString of [false, true]) {
+  test(`real resume shape (isMeta, ${asString ? 'string' : 'text-block array'} content): attempt 2 counts only its own tokens and time`, () => {
+    const proj = tmpProject();
+    const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+    const card1 = 'TASK id=RM-1 type=implement difficulty=easy milestone=r attempt=1';
+    const tPath = writeSubagentTranscript(tdir, 'rm1', card1, 'a1\n```result-json\n{"status":"done","summary":"attempt 1"}\n```');
+    const stop = { hook_event_name: 'SubagentStop', agent_id: 'rm1', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+    run('log-delegation.js', stop, proj);
+    const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    addRealResume(tPath, '2026-10-30T19:00:00.000Z', 'TASK id=RM-1 type=implement difficulty=easy milestone=r attempt=2', asString);
+    addLine(tPath, asstText('2026-10-30T19:00:04.000Z', 'msg_r2', 'a2\n```result-json\n{"status":"done","summary":"attempt 2"}\n```', usage));
+    run('log-delegation.js', stop, proj);
+    const cs = readLog(proj, 'completions.jsonl');
+    eq(cs.length, 2, 'precondition: both attempts logged');
+    eq(cs[0].tokens_with_cache, 3204, 'attempt 1 tokens');
+    eq(cs[1].turn, 2, 'second line is turn 2 (the resume started a new turn)');
+    eq(cs[1].tokens_with_cache, 30, 'attempt 2 tokens only, not cumulative');
+    eq(cs[1].duration_ms, 4000, 'attempt 2 wall time only, no idle gap');
+    eq(cs[1].task.attempt, 2, 'attempt from the resume TASK line');
+    eq(cs[1].result.summary, 'attempt 2', 'attempt 2 result');
+  });
+}
+
+test('isMeta entries that are not coordinator resumes do not start a turn', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'rm2', 'TASK id=RM-2 type=implement difficulty=easy milestone=r attempt=1', 'a1\n```result-json\n{"status":"done"}\n```');
+  // A system reminder, and a coordinator message without a TASK card: neither is a new attempt.
+  addLine(tPath, { type: 'user', isMeta: true, timestamp: '2026-10-30T19:10:00.000Z', message: { role: 'user', content: '<system-reminder>be careful</system-reminder> TASK id=NOPE' } });
+  addLine(tPath, { type: 'user', isMeta: true, timestamp: '2026-10-30T19:10:01.000Z', message: { role: 'user', content: RESUME_PREFIX + 'status?' } });
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'rm2', agent_type: 'agent-team:implementer', agent_transcript_path: tPath }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.turn, 1, 'still turn 1');
+  eq(c.tokens_with_cache, 3204, 'tokens from before the meta entries still counted');
+  eq(c.result.status, 'done', 'attempt 1 report kept');
+});
+
+test('attempt-aware dedupe: attempt 2 with the same report as attempt 1 is logged; a repeat of it is not', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'rm3', 'TASK id=RM-3 type=implement difficulty=easy milestone=r attempt=1', 'x');
+  const stale = 'same\n```result-json\n{"status":"done","summary":"same"}\n```';
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'rm3', agent_type: 'agent-team:implementer', agent_transcript_path: tPath, last_assistant_message: stale };
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'precondition: attempt 1 logged');
+  addRealResume(tPath, '2026-10-30T19:20:00.000Z', 'TASK id=RM-3 type=implement difficulty=easy milestone=r attempt=2');
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 2, 'attempt 2 with an identical report is not dropped');
+  run('log-delegation.js', stop, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 2, 'one step past: the repeat of attempt 2 is still deduped');
+});
+
+test('token classes are split on completion lines and add up to tokens_with_cache', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'rm4', 'TASK id=RM-4 type=implement difficulty=easy milestone=r attempt=1', 'ok');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'rm4', agent_type: 'agent-team:implementer', agent_transcript_path: tPath }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  assert(c && c.tokens_by_class, 'completion has tokens_by_class');
+  eq(JSON.stringify(c.tokens_by_class), JSON.stringify({ input: 4, output: 200, cache_read: 1000, cache_write: 2000 }), 'classes (two API messages)');
+  eq(c.tokens_with_cache, 3204, 'total kept for compatibility');
+});
+
+test('review attempt comes from the turn parsed, not the latest delegation', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=RV-9 type=review difficulty=easy milestone=r attempt=1 pr=9' };
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: { isAsync: true, status: 'async_launched', agentId: 'rv9', resolvedModel: 'claude-sonnet-5-5' } }, proj);
+  // The Director has already resumed the reviewer with attempt 2 (delegation line says 2).
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'SendMessage', tool_input: { to: 'rv9', summary: 'RV-9 a2', message: 'TASK id=RV-9 type=review difficulty=easy milestone=r attempt=2 pr=9' }, tool_response: 'sent' }, proj);
+  const verdict = 'Findings.\n```review-json\n{"verdict":"changes_requested","severity":"major","issues":["correctness"],"findings":[]}\n```';
+  const tPath = writeSubagentTranscript(tdir, 'rv9', ti.prompt, verdict, 'claude-sonnet-5-5', { handback: true });
+  // The stale attempt-1 transcript is what the stop hook sees.
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'rv9', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath }, proj);
+  eq(readLog(proj, 'delegations.jsonl').pop().task.attempt, 2, 'precondition: latest delegation says attempt 2');
+  const [rv] = readLog(proj, 'reviews.jsonl');
+  eq(rv.verdict, 'changes_requested', 'attempt 1 verdict logged');
+  eq(rv.attempt, 1, 'stamped with the attempt of the turn it came from');
+  eq(readLog(proj, 'completions.jsonl')[0].task.attempt, 1, 'completion line attempt too');
+});
+
+test('merge backfills result and review that the lagging transcript missed; append-only and idempotent', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  // An implementer and a reviewer, both stopped while the transcript lagged (no final report yet).
+  const impl = writeSubagentTranscript(tdir, 'bf1', 'TASK id=BF-1 type=implement difficulty=easy milestone=b attempt=1', 'working');
+  const rev = writeSubagentTranscript(tdir, 'bf2', 'TASK id=BF-2 type=review difficulty=easy milestone=b attempt=1 pr=3', 'reading diff');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'bf1', agent_type: 'agent-team:implementer', agent_transcript_path: impl }, proj);
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'bf2', agent_type: 'agent-team:reviewer', agent_transcript_path: rev }, proj);
+  const before = readLog(proj, 'completions.jsonl');
+  eq(before.length, 2, 'precondition: two completion lines');
+  assert(before.every((c) => c.result === null && c.review === null), 'precondition: result and review missing');
+  const merge = () => run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 3 --squash' }, tool_response: '' }, proj, fakeGh('{"number":3,"state":"MERGED"}'));
+  // No-op while nothing has caught up.
+  merge();
+  eq(readLog(proj, 'completions.jsonl').length, 2, 'nothing appended when the transcripts have no report');
+  // The transcripts catch up.
+  addLine(impl, asstHandback('2026-10-30T18:33:50.000Z', 'msg_9', 'done\n```result-json\n{"status":"done","summary":"late"}\n```'));
+  addLine(rev, asstHandback('2026-10-30T18:33:50.000Z', 'msg_9', 'ok\n```review-json\n{"verdict":"approve","severity":"none","issues":[],"findings":[]}\n```'));
+  merge();
+  const after = readLog(proj, 'completions.jsonl');
+  eq(after.length, 4, 'one corrected line appended per agent');
+  eq(JSON.stringify(after.slice(0, 2)), JSON.stringify(before), 'existing lines untouched (append-only)');
+  const [bi, br] = after.slice(2);
+  eq(bi.report_source, 'backfill', 'implementer line marked backfill');
+  eq(bi.result.summary, 'late', 'implementer result recovered');
+  eq(br.report_source, 'backfill', 'reviewer line marked backfill');
+  eq(br.review.verdict, 'approve', 'reviewer verdict recovered');
+  const rvs = readLog(proj, 'reviews.jsonl');
+  eq(rvs.length, 1, 'recovered verdict reaches reviews.jsonl');
+  eq(rvs[0].attempt, 1, 'with the right attempt');
+  merge();
+  eq(readLog(proj, 'completions.jsonl').length, 4, 'second merge appends nothing (idempotent)');
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'and no second review');
+});
+
 test('reviews: a re-review by the same agent is logged; the same verdict seen twice is not', () => {
   const proj = tmpProject();
   const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=RR-1 type=review difficulty=easy milestone=r attempt=1 pr=9' };

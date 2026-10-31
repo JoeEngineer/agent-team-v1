@@ -32,7 +32,8 @@ When a reviewer approves with minor findings, decide before merging:
 
 - **Fold in** when a finding has exact replacement text, or touches only this PR's own files and needs no design choice. Send it to the same implementer with `SendMessage` (warm context), with a TASK line for the same `id`, `attempt` incremented. Then send the reviewer the incremental diff only (`git diff <reviewed-sha>..HEAD`) and merge on its approval.
 - **Batch** docs-wording findings into the next docs task in the milestone, if there is one, instead of a new issue and PR.
-- **Follow-up task** only for findings that need real work: missing tests, behaviour changes, or another area of the code.
+- Missing tests for this PR's own code, in its own test files, count as **fold in**.
+- **Follow-up task** only for findings that need real work: behaviour changes, or another area of the code.
 
 An `approve` still means "may merge as is". Folding in is a cost choice, not a new gate.
 

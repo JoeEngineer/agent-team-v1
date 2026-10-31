@@ -126,7 +126,7 @@ const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex
 // SubagentStop). Log it once per agent id and verdict content, so a re-review
 // by the same (resumed) reviewer is still logged.
 function logReview(input, record, review) {
-  if (record.agent_id && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return;
+  if (record.agent_id && !claimOnce(input, `review-${record.agent_id}-a${record.task.attempt || 0}-${shortHash(JSON.stringify(review))}`)) return;
   lib.appendJsonl(input, 'reviews.jsonl', {
     ...base(input),
     agent_id: record.agent_id || null,
@@ -275,6 +275,7 @@ function onPostShell(input) {
       chained: lib.segments(cmd).length > 1,
     });
   }
+  try { backfillCompletions(input); } catch { /* never block a merge */ }
 }
 
 // SendMessage to an existing agent with a task card is a new attempt of that
@@ -307,47 +308,70 @@ function onPostSendMessage(input) {
 const isToolResults = (content) =>
   Array.isArray(content) && content.length > 0 && content.every((c) => c && c.type === 'tool_result');
 
-// Read a subagent transcript: task card from its first prompt, model, tokens
-// (each API message counted once), wall time, and the final report. The report
+const RESUME_PREFIX = /^\s*The coordinator sent a message while you were working:/;
+
+// Does this user entry start a new turn? A plain prompt does. A SendMessage
+// resume is written by Claude Code as an isMeta entry ("The coordinator sent a
+// message while you were working: ... TASK id=..."); other isMeta entries
+// (system reminders) do not. Tool results never do. Returns the entry text or null.
+function turnStartText(e, m) {
+  if (e.type !== 'user' || isToolResults(m.content)) return null;
+  const text = lib.responseText(m.content);
+  if (!e.isMeta) return text;
+  return RESUME_PREFIX.test(text) && /\bTASK id=/.test(text) ? text : null;
+}
+
+const newTurn = (n, text, e) => ({
+  turn: n, task: lib.parseTaskCard(text),
+  handback: null, lastText: '', lastId: null, lastMsgId: null,
+  tokens: 0, classes: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+  first: e && e.timestamp ? Date.parse(e.timestamp) : null, last: null,
+});
+
+// Read a subagent transcript: task card from its first prompt, model, and per
+// turn (a first prompt, then each SendMessage resume): tokens (each API message
+// counted once, split by class), wall time, and the final report. The report
 // is the SubagentHandback tool's message when the agent used it, else the last
-// assistant text, both from the latest turn only.
+// assistant text. The result has every turn in `turns`; the top-level report,
+// token and time fields are the latest turn's, so a lagging transcript can't
+// hand back attempt 1's report for attempt 2, and attempt 2's tokens and
+// duration don't include attempt 1's.
 function readSubagentTranscript(file) {
-  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null };
+  const out = { prompt: '', model: null, turns: [] };
   const seen = new Set();
-  let lastMsgId = null;
+  let cur = null;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
     if (!line.trim()) continue;
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     const m = e.message || {};
     if (e.type === 'user' && !out.prompt) out.prompt = lib.responseText(m.content);
-    // A new prompt (not a tool result) starts a new turn, e.g. a SendMessage
-    // resume. Report, tokens and wall time cover the latest turn only, so a
-    // lagging transcript can't hand back attempt 1's report for attempt 2, and
-    // attempt 2's tokens and duration don't include attempt 1's.
-    if (e.type === 'user' && !e.isMeta && !isToolResults(m.content)) {
-      out.handback = null;
-      out.lastText = '';
-      lastMsgId = null;
-      out.tokens = 0;
-      out.first = e.timestamp ? Date.parse(e.timestamp) : null;
-      out.last = null;
+    const start = turnStartText(e, m);
+    if (start !== null) {
+      cur = newTurn(out.turns.length + 1, start, e);
+      out.turns.push(cur);
     }
     if (e.type !== 'assistant') continue;
-    if (e.timestamp) out.last = Date.parse(e.timestamp);
-    out.lastId = m.id || e.uuid || out.lastId;
+    if (!cur) { cur = newTurn(1, '', null); out.turns.push(cur); }
+    if (e.timestamp) cur.last = Date.parse(e.timestamp);
+    cur.lastId = m.id || e.uuid || cur.lastId;
     if (m.model) out.model = m.model;
     if (Array.isArray(m.content)) {
       for (const c of m.content) {
         if (c && c.type === 'tool_use' && c.name === 'SubagentHandback' && c.input) {
-          out.handback = lib.responseText(c.input.message);
+          cur.handback = lib.responseText(c.input.message);
         }
       }
     }
     if (m.id && !seen.has(m.id) && m.usage) {
       seen.add(m.id);
       const u = m.usage;
-      out.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) +
+      const k = cur.classes;
+      k.input += u.input_tokens || 0;
+      k.output += u.output_tokens || 0;
+      k.cache_read += u.cache_read_input_tokens || 0;
+      k.cache_write += u.cache_creation_input_tokens || 0;
+      cur.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) +
         (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     }
     const text = Array.isArray(m.content)
@@ -355,11 +379,12 @@ function readSubagentTranscript(file) {
       : typeof m.content === 'string' ? m.content : '';
     if (text) {
       // One API message can be split across entries; keep its text together.
-      out.lastText = m.id && m.id === lastMsgId ? `${out.lastText}\n${text}` : text;
-      lastMsgId = m.id || null;
+      cur.lastText = m.id && m.id === cur.lastMsgId ? `${cur.lastText}\n${text}` : text;
+      cur.lastMsgId = m.id || null;
     }
   }
-  return out;
+  const latest = out.turns[out.turns.length - 1] || newTurn(1, '', null);
+  return { ...out, ...latest, turns: out.turns };
 }
 
 function readMeta(transcriptPath) {
@@ -383,6 +408,54 @@ function findDelegation(input, agentId) {
   return null;
 }
 
+// Task card for a completion: the delegation's, with the attempt (and task id
+// when the delegation has none) taken from the turn's own TASK line.
+function completionTask(delegation, t) {
+  const turnTask = t.task || {};
+  const task = delegation ? { ...delegation.task } : lib.parseTaskCard(t.prompt);
+  if (turnTask.attempt != null) task.attempt = turnTask.attempt;
+  return task;
+}
+
+// Backfill at merge time. The transcript lags at SubagentStop, so a completion
+// line can have result/review null. By merge time the transcript has caught up:
+// re-read it and append a corrected line (report_source "backfill"). Append
+// only; existing lines are never rewritten. Only the latest line per agent and
+// turn is considered, and nothing is appended unless a value was recovered, so
+// running it again is a no-op.
+function backfillCompletions(input) {
+  const file = path.join(lib.logDir(input), 'completions.jsonl');
+  let lines;
+  try { lines = fs.readFileSync(file, 'utf8').split(/\r?\n/).filter(Boolean); } catch { return; }
+  const latest = new Map();
+  for (const l of lines) {
+    let rec;
+    try { rec = JSON.parse(l); } catch { continue; }
+    if (rec.kind === 'completion' && rec.agent_id && rec.transcript_path && rec.turn) latest.set(`${rec.agent_id}#${rec.turn}`, rec);
+  }
+  for (const rec of latest.values()) {
+    const wantsReview = /reviewer/.test(rec.agent || '');
+    if (wantsReview ? rec.review : rec.result) continue;
+    let t;
+    try { t = readSubagentTranscript(rec.transcript_path).turns[rec.turn - 1]; } catch { continue; }
+    if (!t) continue;
+    const report = [t.handback, t.lastText].filter(Boolean).find((v) => /```(result|review)-json/.test(v));
+    if (!report) continue;
+    const result = lib.lastFencedJson(report, 'result-json');
+    const review = lib.lastFencedJson(report, 'review-json');
+    if (!(wantsReview ? review : result)) continue;
+    const fixed = {
+      ...rec, ...base(input),
+      duration_ms: t.first && t.last ? t.last - t.first : rec.duration_ms,
+      tokens_with_cache: t.tokens || rec.tokens_with_cache,
+      tokens_by_class: t.tokens ? { ...t.classes } : rec.tokens_by_class,
+      report_source: 'backfill', result, review,
+    };
+    lib.appendJsonl(input, 'completions.jsonl', fixed);
+    if (review) logReview(input, fixed, review);
+  }
+}
+
 // SubagentStop: fires when any subagent finishes (foreground or background).
 // Writes one completions.jsonl line with the result, linked by agent_id.
 function onSubagentStop(input) {
@@ -403,7 +476,7 @@ function onSubagentStop(input) {
   const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
   // SubagentStop can fire more than once for the same finish. A resumed agent
   // finishes again with a new report, so it's still logged.
-  if (agentId && !claimOnce(input, `stop-${agentId}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
+  if (agentId && !claimOnce(input, `stop-${agentId}-t${t.turn || 1}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const agentType = input.agent_type || meta.agentType || null;
   const delegation = findDelegation(input, agentId);
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
@@ -421,13 +494,20 @@ function onSubagentStop(input) {
     effort: routing.effort,
     // The effort Claude Code actually ran the subagent at, when the hook says.
     resolved_effort: (input.effort && input.effort.level) || null,
-    task: delegation ? delegation.task : lib.parseTaskCard(t.prompt),
+    // The attempt comes from the turn being logged (the TASK line that opened
+    // it), not from the latest delegation, so a stale verdict is never stamped
+    // with a newer attempt number.
+    task: completionTask(delegation, t),
     // Latest turn only (a resumed agent's attempt 2 doesn't include attempt 1).
     // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
     // Includes cache reads/writes, so it's larger than Claude Code's own
     // `tokens` total on the delegation line. Compare like with like.
     tokens_with_cache: t.tokens || null,
+    // The same tokens split by class, so cost can be priced.
+    tokens_by_class: t.tokens ? { ...t.classes } : null,
+    turn: t.turn || 1,
+    transcript_path: tPath,
     report_source: reportSource,
     result: lib.lastFencedJson(report, 'result-json'),
     review: lib.lastFencedJson(report, 'review-json'),
