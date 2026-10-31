@@ -128,3 +128,20 @@ test('reconcile: no projects folder (Codex-only install) exits 0 with a message;
   eq(r2.status, 0, 'exit 0');
   eq(readLog(s.proj, 'completions.jsonl').length, 0, 'codex agent not backfilled');
 });
+
+test('reconcile: a resumed agent with identical reports on two turns gets both; dry-run agrees with the real run', () => {
+  const s = setup('rc8', [REVIEW('approve'), REVIEW('approve')]);
+  const resume = { ts: 't', tool: 'claude', session_id: 'sess-1', kind: 'resume', agent: 'agent-team:reviewer', agent_id: 'rc8', task: { id: 'RC-1', type: 'review', attempt: '2', pr: '9' } };
+  fs.appendFileSync(path.join(s.logs, 'delegations.jsonl'), JSON.stringify(resume) + '\n');
+  eq(readLog(s.proj, 'completions.jsonl').length, 0, 'precondition: nothing logged yet');
+  const dry = reconcile(s, ['--dry-run']);
+  assert(/2 would be backfilled/.test(dry.stdout), `dry-run counts both turns: ${dry.stdout}`);
+  eq(readLog(s.proj, 'completions.jsonl').length, 0, 'dry-run wrote nothing');
+  const real = reconcile(s);
+  assert(/2 completions backfilled/.test(real.stdout), `real run counts both turns: ${real.stdout}`);
+  const cs = readLog(s.proj, 'completions.jsonl');
+  eq(cs.length, 2, 'both turns backfilled');
+  eq(cs[1].task.attempt, '2', 'turn 2 is its own line');
+  reconcile(s);
+  eq(readLog(s.proj, 'completions.jsonl').length, 2, 'one step past: a second run adds nothing');
+});

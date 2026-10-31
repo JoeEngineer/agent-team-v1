@@ -469,6 +469,72 @@ test('reviews: identical review JSON from a resumed agent is logged once, a diff
   eq(readLog(proj, 'reviews.jsonl').length, 2, 'different review logged');
 });
 
+// ---- From PR #52 (CF-1), adapted. The real SendMessage resume shape (Claude
+// Code 2.1.314) is an isMeta entry "The coordinator sent a message while you
+// were working: ... TASK id=...", with text-block array content.
+for (const asString of [false, true]) {
+  test(`real resume shape (isMeta, ${asString ? 'string' : 'text-block array'} content): attempt 2 counts only its own tokens and time`, () => {
+    const proj = tmpProject();
+    const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+    const tPath = writeSubagentTranscript(tdir, 'rm1', 'TASK id=RM-1 type=implement difficulty=easy milestone=r attempt=1', 'a1\n```result-json\n{"status":"done","summary":"attempt 1"}\n```');
+    const stop = { hook_event_name: 'SubagentStop', agent_id: 'rm1', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+    run('log-delegation.js', stop, proj);
+    const text = 'The coordinator sent a message while you were working:\n\nAttempt 2, fix the findings.\nTASK id=RM-1 type=implement difficulty=easy milestone=r attempt=2';
+    addLine(tPath, { type: 'user', isMeta: true, timestamp: '2026-10-30T19:00:00.000Z', message: { role: 'user', content: asString ? text : [{ type: 'text', text }] } });
+    const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+    addLine(tPath, { type: 'assistant', timestamp: '2026-10-30T19:00:04.000Z', message: { id: 'msg_r2', model: 'claude-haiku-5-5', usage, content: [{ type: 'text', text: 'a2\n```result-json\n{"status":"done","summary":"attempt 2"}\n```' }] } });
+    run('log-delegation.js', stop, proj);
+    const cs = readLog(proj, 'completions.jsonl');
+    eq(cs.length, 2, 'precondition: both attempts logged');
+    eq(cs[0].tokens_with_cache, 3204, 'attempt 1 tokens');
+    eq(cs[1].tokens_with_cache, 30, 'attempt 2 tokens only, not cumulative');
+    eq(cs[1].duration_ms, 4000, 'attempt 2 wall time only, no idle gap');
+    eq(cs[1].task.attempt, 2, 'attempt from the resume TASK line');
+    eq(cs[1].result.summary, 'attempt 2', 'attempt 2 result');
+  });
+}
+
+test('isMeta entries without a TASK card (system reminder, coordinator chatter) do not start a turn', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'rm2', 'TASK id=RM-2 type=implement difficulty=easy milestone=r attempt=1', 'a1\n```result-json\n{"status":"done"}\n```');
+  addLine(tPath, { type: 'user', isMeta: true, timestamp: '2026-10-30T19:10:00.000Z', message: { role: 'user', content: '<system-reminder>be careful</system-reminder>' } });
+  addLine(tPath, { type: 'user', isMeta: true, timestamp: '2026-10-30T19:10:01.000Z', message: { role: 'user', content: 'The coordinator sent a message while you were working:\n\nstatus?' } });
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'rm2', agent_type: 'agent-team:implementer', agent_transcript_path: tPath }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.tokens_with_cache, 3204, 'tokens from before the meta entries still counted (still one turn)');
+  eq(c.result.status, 'done', 'attempt 1 report kept');
+  eq(c.task.attempt, 1, 'still attempt 1');
+});
+
+test('token classes are split on completion lines and add up to tokens_with_cache', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'rm4', 'TASK id=RM-4 type=implement difficulty=easy milestone=r attempt=1', 'ok');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'rm4', agent_type: 'agent-team:implementer', agent_transcript_path: tPath }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  assert(c && c.tokens_by_class, 'completion has tokens_by_class');
+  eq(JSON.stringify(c.tokens_by_class), JSON.stringify({ input: 4, output: 200, cache_read: 1000, cache_write: 2000 }), 'classes (two API messages)');
+  eq(c.tokens_with_cache, 3204, 'total kept for compatibility');
+});
+
+test('completion attempt comes from the turn parsed, not the latest delegation', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=RV-9 type=review difficulty=easy milestone=r attempt=1 pr=9' };
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: { isAsync: true, status: 'async_launched', agentId: 'rv9', resolvedModel: 'claude-sonnet-5-5' } }, proj);
+  // The Director has already resumed the reviewer with attempt 2 (latest delegation says 2).
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'SendMessage', tool_input: { to: 'rv9', summary: 'RV-9 a2', message: 'TASK id=RV-9 type=review difficulty=easy milestone=r attempt=2 pr=9' }, tool_response: 'sent' }, proj);
+  const tPath = writeSubagentTranscript(tdir, 'rv9', ti.prompt, REVIEW('changes_requested'), 'claude-sonnet-5-5', { handback: true });
+  // The attempt-2 prompt has not reached the transcript yet: the stop hook sees attempt 1 only.
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'rv9', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath }, proj);
+  eq(String(readLog(proj, 'delegations.jsonl').pop().task.attempt), '2', 'precondition: latest delegation says attempt 2');
+  const [rv] = readLog(proj, 'reviews.jsonl');
+  eq(rv.verdict, 'changes_requested', 'attempt 1 verdict logged');
+  eq(rv.attempt, 1, 'stamped with the attempt of the turn it came from');
+  eq(readLog(proj, 'completions.jsonl')[0].task.attempt, 1, 'completion line attempt too');
+});
+
 test('onPostSession releases its start file', () => {
   const proj = tmpProject();
   const ev = { tool_name: 'mcp__ccd_session__start_session', tool_use_id: 'toolu_sess1', tool_input: { title: 't', prompt: 'x' } };

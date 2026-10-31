@@ -11,7 +11,7 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 
 ## Inputs
 - `.agent-team/logs/delegations.jsonl` — one line per delegation: agent, model, effort, tier, tier_source, billing, tool, task id/type/difficulty, guidance version, duration, tokens, parsed result.
-- `.agent-team/logs/completions.jsonl` — one line per finished subagent, linked to its delegation by `agent_id`. For background subagents this is where the result, duration and tokens are. Its `tokens_with_cache` includes cached input; the delegation line's `tokens` does not. Since 0.2.0, a resumed agent's `tokens_with_cache` and `duration_ms` cover only that attempt, so they can be summed across attempts. One attempt can have more than one line (the stop hook can fire again after the transcript catches up): use the last line per `agent_id` and `task.attempt`.
+- `.agent-team/logs/completions.jsonl` — one line per finished subagent, linked to its delegation by `agent_id`. For background subagents this is where the result, duration and tokens are. Its `tokens_with_cache` includes cached input; the delegation line's `tokens` does not. `tokens_by_class` (since 0.3.1) splits it into `input`, `output`, `cache_read` and `cache_write`, so cost can be priced. From 0.3.1, a resumed agent's `tokens_with_cache` and `duration_ms` cover only that attempt (the turn that started with its TASK line), so they can be summed across attempts. Lines with `guidance_version` 0.3.0 or earlier are cumulative on resumes (a resume never started a new turn in the transcript parser): do not sum those. One attempt can have more than one line (the stop hook can fire before the transcript catches up): use the last line per `agent_id` and `task.attempt`. Lines from before 0.3.1 have `result`/`review` that can be stale (an attempt 2 line holding attempt 1's report) or null; `scripts/reconcile-logs.js` can backfill missing ones (`report_source: "reconcile"`).
 - `.agent-team/logs/reviews.jsonl` — one line per reviewer verdict, linked by task id. Since 0.2.0 it carries `findings` (severity, category, path, blocking) and `ci`.
 - `delegations.jsonl` lines with `kind: "resume"` are retries sent to an existing agent with `SendMessage` (same `agent_id`; model/effort copied from the original delegation).
 - `merges.jsonl` `outcome` is read from GitHub after the call (`merged`, `not-merged`, `auto-merge-queued`, or `unknown` when GitHub couldn't be asked). Lines before 0.2.0 guessed it from the command output and are unreliable.
@@ -24,11 +24,11 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 ### Codex records
 - Codex lines sit in the same files as Claude's, with `tool: "codex"`. Compare results per logged `model` (the model Codex reports), not per tier name across tools. See `docs/codex-mapping.md`, "Models and effort".
 - Delegation lines have `source: "director"` (written by the Director before spawning, with the parsed task and WHY) or `source: "hook"` (written on spawn or resume when the Director did not log). Dedupe by `task_name` + `task.attempt`, preferring `source: "director"`. Hook resume fallbacks have `task: {}` because the message is encrypted; take the task card from the Director line for that `task_name`.
-- Reviews: count one verdict per reviewer agent + attempt. A review may appear both from the hook and from a Director `log-event.js review` line, so dedupe by task id + attempt + verdict.
+- Reviews: a review may appear both from the hook and from a Director `log-event.js review` line. Dedupe by task id + attempt + verdict.
 - `tokens_detail` holds `input`, `cached_input`, `output` and `reasoning_output`. Use it where present.
 - `codex-events.jsonl` is raw debug output. Ignore it.
 - Completions with `report_source: "reconcile"` were backfilled from transcripts. Trust them like hook lines.
-- `notes.jsonl` (in the logs folder, when present) may hold Director notes about verdicts the logger missed. Count them as verdicts, deduped as above.
+- `notes.jsonl` (in the logs folder, when present) holds free-form Director notes (`log-event.js note`). Read them as context. Count a note as a verdict only when it names the task, the attempt and the verdict; then dedupe as above.
 
 ## What to look for
 - Task type × difficulty combinations where the first attempt usually fails review, or usually needs escalation → start them higher.

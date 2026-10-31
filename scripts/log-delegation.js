@@ -204,12 +204,18 @@ function onPostSendMessage(input) {
   });
 }
 
-// A real prompt: a string or a text part, not a tool result. The SendMessage
-// resume prompt is one of these even though Claude Code marks it isMeta.
+// A real prompt: a string or a text part, not a tool result.
 const isPrompt = (content) =>
   typeof content === 'string' ? content.trim() !== ''
     : Array.isArray(content) && content.some((c) => c && c.type === 'text' && c.text) &&
       !content.some((c) => c && c.type === 'tool_result');
+
+// Does this user entry start a new turn? A plain prompt does. A SendMessage
+// resume is written by Claude Code as an isMeta entry carrying a TASK card;
+// other isMeta entries (system reminders, coordinator chatter) do not.
+const startsTurn = (e, content) =>
+  e.type === 'user' && isPrompt(content) &&
+  (!e.isMeta || /\bTASK id=/.test(lib.responseText(content)));
 
 const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
@@ -218,7 +224,7 @@ const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArra
 // is the SubagentHandback tool's message when the agent used it, else the last
 // assistant text, both from the latest turn only.
 function readSubagentTranscript(file, upToTurn) {
-  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null, turn: 0 };
+  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null, turn: 0, task: {}, classes: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   const seen = new Set();
   let lastMsgId = null;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -231,13 +237,15 @@ function readSubagentTranscript(file, upToTurn) {
     // SendMessage resume. Report, tokens and wall time cover the latest turn
     // only, so a lagging transcript can't hand back attempt 1's report for
     // attempt 2, and attempt 2's tokens and duration don't include attempt 1's.
-    if (e.type === 'user' && isPrompt(m.content)) {
+    if (startsTurn(e, m.content)) {
       if (upToTurn && out.turn >= upToTurn) break; // reconcile reads one turn at a time
       out.turn++;
+      out.task = lib.parseTaskCard(lib.responseText(m.content));
       out.handback = null;
       out.lastText = '';
       lastMsgId = null;
       out.tokens = 0;
+      out.classes = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
       out.first = e.timestamp ? Date.parse(e.timestamp) : null;
       out.last = null;
     }
@@ -255,6 +263,10 @@ function readSubagentTranscript(file, upToTurn) {
     if (m.id && !seen.has(m.id) && m.usage) {
       seen.add(m.id);
       const u = m.usage;
+      out.classes.input += u.input_tokens || 0;
+      out.classes.output += u.output_tokens || 0;
+      out.classes.cache_read += u.cache_read_input_tokens || 0;
+      out.classes.cache_write += u.cache_creation_input_tokens || 0;
       out.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) +
         (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     }
@@ -333,6 +345,16 @@ function onSubagentStop(input) {
   if (record.review) logReview(input, record, record.review);
 }
 
+// Task card for a completion: the delegation's, with the attempt taken from
+// the turn's own TASK line. With no attempt= on that line (malformed card) the
+// delegation's attempt stays, which may be stale.
+function completionTask(delegation, t) {
+  const turnTask = t.task || {};
+  const task = delegation ? { ...delegation.task } : lib.parseTaskCard(t.prompt);
+  if (turnTask.attempt != null && Number(turnTask.attempt) !== Number(task.attempt)) task.attempt = turnTask.attempt;
+  return task;
+}
+
 // The completions.jsonl line for one finished turn. Shared with
 // scripts/reconcile-logs.js so a backfilled line has the same shape.
 function completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report }) {
@@ -351,13 +373,18 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     effort: routing.effort,
     // The effort Claude Code actually ran the subagent at, when the hook says.
     resolved_effort: (input.effort && input.effort.level) || null,
-    task: delegation ? delegation.task : lib.parseTaskCard(t.prompt),
+    // The attempt comes from the turn being logged (the TASK line that opened
+    // it), not from the latest delegation, so a stale verdict is never stamped
+    // with a newer attempt number.
+    task: completionTask(delegation, t),
     // Latest turn only (a resumed agent's attempt 2 doesn't include attempt 1).
     // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
     // Includes cache reads/writes, so it's larger than Claude Code's own
     // `tokens` total on the delegation line. Compare like with like.
     tokens_with_cache: t.tokens || null,
+    // The same tokens split by class, so cost can be priced.
+    tokens_by_class: t.tokens ? { ...t.classes } : null,
     report_source: reportSource,
     result: lib.lastFencedJson(report, 'result-json'),
     review: lib.lastFencedJson(report, 'review-json'),
