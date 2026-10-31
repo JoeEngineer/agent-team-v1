@@ -9,7 +9,7 @@ How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting
 - A live hook test with `gpt-6-luna`; see [Live test results](#live-test-results).
 
 **Labels**
-- ✅ **Verified** on this machine.
+- ✅ **Verified** in a live run (see [Live test results](#live-test-results)).
 - 📄 **Documented** by OpenAI, not yet tested here.
 - ❌ **Differs from the docs**, found in the live test.
 - ❓ **Unknown**: still needs a test (see [Still open](#still-open)).

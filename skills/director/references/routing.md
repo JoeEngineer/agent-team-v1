@@ -38,7 +38,7 @@ On a reviewer verdict of `changes_requested`:
 
 1. **First failure:** send back to the same tier with the reviewer's findings. Many failures are fixable with feedback alone.
 2. **Second failure, or first failure whose `review-json` top-level `severity` is `major`/`critical`:** raise effort one step (low → medium → high). Use the top-level field, not individual finding labels. If the block is missing or contradicts itself, ask the reviewer for a corrected `review-json` before choosing the step.
-3. **Already at high effort:** raise the tier one step (small → medium → large).
+3. **Already at high effort:** raise the tier one step (small → medium → large), skipping any tier that `models.js show` reports as `auto: false`.
 4. **Large/high still failing, or verdict `reject`:** stop. Send to `architect` to re-examine the spec, and tell the user if the milestone is at risk. The Director may *offer* xlarge, but only if it is enabled in the model map for that tool, with a note on cost (e.g. billed as usage credits) or availability. Use it only after the user's yes for that task.
 
 Each escalation is a new delegation with the same task `id` and `attempt` incremented, and a `why` naming the step taken.

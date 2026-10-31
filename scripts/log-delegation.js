@@ -21,7 +21,7 @@ function tierMap() {
 }
 
 // tier, tier_source and (when the map entry has one) billing for a model.
-// source: 'override' | 'agent-file' | 'inherited' (use the resolved model).
+// source: 'override' | 'agent-file' | 'inherited' (use the resolved model; tier_source is then "resolved").
 // Never throws: any failure gives tier null.
 function tierFields({ model, source, agentTier, resolved }) {
   try {

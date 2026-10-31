@@ -122,8 +122,8 @@ test('garbage stdin exits 0', () => {
 
 const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
 const GUARD_MATCHER = 'Bash|PowerShell';
-const LOGGER_PRE_MATCHER = 'Agent|Task|mcp__ccd_session__start_session|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|.*spawn_agent|send_input|resume_agent|wait_agent|close_agent';
-const LOGGER_POST_MATCHER = 'Agent|Task|SendMessage|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|.*spawn_agent|send_input|resume_agent|wait_agent|close_agent';
+const LOGGER_PRE_MATCHER = 'Agent|Task|mcp__ccd_session__start_session|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|^(?:collaboration)?spawn_agent$|^(?:send_input|resume_agent|wait_agent|close_agent)$';
+const LOGGER_POST_MATCHER = 'Agent|Task|SendMessage|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|^(?:collaboration)?spawn_agent$|^(?:send_input|resume_agent|wait_agent|close_agent)$';
 const GUARD_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/guard.js"';
 const LOGGER_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/log-delegation.js"';
 
@@ -139,7 +139,22 @@ test('hooks.json: matchers pinned exactly and compile', () => {
 test('hooks.json: logger matches Codex tools and Claude-side tools still match', () => {
   const m = (matcher, t) => new RegExp(`^(?:${matcher})$`).test(t);
   for (const matcher of [LOGGER_PRE_MATCHER, LOGGER_POST_MATCHER]) {
-    for (const t of ['collaborationspawn_agent', 'send_input', 'Agent']) assert(m(matcher, t), `logger matches ${t}`);
+    for (const t of ['collaborationspawn_agent', 'spawn_agent', 'send_input', 'resume_agent', 'wait_agent', 'close_agent', 'Agent']) {
+      assert(m(matcher, t), `logger matches ${t}`);
+    }
+    // Anchored Codex alternatives must not match MCP tools whose names contain those strings.
+    // Precondition: the old unanchored Codex alternatives did match these names as substrings,
+    // so the negative assertions below test something real.
+    const OLD_CODEX = /.*spawn_agent|send_input|resume_agent|wait_agent|close_agent/;
+    for (const t of ['mcp__x__send_input', 'mcp__x__spawn_agent', 'mcp__x__collaborationspawn_agent', 'mcp__x__wait_agent']) {
+      assert(OLD_CODEX.test(t), `precondition: old alternatives matched ${t}`);
+      assert(!m(matcher, t), `logger does not match ${t}`);
+    }
+    // Boundary: the anchors reject a name that merely starts or ends with a tool name.
+    for (const t of ['send_input_extra', 'xspawn_agent', 'spawn_agent2']) {
+      assert(OLD_CODEX.test(t), `precondition: old alternatives matched ${t}`);
+      assert(!m(matcher, t), `logger does not match ${t}`);
+    }
   }
   for (const t of ['Bash', 'PowerShell']) assert(m(GUARD_MATCHER, t), `guard matches ${t}`);
   for (const t of ['Agent', 'Task', 'SendMessage', 'Bash', 'PowerShell', 'mcp__ccd_session__start_session',

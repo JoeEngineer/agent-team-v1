@@ -9,7 +9,7 @@ Read `STATUS.md`, the last ~30 lines of `.agent-team/logs/delegations.jsonl` and
 
 1. **Needs me** — decisions or approvals waiting on me.
 2. **Blocked** — what and why.
-3. **In progress** — task, agent, model/effort, attempt.
+3. **In progress** — task, agent, tier (model)/effort, attempt.
 4. **Done since last report** — merged tasks.
 5. **Escalations** — any task that moved up a tier, and why.
 
