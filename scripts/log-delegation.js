@@ -6,10 +6,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 const lib = require('./lib');
 const models = require('./models');
+const { base, startFile, takeDuration, claimOnce, shortHash, logReview, findDelegation: findDelegationBy, logMerges } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -60,35 +59,15 @@ const SESSION_SETTINGS = new Set([
 const isBridge = (t) => /^mcp__(codex-bridge|antigravity-bridge)__/.test(t) && !/check_runway|_check$/.test(t);
 const isShell = (t) => t === 'Bash' || t === 'PowerShell';
 
-function startFile(input) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `${String(input.tool_use_id || 'unknown').replace(/[^\w-]/g, '_')}.json`);
+// The delegation record for this agent, to pick up the routing the Director chose.
+function findDelegation(input, agentId) {
+  if (!agentId) return null;
+  return findDelegationBy(input, (rec) => rec.agent_id === agentId);
 }
 
 function onPre(input) {
   if (!input.tool_use_id) return;
   fs.writeFileSync(startFile(input), JSON.stringify({ started: Date.now() }));
-}
-
-function takeDuration(input) {
-  try {
-    const file = startFile(input);
-    const { started } = JSON.parse(fs.readFileSync(file, 'utf8'));
-    fs.unlinkSync(file);
-    return Date.now() - started;
-  } catch {
-    return undefined;
-  }
-}
-
-function base(input) {
-  return {
-    ts: new Date().toISOString(),
-    tool: 'claude',
-    session_id: input.session_id,
-    guidance_version: lib.guidanceVersion(),
-  };
 }
 
 function resolveRouting(input, ti) {
@@ -105,39 +84,6 @@ function resolveRouting(input, ti) {
     model: model.value, model_source: model.source,
     effort: effort.value, effort_source: effort.source,
   };
-}
-
-// Create a marker file once; false if it already exists. Used to log an event
-// once when several hooks see it.
-function claimOnce(input, key) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(path.join(dir, String(key).replace(/[^\w-]/g, '_')), '', { flag: 'wx' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
-
-// A review can be seen twice (PostToolUse for a foreground subagent, then
-// SubagentStop). Log it once per agent id and verdict content, so a re-review
-// by the same (resumed) reviewer is still logged.
-function logReview(input, record, review) {
-  if (record.agent_id && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return;
-  lib.appendJsonl(input, 'reviews.jsonl', {
-    ...base(input),
-    agent_id: record.agent_id || null,
-    task_id: record.task.reviewed_task || record.task.id,
-    pr: record.task.pr,
-    attempt: record.task.attempt,
-    reviewer_model: record.resolved_model || record.model,
-    reviewer_effort: record.effort,
-    reviewer_tier: record.tier === undefined ? null : record.tier,
-    ...review,
-  });
 }
 
 function onPostSubagent(input) {
@@ -228,53 +174,6 @@ function onPostBridge(input) {
     duration_ms: takeDuration(input),
     result: lib.lastFencedJson(text, 'result-json'),
   });
-}
-
-// Ask GitHub what happened to the PR instead of guessing from command output:
-// the Director often chains a merge with other commands whose output mentions
-// "error" or "failed". Returns null if gh can't answer.
-function prState(input, { target, repo }) {
-  const args = ['pr', 'view'];
-  if (target) args.push(target);
-  if (repo) args.push('--repo', repo);
-  args.push('--json', 'number,state,autoMergeRequest');
-  // Tests point AGENT_TEAM_FAKE_GH at a Node script: on Windows, execFileSync
-  // only finds gh.exe on PATH, so a fake `gh` script there would be skipped.
-  const fake = process.env.AGENT_TEAM_FAKE_GH;
-  const [bin, binArgs] = fake ? [process.execPath, [fake, ...args]] : ['gh', args];
-  try {
-    const out = execFileSync(bin, binArgs, {
-      cwd: input.cwd || lib.projectDir(input),
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 7000,
-    });
-    return JSON.parse(out);
-  } catch {
-    return null;
-  }
-}
-
-function mergeOutcome(state) {
-  if (!state) return 'unknown';
-  if (state.state === 'MERGED') return 'merged';
-  if (state.state === 'OPEN' && state.autoMergeRequest) return 'auto-merge-queued';
-  return 'not-merged';
-}
-
-function onPostShell(input) {
-  const cmd = (input.tool_input && input.tool_input.command) || '';
-  if (!/\bgh\s+pr\s+merge\b/.test(cmd)) return;
-  // Only real `gh pr merge` segments count, not the words inside a quoted string.
-  for (const m of lib.findPrMerges(cmd)) {
-    const state = prState(input, m);
-    lib.appendJsonl(input, 'merges.jsonl', {
-      ...base(input),
-      command: cmd.slice(0, 300),
-      pr: state && state.number != null ? String(state.number) : m.target,
-      outcome: mergeOutcome(state),
-      outcome_source: state ? 'gh pr view' : 'none',
-      chained: lib.segments(cmd).length > 1,
-    });
-  }
 }
 
 // SendMessage to an existing agent with a task card is a new attempt of that
@@ -370,19 +269,6 @@ function readMeta(transcriptPath) {
   }
 }
 
-// The delegation record for this agent, to pick up the routing the Director chose.
-function findDelegation(input, agentId) {
-  if (!agentId) return null;
-  try {
-    const lines = fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').trim().split(/\r?\n/);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const rec = JSON.parse(lines[i]);
-      if (rec.agent_id === agentId) return rec;
-    }
-  } catch { /* none yet */ }
-  return null;
-}
-
 // SubagentStop: fires when any subagent finishes (foreground or background).
 // Writes one completions.jsonl line with the result, linked by agent_id.
 function onSubagentStop(input) {
@@ -448,7 +334,7 @@ function main() {
   if (tool === SESSION_START) return onPostSession(input);
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
   if (isBridge(tool)) return onPostBridge(input);
-  if (isShell(tool)) return onPostShell(input);
+  if (isShell(tool)) return logMerges(input, 'claude');
   if (tool === 'SendMessage') return onPostSendMessage(input);
 }
 
