@@ -272,17 +272,18 @@ function readSubagentTranscript(file) {
     let e;
     try { e = JSON.parse(line); } catch { continue; }
     const m = e.message || {};
-    if (e.type === 'user' && !out.prompt) {
-      out.prompt = lib.responseText(m.content);
-      if (e.timestamp) out.first = Date.parse(e.timestamp);
-    }
+    if (e.type === 'user' && !out.prompt) out.prompt = lib.responseText(m.content);
     // A new prompt (not a tool result) starts a new turn, e.g. a SendMessage
-    // resume. Forget the previous turn's report, so a lagging transcript can't
-    // hand back attempt 1's report for attempt 2.
+    // resume. Report, tokens and wall time cover the latest turn only, so a
+    // lagging transcript can't hand back attempt 1's report for attempt 2, and
+    // attempt 2's tokens and duration don't include attempt 1's.
     if (e.type === 'user' && !e.isMeta && !isToolResults(m.content)) {
       out.handback = null;
       out.lastText = '';
       lastMsgId = null;
+      out.tokens = 0;
+      out.first = e.timestamp ? Date.parse(e.timestamp) : null;
+      out.last = null;
     }
     if (e.type !== 'assistant') continue;
     if (e.timestamp) out.last = Date.parse(e.timestamp);
@@ -370,6 +371,7 @@ function onSubagentStop(input) {
     // The effort Claude Code actually ran the subagent at, when the hook says.
     resolved_effort: (input.effort && input.effort.level) || null,
     task: delegation ? delegation.task : lib.parseTaskCard(t.prompt),
+    // Latest turn only (a resumed agent's attempt 2 doesn't include attempt 1).
     // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
     // Includes cache reads/writes, so it's larger than Claude Code's own

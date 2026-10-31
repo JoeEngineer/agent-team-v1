@@ -329,6 +329,39 @@ test('SubagentStop: a resume after a handback reports attempt 2, never attempt 1
   eq(cs[2].result.summary, 'attempt 2', 'attempt 2 result');
 });
 
+test('SubagentStop: a resumed attempt counts only its own tokens and wall time', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const card = 'TASK id=R-2 type=implement difficulty=easy milestone=r attempt=1';
+  const tPath = writeSubagentTranscript(tdir, 'r2', card, 'a1\n```result-json\n{"status":"done"}\n```');
+  const stop = { hook_event_name: 'SubagentStop', agent_id: 'r2', agent_type: 'agent-team:implementer', agent_transcript_path: tPath };
+  run('log-delegation.js', stop, proj);
+  const add = (l) => fs.appendFileSync(tPath, JSON.stringify(l) + '\n');
+  const usage = { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  // Resume ten minutes later: the idle gap and attempt 1's tokens must not count.
+  add({ type: 'user', timestamp: '2026-10-30T18:43:41.000Z', message: { role: 'user', content: 'TASK id=R-2 type=implement difficulty=easy milestone=r attempt=2' } });
+  add({ type: 'assistant', timestamp: '2026-10-30T18:43:44.000Z', message: { id: 'msg_9', model: 'claude-haiku-5-5', usage, content: [{ type: 'text', text: 'a2\n```result-json\n{"status":"done"}\n```' }] } });
+  run('log-delegation.js', stop, proj);
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'both attempts logged');
+  eq(cs[0].tokens_with_cache, 3204, 'attempt 1 tokens');
+  eq(cs[0].duration_ms, 6000, 'attempt 1 wall time');
+  eq(cs[1].tokens_with_cache, 30, 'attempt 2 tokens only');
+  eq(cs[1].duration_ms, 3000, 'attempt 2 wall time only, no idle gap');
+});
+
+test('SubagentStop: a resume not yet in the transcript has no duration, not a negative one', () => {
+  const proj = tmpProject();
+  const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
+  const tPath = writeSubagentTranscript(tdir, 'r3', 'TASK id=R-3 type=implement difficulty=easy milestone=r attempt=1', 'a1');
+  fs.appendFileSync(tPath, JSON.stringify({ type: 'user', timestamp: '2026-10-30T18:50:00.000Z', message: { role: 'user', content: 'TASK id=R-3 type=implement difficulty=easy milestone=r attempt=2' } }) + '\n');
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'r3', agent_transcript_path: tPath, last_assistant_message: 'Blocked: need the CI log.' }, proj);
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.duration_ms, null, 'no duration yet');
+  eq(c.tokens_with_cache, null, 'no tokens yet');
+  eq(c.report_source, 'hook-input', 'report from hook input');
+});
+
 test('SubagentStop: duplicate stop logged once; a resumed agent finishing again is logged', () => {
   const proj = tmpProject();
   const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
