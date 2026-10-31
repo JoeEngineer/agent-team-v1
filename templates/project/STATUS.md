@@ -9,9 +9,9 @@ Branch: `milestone/<slug>` · Issue: #<n> · Started: <date>
 
 ## Tasks
 
-| ID | Title | Agent | Model / effort | Attempt | State | PR |
+| ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
-| <SLUG>-1 | ... | implementer | sonnet / medium | 1 | in progress | |
+| <SLUG>-1 | ... | implementer | medium (sonnet) / medium | 1 | in progress | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 

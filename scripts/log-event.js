@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 // Manually append an event to the team logs.
 //   node log-event.js <kind> '<json>'
-// kind: decision | escalation | merge | note | milestone
+// kind: decision | escalation | merge | note | milestone | tier_fallback
+//   tier_fallback e.g. '{"task":"X-1","from":"large","to":"medium","tool":"claude","reason":"model unavailable"}'
 // Writes to <project>/.agent-team/logs/<kind>s.jsonl, adding ts and guidance_version.
 'use strict';
 
 const lib = require('./lib');
 
-const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone']);
+const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback']);
 const [kind, json] = process.argv.slice(2);
 
 if (!KINDS.has(kind)) {

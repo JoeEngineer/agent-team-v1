@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "agent-team",
+  "version": "0.3.0",
+  "description": "Director pattern for Claude Code and Codex: a Director delegates work to role agents with explicit model/effort routing, logs every delegation and decision, and gates merges behind a reviewer.",
+  "author": {
+    "name": "Joe Bruce"
+  },
+  "homepage": "https://github.com/JoeEngineer/agent-team-v1",
+  "repository": "https://github.com/JoeEngineer/agent-team-v1",
+  "license": "MIT",
+  "keywords": ["director", "delegation", "multi-agent", "routing", "codex"]
+}

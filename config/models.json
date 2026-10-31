@@ -1,0 +1,11 @@
+{
+  "_comment": "Tier to model map. Entries are a model string or {model, billing, enabled}; enabled may also sit on a tier. To override, copy this file to ~/.agent-team/models.json (or point AGENT_TEAM_MODELS at a file); an override replaces this whole map.",
+  "small": { "claude": "haiku", "codex": "gpt-6-luna" },
+  "medium": { "claude": "sonnet", "codex": "gpt-6.1-terra" },
+  "large": { "claude": "opus", "codex": "gpt-6.1-sol" },
+  "xlarge": {
+    "enabled": false,
+    "claude": { "model": "fable", "billing": "credits" },
+    "codex": { "model": "gpt-6-astra" }
+  }
+}
