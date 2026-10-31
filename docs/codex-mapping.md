@@ -164,7 +164,7 @@ The earlier plan was a harness-neutral `core/` plus two generated adapters. With
 
 ## Live test results
 
-**Run:** 2026-10-31, Codex CLI 0.166.0, Windows 11, in the throwaway repo `C:\Users\JoeBr\.cxt-b`. That repo has:
+**Run:** 2026-10-31, Codex CLI 0.166.0, Windows 11, in a throwaway git repo (called `<test-repo>` below). That repo has:
 - project hooks for every event, writing their input to `.dump/`,
 - this repo's `guard.js` on `Bash`,
 - a `scout` agent in `.codex/agents/scout.toml` (`gpt-6-luna`, `low`).
@@ -191,10 +191,12 @@ Each run was `codex exec -m gpt-6-luna -c model_reasoning_effort="low" --sandbox
 - [ ] **How are plugin skills named when invoked** (`$director`, `agent-team:director`, …)?
 - [ ] **Codex Desktop** shares `~/.codex` with the CLI (same `config.toml`), but its subagent and hook behaviour wasn't tested separately.
 
-**Cleaning up after the test:**
-- Delete `C:\Users\JoeBr\.cxt-b`.
-- Remove its entries from `~/.codex/config.toml`: `[projects.'c:\users\joebr\.cxt-b']` and the seven `[hooks.state.'C:\Users\JoeBr\.cxt-b\…']` tables.
-- The two test sessions are in `~/.codex/sessions/2026/10/31/` if you want to delete those too.
+**Cleaning up after a test like this:** trusting a project and its hooks leaves entries in your Codex config. To remove them:
+- Delete `<test-repo>`.
+- Remove its entries from `~/.codex/config.toml`: the `[projects.'<test-repo>']` table and the `[hooks.state.'<test-repo>\.codex\hooks.json:…']` tables (one per trusted hook).
+- Optionally delete the test sessions from `~/.codex/sessions/<year>/<month>/<day>/`.
+
+Keep `<test-repo>` on a short path on Windows: git fails to clone or check out under very long paths (`'$GIT_DIR' too big`).
 
 ## Sources
 
