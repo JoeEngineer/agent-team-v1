@@ -1,5 +1,6 @@
 ---
-description: Director status report — done, in progress, blocked, needs you.
+name: status
+description: Director status report — done, in progress, blocked, needs you. Use when the user asks for team status, progress, or what is blocked or waiting on them.
 ---
 
 As Director (load the `agent-team:director` skill if it isn't loaded), give me a status report. Don't delegate this.

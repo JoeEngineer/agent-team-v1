@@ -1,8 +1,9 @@
 ---
-description: Set up the current project for the agent team (STATUS.md, decisions folder, logs folder, CLAUDE.md section).
+name: team-init
+description: Set up the current project for the agent team (STATUS.md, decisions folder, logs folder, CLAUDE.md section). Use when the user wants to initialize or set up a project for the agent team.
 ---
 
-Set up this project for the `agent-team` plugin. Templates are in `${CLAUDE_PLUGIN_ROOT}/templates/project/`.
+Set up this project for the `agent-team` plugin. Templates are in `${CLAUDE_PLUGIN_ROOT}/templates/project/` (the plugin root is two folders up from this skill's folder).
 
 1. Confirm the current folder is a git repo with a GitHub remote (`git remote -v`). If not, stop and tell me.
 2. Copy, without overwriting anything that already exists:
