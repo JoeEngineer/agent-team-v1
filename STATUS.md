@@ -32,7 +32,7 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-18 | README + 0.4.0 | implementer | small (haiku) / low | | planned | #44 | |
 | CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | | planned | #45 | |
 | CD-20 | Milestone final review | reviewer | large (opus) / high | | planned | #46 | |
-| CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | in review | #57 | #61 |
+| CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -66,6 +66,7 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - CD-7: the Coach must dedupe delegations by `task_name` + `task.attempt`, preferring `source: "director"` (CD-15).
 - Batched into CD-17 (docs): 0006 should note that plugin-hook logging is skipped while project hooks are untrusted; `references/codex.md` "shell tool is named `Bash`" wording.
 - CD-11 review: `codex-hooks.js` merge collapses interleaved agent-team groups (edge case; generated files never interleave).
+- CD-21 review: a SendMessage resume without a TASK line merges into the previous turn (cumulative tokens, stale handback); untested. `agents/coach.md` says "0.3.1"; CD-18 rewords it for 0.4.0.
 
 ## Blocked
 
@@ -74,3 +75,4 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 ## Needs the user
 
 - Delete the leftover CD-1 test folder (temporary Codex home with a copy of the Codex credentials, throwaway repo); the agent's delete was blocked by a permission check.
+- Close PR #52: folded into the milestone by CD-21 (#61), whose PR body has the kept/dropped table. The Director's close was blocked by a permission check.
