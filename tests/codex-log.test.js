@@ -476,3 +476,130 @@ test('log-event: existing kinds unchanged and bad input rejected', () => {
   const bad = spawnSync('node', [path.join(SCRIPTS, 'log-event.js'), 'note', '{nope'], { cwd: p, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: p } });
   eq(bad.status, 1, 'bad JSON');
 });
+
+// log-event.js input forms: argv (above), stdin ("-") and --file.
+
+function logEventWith(project, args, input) {
+  return spawnSync('node', [path.join(SCRIPTS, 'log-event.js'), ...args], {
+    cwd: project, encoding: 'utf8', input,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: project, CLAUDE_PLUGIN_ROOT: ROOT, AGENT_TEAM_MODELS: NO_MODELS_FILE },
+  });
+}
+
+test('log-event stdin: delegation JSON on stdin is parsed like the argv form', () => {
+  const p = tmpProject();
+  const r = logEventWith(p, ['delegation', '-'], JSON.stringify({ card: 'TASK id=X-1 type=implement attempt=1 tier=small\nWHY stdin', task_name: 'x_1_a1', agent: 'implementer-small', tool: 'codex' }));
+  eq(r.status, 0, r.stderr);
+  eq(r.stdout.trim(), 'logged delegation to .agent-team/logs/delegations.jsonl', 'message');
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 1, 'one line');
+  eq(d[0].tool, 'codex', 'tool');
+  eq(d[0].source, 'director', 'source');
+  eq(d[0].task.id, 'X-1', 'task id');
+  eq(d[0].task.why, 'stdin', 'why');
+  eq(d[0].task_name, 'x_1_a1', 'task_name');
+});
+
+test('log-event stdin: a card with newlines, quotes and backslashes survives with no shell escaping', () => {
+  const p = tmpProject();
+  const card = 'TASK id=X-2 type=implement attempt=1 tier=medium\nWHY say "hello" and keep C:\\path\nSCOPE "quoted" $HOME `tick`';
+  // Raw text on stdin, as a quoted heredoc delivers it; the card's newline is the JSON escape \n.
+  const input = `{"tool":"codex","task_name":"x_2_a1","card":${JSON.stringify(card)}}\n`;
+  const r = logEventWith(p, ['delegation', '-'], input);
+  eq(r.status, 0, r.stderr);
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 1, 'one line');
+  eq(d[0].task.id, 'X-2', 'task id from card');
+  eq(d[0].task.why, 'say "hello" and keep C:\\path', 'why keeps quotes and backslashes');
+  assert(d[0].card === undefined, 'raw card not stored');
+});
+
+test('log-event stdin: empty and whitespace-only stdin are invalid JSON and write nothing', () => {
+  for (const input of ['', '   \n']) {
+    const p = tmpProject();
+    eq(readLog(p, 'notes.jsonl').length, 0, 'precondition: no log');
+    const r = logEventWith(p, ['note', '-'], input);
+    eq(r.status, 1, 'exit 1');
+    assert(/^invalid JSON: /.test(r.stderr), `error message: ${r.stderr}`);
+    eq(readLog(p, 'notes.jsonl').length, 0, 'nothing written');
+    // one step past: valid input on the same project logs exactly one line
+    eq(logEventWith(p, ['note', '-'], '{"text":"after"}').status, 0, 'next valid input ok');
+    eq(readLog(p, 'notes.jsonl').length, 1, 'one line after the valid call');
+  }
+});
+
+test('log-event stdin: invalid JSON gives the same error and exit code as argv', () => {
+  const p = tmpProject();
+  const fromArgv = spawnSync('node', [path.join(SCRIPTS, 'log-event.js'), 'note', '{nope'], { cwd: p, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: p } });
+  const fromStdin = logEventWith(p, ['note', '-'], '{nope');
+  eq(fromStdin.status, fromArgv.status, 'exit code');
+  eq(fromStdin.stderr, fromArgv.stderr, 'error message');
+  assert(fromStdin.stderr.startsWith('invalid JSON: '), 'message prefix');
+  eq(readLog(p, 'notes.jsonl').length, 0, 'nothing written');
+});
+
+test('log-event stdin: a non-object (array, string, null) is rejected, nothing written', () => {
+  for (const input of ['[1,2]', '"text"', 'null']) {
+    const p = tmpProject();
+    const r = logEventWith(p, ['note', '-'], input);
+    eq(r.status, 1, `exit for ${input}`);
+    eq(r.stderr.trim(), 'invalid JSON: expected an object', `message for ${input}`);
+    eq(readLog(p, 'notes.jsonl').length, 0, 'nothing written');
+  }
+});
+
+test('log-event file: --file reads the JSON from a file, with newlines and quotes', () => {
+  const p = tmpProject();
+  const card = 'TASK id=X-3 type=review reviewed_task=X-2 pr=7 attempt=1\nWHY "file" form';
+  const file = path.join(p, 'event.json');
+  fs.writeFileSync(file, JSON.stringify({ card, verdict: 'approve', agent_id: 'r3', tool: 'codex', model: 'gpt-6.1-sol' }));
+  const r = logEventWith(p, ['review', '--file', file]);
+  eq(r.status, 0, r.stderr);
+  const v = readLog(p, 'reviews.jsonl');
+  eq(v.length, 1, 'one review');
+  eq(v[0].task_id, 'X-2', 'reviewed task from the card');
+  eq(v[0].pr, '7', 'pr');
+  eq(v[0].verdict, 'approve', 'verdict');
+  eq(v[0].tool, 'codex', 'tool');
+});
+
+test('log-event file: missing path, missing file, empty and invalid files fail with nothing written', () => {
+  const p = tmpProject();
+  const noPath = logEventWith(p, ['note', '--file']);
+  eq(noPath.status, 1, '--file without a path: exit 1');
+  assert(noPath.stderr.includes('usage: log-event.js'), 'usage printed');
+  const missing = path.join(p, 'nope.json');
+  const noFile = logEventWith(p, ['note', '--file', missing]);
+  eq(noFile.status, 1, 'missing file: exit 1');
+  assert(noFile.stderr.startsWith(`cannot read ${missing}`), `message: ${noFile.stderr}`);
+  const empty = path.join(p, 'empty.json');
+  fs.writeFileSync(empty, '');
+  eq(logEventWith(p, ['note', '--file', empty]).status, 1, 'empty file: exit 1');
+  const bad = path.join(p, 'bad.json');
+  fs.writeFileSync(bad, '{nope');
+  const badRun = logEventWith(p, ['note', '--file', bad]);
+  eq(badRun.status, 1, 'bad JSON file: exit 1');
+  assert(badRun.stderr.startsWith('invalid JSON: '), 'same error prefix');
+  eq(readLog(p, 'notes.jsonl').length, 0, 'nothing written by any failure');
+  // one step past: a good file on the same project logs one line
+  const good = path.join(p, 'good.json');
+  fs.writeFileSync(good, '{"text":"ok"}');
+  eq(logEventWith(p, ['note', '--file', good]).status, 0, 'good file ok');
+  eq(readLog(p, 'notes.jsonl').length, 1, 'one line');
+});
+
+test('log-event argv: the <kind> <json> form still works, and an empty argument means no JSON', () => {
+  const p = tmpProject();
+  eq(logEventWith(p, ['note', '{"text":"argv"}']).status, 0, 'argv ok');
+  eq(readLog(p, 'notes.jsonl')[0].text, 'argv', 'argv body');
+  // an empty argument is {} (unchanged behaviour), not an error
+  eq(logEventWith(p, ['milestone', '']).status, 0, 'empty argv is {}');
+  eq(readLog(p, 'milestones.jsonl').length, 1, 'milestone with no body');
+});
+
+test('log-event: unknown kind prints all three forms and exits 1', () => {
+  const p = tmpProject();
+  const r = logEventWith(p, ['bogus', '-'], '{}');
+  eq(r.status, 1, 'exit 1');
+  for (const form of ["'<json>'", '-', '--file <path>']) assert(r.stderr.includes(form), `usage lists ${form}`);
+});
