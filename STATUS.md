@@ -1,58 +1,89 @@
-# Status
+||||| 1 | in progress ||||| 1 | in progress ||||| 1 | in progress |||| medium (sonnet) / high | 2 | changes requested || #50 |||||| merged || #47 |||||| merged || #51 |||||| merged || #49 |||||| merged || #48 # Status
 
 _Maintained by the Director. Last updated: 2026-10-31_
 
 ## Current milestone
 
-**shared-structure** — one plugin folder that serves both Claude Code and Codex, with no behaviour change for Claude users (milestone A of `docs/codex-mapping.md`).
-Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
+**codex-director**: Codex works fully as Director (milestone B of `docs/codex-mapping.md`).
+Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 
 ## Tasks
 
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | Issue | PR |
 |---|---|---|---|---|---|---|---|
-| SS-0 | Breakdown | architect | large (opus) / high | 1 | done | #6 | |
-| SS-1 | Split test harness into per-area files | implementer | small (haiku) / medium | 1 | merged | #7 | #17 |
-| SS-2 | Root `plugin.json` + manifest sync test | implementer | small (haiku) / medium | 1 | merged | #8 | #21 |
-| SS-3 | Model map + `scripts/models.js` resolver | implementer | medium (sonnet) / medium | 2 | merged | #9 | #19 |
-| SS-4 | Tool detection, Codex stub, hook matchers | implementer | medium (sonnet) / medium | 2 | merged | #10 | #18 |
-| SS-5 | Commands → skills | implementer | medium (sonnet) / medium | 2 | merged | #11 | #20 |
-| SS-6 | Tier + resolved model in logs; `tier_fallback` | implementer | medium (sonnet) / medium | 2 | merged | #12 | #22 |
-| SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | 1 | merged | #13 | #23 |
-| SS-8 | README + 0.3.0 | implementer | small (haiku) / low | 2 | merged | #14 | #24 |
-| SS-9 | Live verification (Claude + Codex) | implementer | medium (sonnet) / low | 1 | done (9 pass, 1 open) | #15 | |
-| SS-10 | Milestone final review | reviewer | large (opus) / high | 1 | approved; findings fixed in SS-11 or deferred | #16 | |
-| SS-11 | Final-review cleanups | implementer | small (haiku) / medium | 1 | merged | #25 | #26 |
+| CD-0 | Breakdown | architect | large (opus) / high | 1 | done | #28 | |
+| CD-1 | Live spike: plugin hooks, matchers, skill names | implementer | medium (sonnet) / low | 1 | done | #28 | |
+| CD-2 | Review-logging diagnosis | scout | medium (sonnet) / medium | 1 | done | #28 | |
+| CD-3 | `models.js up/down` + routing.md | implementer | small (haiku) / medium | 1 | merged | #29 | #48 |
+| CD-4 | Extract record helpers to `records.js` | implementer | medium (sonnet) / medium | 1 | merged | #30 | #49 |
+| CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | 1 | merged | #31 | #54 |
+| CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | 1 | merged | #32 | #56 |
+| CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | 1 | merged | #33 | #55 |
+| CD-8 | Codex agent TOML generator | implementer | medium (sonnet) / medium | 1 | merged | #34 | #51 |
+| CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | merged | #35 | #47 |
+| CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | merged | #36 | #53 |
+| CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | 1 | merged | #37 | #60 |
+| CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | 1 | merged | #38 | #62 |
+| CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | merged | #39 | #50 |
+| CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / high | 3 | merged | #40 | #59 |
+| CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | 1 | merged | #41 | #58 |
+| CD-16 | Codex live test harness | implementer | medium (sonnet) / medium | 2 | merged | #42 | #64 |
+| CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 2 | merged | #43 | #66 |
+| CD-18 | README + 0.4.0 | implementer | small (haiku) / low | 1 | merged | #44 | #63 |
+| CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | 1 | done (8/8 pass) | #45 | |
+| CD-20 | Milestone final review | reviewer | large (opus) / high | 3 | approved | #46 | #69 |
+| CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
+| CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 2 | merged | #65 | #67 |
+| CD-23 | Final-review cleanups | implementer | medium (sonnet) / medium | 2 | merged | #68 | #69 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
-Dependencies: SS-1 → SS-2…SS-5 (parallel) → SS-6 (needs SS-3, SS-4), SS-7 (needs SS-3) → SS-8 → SS-9 → SS-10.
+Waves: W1 CD-3, 4, 8, 9, 13 → W2 CD-5, 7, 10 → W3 CD-6, 11, 15 → W4 CD-12, 14 → W5 CD-16 → W6 CD-17, 18 → CD-19 → CD-20.
 
-## Capacity
+Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as background worktree subagents at the same tier (session unavailable; subagent fallback).
 
-The Director checks remaining plan capacity before each wave and pauses below a threshold the user sets, resuming when the usage window renews. This milestone paused once and resumed after the renewal.
+## Decisions at intake
+
+- Codex records share the Claude log files with `tool: "codex"`; `codex-events.jsonl` stays a raw debug log (record 0004, amends 0003).
+- `SubagentStart` is not registered: SubagentStop plus the transcript cover it, and each new hook costs Codex users a trust step (record 0007).
+- Live tests copy Codex credentials into a temporary Codex home and delete them at cleanup.
+- The optional backfill script (CD-6) is in scope.
+- Final review: logs stay gitignored and are archived at close, the default for team-init projects too (record 0008). The Coach report from PR #52 is published as is.
+
+## Live findings (CD-1, Codex CLI 0.166)
+
+- The CLI does not run plugin hooks, so `team-init` writes project `.codex/hooks.json` (CD-11).
+- Matchers are anchored: only `^(?:collaboration)?spawn_agent$` catches `collaborationspawn_agent`. The follow-up tool is `collaborationfollowup_task`; `send_input`/`resume_agent` don't exist.
+- Skills are invoked as `$agent-team:<skill>`.
+- `task_name` allows only `[a-z0-9_]`, so the link key is e.g. `cd_7_a1`.
+- Per-spawn `reasoning_effort` applies when the agent file pins only `model`.
+- SessionStart `additionalContext` reaches the model.
+- In the unelevated `workspace-write` sandbox `.git` is read-only (no worktree or commit), confirmed again by the CD-16 harness; the Director runs those git commands outside the sandbox with approval. The elevated sandbox is untested.
+- CD-16 harness: 16 of 17 rows pass (install, agent files, project hooks, trust recipe, stable trust hash, Director-first delegation lines, completions with model/effort/tokens, review verdict, guard blocks push, hooks-active line). The failing row is the sandbox `.git` limitation above.
+
+## Follow-ups
+
+- CD-3 review: the xlarge `auto: false` test also has `billing: credits`, so it doesn't isolate the tier rule (minor).
+- CD-8 review: `.codex/agents/` is not gitignored yet; CD-12 adds it with team-init.
+- Reviewer verdicts for CD-3, CD-4, CD-8 and CD-9 were not captured by the logger (the bug CD-5 fixes); the Director logged notes, and CD-6's backfill should recover them.
+- CD-10 review: note in 0007 that SessionStart also fires on resume/clear/compact (batched into CD-17).
+- CD-7: the Coach must dedupe delegations by `task_name` + `task.attempt`, preferring `source: "director"` (CD-15).
+- Batched into CD-17 (docs): 0006 should note that plugin-hook logging is skipped while project hooks are untrusted; `references/codex.md` "shell tool is named `Bash`" wording.
+- CD-11 review: `codex-hooks.js` merge collapses interleaved agent-team groups (edge case; generated files never interleave).
+- CD-21 review: a SendMessage resume without a TASK line merges into the previous turn (cumulative tokens, stale handback); untested. `agents/coach.md` says "0.3.1"; CD-18 rewords it for 0.4.0.
+- CD-19: the Codex live harness failed once on its first run (the small model skipped the spawns) and passed on the rerun; consider making its prompt more robust.
+
+## Logs
+
+The Director ran `reconcile-logs.js` (backfilled 63 completions the earlier logger missed) and archived the logs at close with `archive-logs.js codex-director` (live logs left in place).
 
 ## Blocked
 
 - (none)
 
-## Follow-ups
-
-- SS-7 review: routing.md could mention `models.js resolve <tier> --tool <t>` for getting the model to pass — fold into SS-8.
-- SS-6 decision: an agent with `model: inherit` gets its tier from the model that actually ran, not its `tier:` key.
-- SS-4: `SubagentStart` hook entry not added. SS-9 found Claude Code 2.1.314 accepts it in a plugin hooks.json (firing not tested) — candidate for milestone B.
-- SS-10: `models.js` has tested `ladderUp`/`fallbackDown`/`autoTier` that nothing calls; add CLI commands (e.g. `up`/`down <tier>`) and point routing.md at them — milestone B.
-- Open: whether the Codex CLI runs *plugin* hooks (SS-9 could not check without a model run) — milestone B live tests.
-
 ## Needs the user
 
-- Merge the `milestone/shared-structure` → `main` PR (open; Director stops here).
-- Optional cleanup: the isolated Codex home and temp folder SS-9 left behind (see SS-9 report).
-
-## Recent decisions
-
-User decisions at intake (2026-10-31); records are written by the tasks that implement them:
-- Delete `commands/`; skills alone provide `/agent-team:<name>` (SS-5, `docs/decisions/0002`).
-- Model map is JSON at `config/models.json`, overridden as a whole file by `AGENT_TEAM_MODELS` or `~/.agent-team/models.json` (SS-3, `docs/decisions/0001`).
-- Add Codex spawn matchers to `hooks/hooks.json` now (SS-4, `docs/decisions/0003`).
-- Commit `STATUS.md` and `docs/decisions/` to this repo; no agent-team section in `CLAUDE.md`; `.agent-team/` stays gitignored.
+- Merge the milestone PR `milestone/codex-director` → `main` (open; the Director stops here), then publish the v0.4.0 release.
+- Delete the leftover CD-1 test folder (temporary Codex home with a copy of the Codex credentials, throwaway repo); the agent's delete was blocked by a permission check.
+- Close PR #52: folded into the milestone by CD-21 (#61), whose PR body has the kept/dropped table. The Director's close was blocked by a permission check.
+- Optional cleanup: the scratch folder the live verification left on a short path (scratch project, bare remote, test archive).

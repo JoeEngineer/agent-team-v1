@@ -181,6 +181,58 @@ test('CLI --tool without a value exits 1 for show and resolve', () => {
   }
 });
 
+test('CLI up/down walk the ladder for claude and codex', () => {
+  const m = (args, f) => { const r = cli(args, f); return r.status === 0 ? JSON.parse(r.stdout).model : r; };
+  eq(m(['up', 'small']), 'sonnet');
+  eq(m(['up', 'medium']), 'opus');
+  eq(m(['up', 'small', '--tool', 'codex']), 'gpt-6.1-terra');
+  eq(m(['up', 'medium', '--tool', 'codex']), 'gpt-6.1-sol');
+  eq(m(['down', 'large']), 'sonnet');
+  eq(m(['down', 'medium']), 'haiku');
+  eq(m(['down', 'large', '--tool', 'codex']), 'gpt-6.1-terra');
+  eq(m(['down', 'medium', '--tool', 'codex']), 'gpt-6-luna');
+});
+
+test('CLI up/down exit 1 when nothing is eligible; xlarge, disabled, credits skipped', () => {
+  let r = cli(['up', 'large']);
+  eq(r.status, 1);
+  eq(r.stdout, '');
+  eq(r.stderr.trim(), 'no auto-eligible tier above large for claude; ask the user');
+  r = cli(['down', 'small', '--tool', 'codex']);
+  eq(r.status, 1);
+  eq(r.stderr.trim(), 'no auto-eligible tier below small for codex; ask the user');
+  // xlarge enabled but auto:false (tier is never auto) -> none above large
+  const d = tmp();
+  const f = path.join(d, 'm.json');
+  const map = JSON.parse(JSON.stringify(DEF));
+  map.xlarge.enabled = true;
+  fs.writeFileSync(f, JSON.stringify(map));
+  eq(cli(['up', 'large'], f).status, 1);
+  // disabled medium and credits-billed medium are skipped
+  map.medium.claude = { model: 'sonnet', enabled: false };
+  map.medium.codex = { model: 'gpt-6.1-terra', billing: 'credits' };
+  fs.writeFileSync(f, JSON.stringify(map));
+  eq(JSON.parse(cli(['up', 'small'], f).stdout).model, 'opus');
+  eq(JSON.parse(cli(['up', 'small', '--tool', 'codex'], f).stdout).model, 'gpt-6.1-sol');
+  eq(JSON.parse(cli(['down', 'large'], f).stdout).model, 'haiku');
+  eq(JSON.parse(cli(['down', 'large', '--tool', 'codex'], f).stdout).model, 'gpt-6-luna');
+});
+
+test('CLI up/down: unknown tier, missing tool, --tool without value', () => {
+  for (const c of ['up', 'down']) {
+    let r = cli([c, 'huge']);
+    eq(r.status, 1);
+    assert(r.stderr.includes('unknown tier'), c + ' unknown tier');
+    r = cli([c, 'medium', '--tool', 'gemini']);
+    eq(r.status, 1);
+    assert(r.stderr.includes('gemini'), c + ' missing tool');
+    r = cli([c, 'medium', '--tool']);
+    eq(r.status, 1);
+    assert(r.stderr.includes('--tool requires a value'), c + ' --tool no value');
+  }
+  assert(cli(['bogus']).stderr.includes('up <tier>') , 'usage lists up/down');
+});
+
 test('corrupt shipped default: empty map plus error, no throw', () => {
   const bad = path.join(tmp(), 'default.json');
   fs.writeFileSync(bad, '{oops');

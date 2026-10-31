@@ -8,7 +8,7 @@ This project uses the `agent-team` plugin. When I ask you to act as Director, ru
 - As Director, delegate tasks inside the current milestone to subagents and separate sessions without asking first.
 - Choose the tier and effort level for each delegation per the routing table in the skill.
 - Merge PRs into `milestone/*` branches after a `reviewer` verdict of `approve` and green CI.
-- Commit `STATUS.md`, `docs/decisions/` and `.agent-team/logs/` to the milestone branch.
+- Commit `STATUS.md` and `docs/decisions/` to the milestone branch. Logs in `.agent-team/logs/` stay local (gitignored); archive them at milestone close with `archive-logs.js`.
 
 **Still ask me first:** merging into `main`, anything touching repo settings or branch protection, releases, work outside the current milestone, spending on cloud sessions.
 

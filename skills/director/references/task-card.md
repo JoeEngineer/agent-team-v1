@@ -12,6 +12,7 @@ WHY medium tier (sonnet) / medium effort per routing table; clear spec, follows 
   - Optional: `tier` (`small|medium|large|xlarge`), the tier chosen from the routing table.
   - Also required for any task that runs in a worktree: `base` (the branch to start from, usually `milestone/<slug>`).
   - Optional: `branch`, `pr`, `issue`.
+  - Optional: `worktree` (repo-relative path, no spaces), the folder the task runs in; set by the Codex Director.
   - `type`: one of `research`, `breakdown`, `design`, `implement`, `fix`, `test`, `docs`, `review`, `coach`.
   - `difficulty`: `easy`, `medium`, `hard`.
 - `WHY` line: free text — why this agent/tier/effort. On escalations, say which ladder step.

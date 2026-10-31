@@ -6,10 +6,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 const lib = require('./lib');
 const models = require('./models');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -60,35 +59,15 @@ const SESSION_SETTINGS = new Set([
 const isBridge = (t) => /^mcp__(codex-bridge|antigravity-bridge)__/.test(t) && !/check_runway|_check$/.test(t);
 const isShell = (t) => t === 'Bash' || t === 'PowerShell';
 
-function startFile(input) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
-  return path.join(dir, `${String(input.tool_use_id || 'unknown').replace(/[^\w-]/g, '_')}.json`);
+// The delegation record for this agent, to pick up the routing the Director chose.
+function findDelegation(input, agentId) {
+  if (!agentId) return null;
+  return findDelegationBy(input, (rec) => rec.agent_id === agentId);
 }
 
 function onPre(input) {
   if (!input.tool_use_id) return;
   fs.writeFileSync(startFile(input), JSON.stringify({ started: Date.now() }));
-}
-
-function takeDuration(input) {
-  try {
-    const file = startFile(input);
-    const { started } = JSON.parse(fs.readFileSync(file, 'utf8'));
-    fs.unlinkSync(file);
-    return Date.now() - started;
-  } catch {
-    return undefined;
-  }
-}
-
-function base(input) {
-  return {
-    ts: new Date().toISOString(),
-    tool: 'claude',
-    session_id: input.session_id,
-    guidance_version: lib.guidanceVersion(),
-  };
 }
 
 function resolveRouting(input, ti) {
@@ -105,39 +84,6 @@ function resolveRouting(input, ti) {
     model: model.value, model_source: model.source,
     effort: effort.value, effort_source: effort.source,
   };
-}
-
-// Create a marker file once; false if it already exists. Used to log an event
-// once when several hooks see it.
-function claimOnce(input, key) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
-  try {
-    fs.writeFileSync(path.join(dir, String(key).replace(/[^\w-]/g, '_')), '', { flag: 'wx' });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
-
-// A review can be seen twice (PostToolUse for a foreground subagent, then
-// SubagentStop). Log it once per agent id and verdict content, so a re-review
-// by the same (resumed) reviewer is still logged.
-function logReview(input, record, review) {
-  if (record.agent_id && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return;
-  lib.appendJsonl(input, 'reviews.jsonl', {
-    ...base(input),
-    agent_id: record.agent_id || null,
-    task_id: record.task.reviewed_task || record.task.id,
-    pr: record.task.pr,
-    attempt: record.task.attempt,
-    reviewer_model: record.resolved_model || record.model,
-    reviewer_effort: record.effort,
-    reviewer_tier: record.tier === undefined ? null : record.tier,
-    ...review,
-  });
 }
 
 function onPostSubagent(input) {
@@ -181,6 +127,7 @@ function onPostSubagent(input) {
 }
 
 function onPostSession(input) {
+  takeDuration(input); // release the start file; sessions log no duration
   const ti = input.tool_input || {};
   const text = lib.responseText(input.tool_response);
   const sessionId = (text.match(/local_[\w-]+/) || [])[0] || null;
@@ -230,53 +177,6 @@ function onPostBridge(input) {
   });
 }
 
-// Ask GitHub what happened to the PR instead of guessing from command output:
-// the Director often chains a merge with other commands whose output mentions
-// "error" or "failed". Returns null if gh can't answer.
-function prState(input, { target, repo }) {
-  const args = ['pr', 'view'];
-  if (target) args.push(target);
-  if (repo) args.push('--repo', repo);
-  args.push('--json', 'number,state,autoMergeRequest');
-  // Tests point AGENT_TEAM_FAKE_GH at a Node script: on Windows, execFileSync
-  // only finds gh.exe on PATH, so a fake `gh` script there would be skipped.
-  const fake = process.env.AGENT_TEAM_FAKE_GH;
-  const [bin, binArgs] = fake ? [process.execPath, [fake, ...args]] : ['gh', args];
-  try {
-    const out = execFileSync(bin, binArgs, {
-      cwd: input.cwd || lib.projectDir(input),
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 7000,
-    });
-    return JSON.parse(out);
-  } catch {
-    return null;
-  }
-}
-
-function mergeOutcome(state) {
-  if (!state) return 'unknown';
-  if (state.state === 'MERGED') return 'merged';
-  if (state.state === 'OPEN' && state.autoMergeRequest) return 'auto-merge-queued';
-  return 'not-merged';
-}
-
-function onPostShell(input) {
-  const cmd = (input.tool_input && input.tool_input.command) || '';
-  if (!/\bgh\s+pr\s+merge\b/.test(cmd)) return;
-  // Only real `gh pr merge` segments count, not the words inside a quoted string.
-  for (const m of lib.findPrMerges(cmd)) {
-    const state = prState(input, m);
-    lib.appendJsonl(input, 'merges.jsonl', {
-      ...base(input),
-      command: cmd.slice(0, 300),
-      pr: state && state.number != null ? String(state.number) : m.target,
-      outcome: mergeOutcome(state),
-      outcome_source: state ? 'gh pr view' : 'none',
-      chained: lib.segments(cmd).length > 1,
-    });
-  }
-}
-
 // SendMessage to an existing agent with a task card is a new attempt of that
 // task (warm context). Log it as a delegation so attempts aren't lost.
 function onPostSendMessage(input) {
@@ -304,15 +204,27 @@ function onPostSendMessage(input) {
   });
 }
 
-const isToolResults = (content) =>
-  Array.isArray(content) && content.length > 0 && content.every((c) => c && c.type === 'tool_result');
+// A real prompt: a string or a text part, not a tool result.
+const isPrompt = (content) =>
+  typeof content === 'string' ? content.trim() !== ''
+    : Array.isArray(content) && content.some((c) => c && c.type === 'text' && c.text) &&
+      !content.some((c) => c && c.type === 'tool_result');
+
+// Does this user entry start a new turn? A plain prompt does. A SendMessage
+// resume is written by Claude Code as an isMeta entry carrying a TASK card;
+// other isMeta entries (system reminders, coordinator chatter) do not.
+const startsTurn = (e, content) =>
+  e.type === 'user' && isPrompt(content) &&
+  (!e.isMeta || /\bTASK id=/.test(lib.responseText(content)));
+
+const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
 
 // Read a subagent transcript: task card from its first prompt, model, tokens
 // (each API message counted once), wall time, and the final report. The report
 // is the SubagentHandback tool's message when the agent used it, else the last
 // assistant text, both from the latest turn only.
-function readSubagentTranscript(file) {
-  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null };
+function readSubagentTranscript(file, upToTurn) {
+  const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null, turn: 0, task: {}, classes: { input: 0, output: 0, cache_read: 0, cache_write: 0 } };
   const seen = new Set();
   let lastMsgId = null;
   for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -321,15 +233,19 @@ function readSubagentTranscript(file) {
     try { e = JSON.parse(line); } catch { continue; }
     const m = e.message || {};
     if (e.type === 'user' && !out.prompt) out.prompt = lib.responseText(m.content);
-    // A new prompt (not a tool result) starts a new turn, e.g. a SendMessage
-    // resume. Report, tokens and wall time cover the latest turn only, so a
-    // lagging transcript can't hand back attempt 1's report for attempt 2, and
-    // attempt 2's tokens and duration don't include attempt 1's.
-    if (e.type === 'user' && !e.isMeta && !isToolResults(m.content)) {
+    // A new prompt (not a tool result; isMeta or not) starts a new turn, e.g. a
+    // SendMessage resume. Report, tokens and wall time cover the latest turn
+    // only, so a lagging transcript can't hand back attempt 1's report for
+    // attempt 2, and attempt 2's tokens and duration don't include attempt 1's.
+    if (startsTurn(e, m.content)) {
+      if (upToTurn && out.turn >= upToTurn) break; // reconcile reads one turn at a time
+      out.turn++;
+      out.task = lib.parseTaskCard(lib.responseText(m.content));
       out.handback = null;
       out.lastText = '';
       lastMsgId = null;
       out.tokens = 0;
+      out.classes = { input: 0, output: 0, cache_read: 0, cache_write: 0 };
       out.first = e.timestamp ? Date.parse(e.timestamp) : null;
       out.last = null;
     }
@@ -347,6 +263,10 @@ function readSubagentTranscript(file) {
     if (m.id && !seen.has(m.id) && m.usage) {
       seen.add(m.id);
       const u = m.usage;
+      out.classes.input += u.input_tokens || 0;
+      out.classes.output += u.output_tokens || 0;
+      out.classes.cache_read += u.cache_read_input_tokens || 0;
+      out.classes.cache_write += u.cache_creation_input_tokens || 0;
       out.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) +
         (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
     }
@@ -370,44 +290,76 @@ function readMeta(transcriptPath) {
   }
 }
 
-// The delegation record for this agent, to pick up the routing the Director chose.
-function findDelegation(input, agentId) {
-  if (!agentId) return null;
-  try {
-    const lines = fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').trim().split(/\r?\n/);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const rec = JSON.parse(lines[i]);
-      if (rec.agent_id === agentId) return rec;
-    }
-  } catch { /* none yet */ }
-  return null;
-}
-
 // SubagentStop: fires when any subagent finishes (foreground or background).
 // Writes one completions.jsonl line with the result, linked by agent_id.
 function onSubagentStop(input) {
   const tPath = input.agent_transcript_path;
   if (!tPath || !fs.existsSync(tPath)) return;
-  const t = readSubagentTranscript(tPath);
   const meta = readMeta(tPath);
   const agentId = input.agent_id || (path.basename(tPath).match(/^agent-(.+)\.jsonl$/) || [])[1] || null;
-  // The final report. `last_assistant_message` in the hook input is complete
-  // when the hook runs; the transcript file can lag one message behind (seen
-  // live in 2.1.314), so it's the fallback. Prefer a source with a JSON block.
-  const sources = [
-    ['hook-input', typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null],
-    ['handback', t.handback],
-    ['text', t.lastText],
-  ].filter(([, v]) => v);
-  const hasBlock = (v) => /```(result|review)-json/.test(v);
-  const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
-  // SubagentStop can fire more than once for the same finish. A resumed agent
-  // finishes again with a new report, so it's still logged.
-  if (agentId && !claimOnce(input, `stop-${agentId}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const agentType = input.agent_type || meta.agentType || null;
   const delegation = findDelegation(input, agentId);
+  const hasBlock = (v) => /```(result|review)-json/.test(v);
+  // The final report. `last_assistant_message` in the hook input is complete
+  // when present; the transcript file can lag the live session (seen in
+  // 2.1.314), and handback-ending agents often have no hook-input message, so
+  // the transcript is the fallback. Prefer a source with a JSON block.
+  const choose = () => {
+    const t = readSubagentTranscript(tPath);
+    const sources = [
+      ['hook-input', typeof input.last_assistant_message === 'string' ? input.last_assistant_message : null],
+      ['handback', t.handback],
+      ['text', t.lastText],
+    ].filter(([, v]) => v);
+    const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
+    return { t, reportSource, report };
+  };
+  let { t, reportSource, report } = choose();
+  // Role agents (agent-team:*) always report a result-json/review-json block,
+  // and a review task expects one; if it's missing the transcript probably
+  // lags, so re-read it up to 4 x 500 ms. Other agents may end without a block
+  // and shouldn't pay the wait on every stop. The delay is overridable for tests.
+  const expectBlock = (agentType && agentType.startsWith('agent-team:')) ||
+    (delegation && delegation.task && delegation.task.type === 'review');
+  if (expectBlock && !hasBlock(report)) {
+    // AGENT_TEAM_STOP_RETRY_MS is a test-only override of the 500 ms retry
+    // delay. It is clamped to 1000 ms so a large value can't block the hook.
+    const env = process.env.AGENT_TEAM_STOP_RETRY_MS;
+    const delay = env !== undefined && env !== '' && Number(env) >= 0 ? Math.min(Number(env), 1000) : 500;
+    for (let i = 0; i < 4 && !hasBlock(report); i++) {
+      sleepMs(delay);
+      ({ t, reportSource, report } = choose());
+    }
+  }
+  // A resume whose prompt is in the file but has no assistant entry yet, and no
+  // hook-input report: nothing of attempt 2 to log. Don't claim its marker.
+  if (!report && t.turn > 1 && !t.last) return;
+  // SubagentStop can fire more than once for the same finish. The key has the
+  // turn and the report: a resumed agent's new attempt is still logged, and a
+  // stale read of an earlier attempt's report can't claim the new marker.
+  // Claimed only after the final choice, so a fenceless first read doesn't
+  // shadow a later read with the block (different report, different key).
+  if (agentId && !claimOnce(input, `stop-${agentId}-${t.turn}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
+  const record = completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report });
+  lib.appendJsonl(input, 'completions.jsonl', record);
+  if (record.review) logReview(input, record, record.review);
+}
+
+// Task card for a completion: the delegation's, with the attempt taken from
+// the turn's own TASK line. With no attempt= on that line (malformed card) the
+// delegation's attempt stays, which may be stale.
+function completionTask(delegation, t) {
+  const turnTask = t.task || {};
+  const task = delegation ? { ...delegation.task } : lib.parseTaskCard(t.prompt);
+  if (turnTask.attempt != null && Number(turnTask.attempt) !== Number(task.attempt)) task.attempt = turnTask.attempt;
+  return task;
+}
+
+// The completions.jsonl line for one finished turn. Shared with
+// scripts/reconcile-logs.js so a backfilled line has the same shape.
+function completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report }) {
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
-  const record = {
+  return {
     ...base(input),
     kind: 'completion',
     agent: agentType,
@@ -421,24 +373,28 @@ function onSubagentStop(input) {
     effort: routing.effort,
     // The effort Claude Code actually ran the subagent at, when the hook says.
     resolved_effort: (input.effort && input.effort.level) || null,
-    task: delegation ? delegation.task : lib.parseTaskCard(t.prompt),
+    // The attempt comes from the turn being logged (the TASK line that opened
+    // it), not from the latest delegation, so a stale verdict is never stamped
+    // with a newer attempt number.
+    task: completionTask(delegation, t),
     // Latest turn only (a resumed agent's attempt 2 doesn't include attempt 1).
     // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
     // Includes cache reads/writes, so it's larger than Claude Code's own
     // `tokens` total on the delegation line. Compare like with like.
     tokens_with_cache: t.tokens || null,
+    // The same tokens split by class, so cost can be priced.
+    tokens_by_class: t.tokens ? { ...t.classes } : null,
     report_source: reportSource,
     result: lib.lastFencedJson(report, 'result-json'),
     review: lib.lastFencedJson(report, 'review-json'),
   };
-  lib.appendJsonl(input, 'completions.jsonl', record);
-  if (record.review) logReview(input, record, record.review);
 }
 
 function main() {
   const input = lib.readStdin();
   if (lib.detectTool(input) === 'codex') return require('./codex-log').handle(input);
+  prunePending(input);
   const event = input.hook_event_name;
   const tool = input.tool_name || '';
   if (event === 'PreToolUse') return onPre(input);
@@ -448,16 +404,21 @@ function main() {
   if (tool === SESSION_START) return onPostSession(input);
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
   if (isBridge(tool)) return onPostBridge(input);
-  if (isShell(tool)) return onPostShell(input);
+  if (isShell(tool)) return logMerges(input, 'claude');
   if (tool === 'SendMessage') return onPostSendMessage(input);
 }
 
-try {
-  main();
-} catch (err) {
+module.exports = { readSubagentTranscript, readMeta, completionRecord };
+
+// Only run as the hook; reconcile-logs.js requires this file for the helpers.
+if (require.main === module) {
   try {
-    const input = {};
-    lib.appendJsonl(input, 'hook-errors.jsonl', { ts: new Date().toISOString(), error: String(err && err.stack || err) });
-  } catch { /* ignore */ }
+    main();
+  } catch (err) {
+    try {
+      const input = {};
+      lib.appendJsonl(input, 'hook-errors.jsonl', { ts: new Date().toISOString(), error: String(err && err.stack || err) });
+    } catch { /* ignore */ }
+  }
+  process.exit(0);
 }
-process.exit(0);

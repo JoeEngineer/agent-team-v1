@@ -50,7 +50,7 @@ const codexStop = {
   agent_transcript_path: '/t/ag1.jsonl', last_assistant_message: 'done',
 };
 
-test('codex events are logged to codex-events.jsonl only, without message', () => {
+test('codex events are logged raw to codex-events.jsonl and as one hook delegation, without message', () => {
   const dir = tmpProject();
   for (const ev of [codexPre, codexPost, codexStop]) {
     const r = run('log-delegation.js', ev, dir);
@@ -69,7 +69,12 @@ test('codex events are logged to codex-events.jsonl only, without message', () =
   eq(rows[2].last_assistant_message, 'done', 'last message');
   const raw = fs.readFileSync(path.join(dir, '.agent-team', 'logs', 'codex-events.jsonl'), 'utf8');
   assert(!raw.includes('"message"') && !raw.includes('gAAAA'), 'message must not be logged');
-  eq(readLog(dir, 'delegations.jsonl').length, 0, 'delegations.jsonl untouched');
+  const dels = readLog(dir, 'delegations.jsonl');
+  eq(dels.length, 1, 'one delegation line');
+  eq(dels[0].source, 'hook', 'delegation source');
+  eq(dels[0].task_name, 'worker1', 'delegation task_name');
+  const delRaw = fs.readFileSync(path.join(dir, '.agent-team', 'logs', 'delegations.jsonl'), 'utf8');
+  assert(!delRaw.includes('"message"') && !delRaw.includes('gAAAA'), 'message must not be logged in delegations');
 });
 
 test('codex Bash PostToolUse writes nothing', () => {
@@ -122,8 +127,8 @@ test('garbage stdin exits 0', () => {
 
 const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
 const GUARD_MATCHER = 'Bash|PowerShell';
-const LOGGER_PRE_MATCHER = 'Agent|Task|mcp__ccd_session__start_session|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|^(?:collaboration)?spawn_agent$|^(?:send_input|resume_agent|wait_agent|close_agent)$';
-const LOGGER_POST_MATCHER = 'Agent|Task|SendMessage|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|^(?:collaboration)?spawn_agent$|^(?:send_input|resume_agent|wait_agent|close_agent)$';
+const LOGGER_PRE_MATCHER = 'Agent|Task|mcp__ccd_session__start_session|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|^(?:collaboration)?(?:spawn_agent|followup_task|wait_agent|close_agent|send_input|resume_agent)$';
+const LOGGER_POST_MATCHER = 'Agent|Task|SendMessage|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|^(?:collaboration)?(?:spawn_agent|followup_task|wait_agent|close_agent|send_input|resume_agent)$';
 const GUARD_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/guard.js"';
 const LOGGER_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/log-delegation.js"';
 
@@ -139,7 +144,7 @@ test('hooks.json: matchers pinned exactly and compile', () => {
 test('hooks.json: logger matches Codex tools and Claude-side tools still match', () => {
   const m = (matcher, t) => new RegExp(`^(?:${matcher})$`).test(t);
   for (const matcher of [LOGGER_PRE_MATCHER, LOGGER_POST_MATCHER]) {
-    for (const t of ['collaborationspawn_agent', 'spawn_agent', 'send_input', 'resume_agent', 'wait_agent', 'close_agent', 'Agent']) {
+    for (const t of ['collaborationspawn_agent', 'spawn_agent', 'collaborationfollowup_task', 'followup_task', 'collaborationwait_agent', 'send_input', 'resume_agent', 'wait_agent', 'close_agent', 'Agent', 'Task']) {
       assert(m(matcher, t), `logger matches ${t}`);
     }
     // Anchored Codex alternatives must not match MCP tools whose names contain those strings.
@@ -162,6 +167,14 @@ test('hooks.json: logger matches Codex tools and Claude-side tools still match',
     'mcp__codex-bridge__codex_run', 'mcp__antigravity-bridge__antigravity_run']) {
     assert(m(LOGGER_POST_MATCHER, t), `post matcher matches ${t}`);
   }
+});
+
+test('hooks.json: SessionStart entry pinned, no SubagentStart', () => {
+  const ss = hooks.hooks.SessionStart;
+  eq(ss.length, 1, 'one entry');
+  eq(ss[0].hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/scripts/session-start.js"', 'command');
+  eq(ss[0].hooks[0].timeout, 10, 'timeout');
+  eq(hooks.hooks.SubagentStart, undefined, 'no SubagentStart');
 });
 
 test('hooks.json: commands pinned exactly (no git dependency)', () => {
