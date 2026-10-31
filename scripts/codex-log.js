@@ -322,6 +322,7 @@ function handle(input) {
     // is (or will be) logged through it. Skip the plugin copy so a CLI that
     // runs both does not log twice.
     if (process.env.AGENT_TEAM_HOOK_SOURCE !== 'project' && projectHooksInstalled(input)) return;
+    records.prunePending(input);
     try { rawLog(input); } catch { /* keep going */ }
     normalized(input);
   } catch { /* hooks must never break a session */ }

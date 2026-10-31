@@ -54,7 +54,7 @@ if (!MODEL) skip('the model map has no Codex small tier');
 const REAL_AUTH = path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
 if (!fs.existsSync(REAL_AUTH)) skip(`no Codex auth available (${REAL_AUTH} not found)`);
 
-const BASE = WIN ? 'C:\\cx2' : path.join(os.tmpdir(), 'cx2');
+const BASE = process.env.AGENT_TEAM_LIVE_TMP || (WIN ? 'C:\\cx2' : path.join(os.tmpdir(), 'cx2'));
 const TMP = path.join(BASE, String(process.pid));
 const HOME = path.join(TMP, 'h');
 const PROJ = path.join(TMP, 'p');
@@ -175,9 +175,10 @@ async function main() {
   row('(b) trust hash stable after re-running codex-hooks.js', same && JSON.stringify(hashes1) === JSON.stringify(hashes2),
     `file identical: ${same}`);
 
-  const L = `node "${fwd(PLUGIN)}/scripts/log-event.js" delegation`;
-  // Windows PowerShell 5.1 needs doubled quotes inside single-quoted JSON (see the Director's codex.md).
-  const J = (o) => { const t = JSON.stringify(o); return WIN ? t.replace(/"/g, '""') : t; };
+  const LE = `node "${fwd(PLUGIN)}/scripts/log-event.js" delegation -`;
+  // Stdin form of log-event.js (see the Director's codex.md): quoted heredoc in sh, single-quoted here-string piped in PowerShell.
+  const J = (o) => JSON.stringify(o);
+  const logCmd = (json) => (WIN ? `@'\n${json}\n'@ | ${LE}` : `${LE} <<'EOF'\n${json}\nEOF`);
   const deleg = (id, name, agent, why) => J({
     tool: 'codex', task_name: name, agent, tier: 'small', effort: 'low', vehicle: 'subagent',
     card: `TASK id=${id} type=test difficulty=low milestone=live attempt=1 tier=small\nWHY ${why}`,
@@ -185,9 +186,11 @@ async function main() {
   const prompt = [
     'You are the Director in a live test. Do these steps in order using your shell and spawn tools. Do not skip any.',
     '0. Echo, word for word, the line that starts with "agent-team hooks:" from your session start context (say NONE if absent).',
-    `1. Run this shell command: ${L} '${deleg('LIVE-1', 'live_1_a1', 'scout-small', 'live scout')}'`,
+    `1. Run this shell command (multi-line, keep it exactly):
+${logCmd(deleg('LIVE-1', 'live_1_a1', 'scout-small', 'live scout'))}`,
     '2. Spawn an agent with your spawn_agent tool: agent_type "scout-small", task_name "live_1_a1", reasoning_effort "low". Its message: Reply with only a fenced block ```result-json {"status":"done","summary":"live scout ok"} ``` (language tag result-json) and nothing else. Wait for it to finish.',
-    `3. Run this shell command: ${L} '${deleg('LIVE-2', 'live_2_a1', 'reviewer-small', 'live review')}'`,
+    `3. Run this shell command (multi-line, keep it exactly):
+${logCmd(deleg('LIVE-2', 'live_2_a1', 'reviewer-small', 'live review'))}`,
     '4. Spawn agent_type "reviewer-small", task_name "live_2_a1", reasoning_effort "low". Its message: Do not review anything. Reply with only a fenced block with language tag review-json containing {"verdict":"approve","summary":"canned"}. Wait for it to finish.',
     '5. Run `git push origin main` and quote its output (or the block reason) exactly.',
     '6. Run `git worktree add .agent-team/worktrees/T1 -b task/T1` and quote its output exactly, saying WORKTREE-OK or WORKTREE-FAILED.',

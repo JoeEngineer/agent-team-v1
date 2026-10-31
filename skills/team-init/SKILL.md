@@ -15,7 +15,7 @@ Set up this project for the `agent-team` plugin. The shared steps apply to both 
    - `docs/decisions/0000-template.md` → `docs/decisions/`
 3. Create `.agent-team/logs/` with a `.gitkeep` if it is not there yet.
 4. Gitignore. Open `.gitignore` (create it if missing) and add each line below that is not already in it, once each. Keep existing lines as they are.
-   - `.agent-team/logs/.pending/` (hook scratch files)
+   - `.agent-team/logs/*` and `!.agent-team/logs/.gitkeep` (logs stay local and are archived at milestone close; the folder is kept; `.agent-team/logs/.pending/` is covered by the first line)
    - `.agent-team/worktrees/` and `.claude/worktrees/` (agent worktrees live there and must never be committed)
    - `.codex/agents/*-small.toml`, `.codex/agents/*-medium.toml`, `.codex/agents/*-large.toml`, `.codex/agents/*-xlarge.toml` (generated per machine by `codex-agents.js`; harmless in a project that never uses Codex)
 

@@ -23,7 +23,7 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 
 ### Codex records
 - Codex lines sit in the same files as Claude's, with `tool: "codex"`. Compare results per logged `model` (the model Codex reports), not per tier name across tools. See `docs/codex-mapping.md`, "Models and effort".
-- Delegation lines have `source: "director"` (written by the Director before spawning, with the parsed task and WHY) or `source: "hook"` (written on spawn or resume when the Director did not log). Dedupe by `task_name` + `task.attempt`, preferring `source: "director"`. Hook resume fallbacks have `task: {}` because the message is encrypted; take the task card from the Director line for that `task_name`.
+- Delegation lines have `source: "director"` (written by the Director before spawning, with the parsed task and WHY) or `source: "hook"` (written on spawn or resume when the Director did not log). Merge hook fallback lines into the Director line with the same `task_name` (hook lines have `task: {}` because the message is encrypted; take the task card from the Director line). When there is no Director line, count the hook line once.
 - Reviews: a review may appear both from the hook and from a Director `log-event.js review` line. Dedupe by task id + attempt + verdict.
 - `tokens_detail` holds `input`, `cached_input`, `output` and `reasoning_output`. Use it where present.
 - `codex-events.jsonl` is raw debug output. Ignore it.

@@ -48,7 +48,11 @@ missing it warns on stderr and exits 0.
   JSON) and stderr, and exits with its exit code;
 - if no plugin is found, prints `agent-team plugin not found; guard and logging
   off; GitHub rulesets still apply` on stderr and exits 0 (fail open). It never
-  writes anything else to stdout.
+  writes anything else to stdout. The committed `.codex/agent-team-hook.js` is
+  not covered by Codex's trust hash (only the `hooks.json` command strings are),
+  so an agent with workspace write access could edit it and turn off the guard
+  and logging without a re-trust prompt. GitHub rulesets still apply, and the
+  shim is reviewed in PRs like any other file.
 
 **No double logging.** `scripts/codex-log.js` ignores a Codex event that comes
 through a plugin hook (`AGENT_TEAM_HOOK_SOURCE` unset) when the project's

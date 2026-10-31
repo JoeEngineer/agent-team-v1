@@ -48,11 +48,11 @@ function claimOnce(input, key) {
   }
 }
 
-// Best-effort sweep of old .pending entries: dedupe markers (stop-*, review-*)
+// Best-effort sweep of old .pending entries: dedupe markers (stop-*, resume-*, review-*)
 // and leaked start files (toolu_*.json) older than maxAgeMs. Looks at no more
 // than `cap` entries per run, skips anything else (dotfiles, other tasks'
 // files) and swallows every error.
-const PRUNABLE = /^(stop-|review-|toolu_.*\.json$)/;
+const PRUNABLE = /^(stop-|resume-|review-|toolu_.*\.json$)/;
 function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
   try {
     const dir = path.join(lib.logDir(input), '.pending');

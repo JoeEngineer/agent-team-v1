@@ -52,7 +52,7 @@ When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegation
 
 ## Hooks check
 
-At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running: warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on the agents' rulesets.
+At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running: warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on GitHub rulesets.
 
 ## On Codex
 
@@ -72,6 +72,6 @@ Codex and Antigravity bridges (`mcp__codex-bridge__*`, `mcp__antigravity-bridge_
 |---|---|
 | `STATUS.md` | Current milestone, task table (id, agent, tier (model)/effort, state, PR), blockers, needs-user |
 | `docs/decisions/NNNN-*.md` | Decision records |
-| `.agent-team/logs/*.jsonl` | Written by hooks. Gitignored; don't edit by hand, append via `scripts/log-event.js` if you need to add an event. Archived at close. |
+| `.agent-team/logs/*.jsonl` | Written by hooks. Gitignored by team-init; don't edit by hand, append via `scripts/log-event.js` if you need to add an event. Archived at close. |
 
-Commit `STATUS.md` and `docs/decisions/` to the milestone branch regularly so the record survives this session; `.agent-team/` is gitignored, so the logs are archived at close instead. Stage explicit paths (`git add STATUS.md docs/decisions/`), never `git add -A` or `git add .`: agent worktrees under `.claude/worktrees/` would be committed as gitlinks. The guard blocks `-A`/`.` while that folder exists and isn't ignored.
+Commit `STATUS.md` and `docs/decisions/` to the milestone branch regularly so the record survives this session. Commit only those: the logs are gitignored by team-init and archived at close. Stage explicit paths (`git add STATUS.md docs/decisions/`), never `git add -A` or `git add .`: agent worktrees under `.claude/worktrees/` and `.agent-team/worktrees/` would be committed as gitlinks. The guard blocks `-A`/`.` while either folder exists and isn't ignored.
