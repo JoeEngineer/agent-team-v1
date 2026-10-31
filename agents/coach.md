@@ -15,10 +15,20 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 - `.agent-team/logs/reviews.jsonl` — one line per reviewer verdict, linked by task id. Since 0.2.0 it carries `findings` (severity, category, path, blocking) and `ci`.
 - `delegations.jsonl` lines with `kind: "resume"` are retries sent to an existing agent with `SendMessage` (same `agent_id`; model/effort copied from the original delegation).
 - `merges.jsonl` `outcome` is read from GitHub after the call (`merged`, `not-merged`, `auto-merge-queued`, or `unknown` when GitHub couldn't be asked). Lines before 0.2.0 guessed it from the command output and are unreliable.
-- `.agent-team/logs/tier_fallbacks.jsonl` — times a mapped model was missing and the Director fell one tier down (task, from, to, tool, reason). `codex-events.jsonl` holds events from Codex runs.
+- `.agent-team/logs/tier_fallbacks.jsonl` — times a mapped model was missing and the Director fell one tier down (task, from, to, tool, reason).
 - `.agent-team/logs/merges.jsonl`, `decisions.jsonl` — merges and decision events.
 - `docs/decisions/` — decision records.
 - The current routing table: the plugin's `skills/director/references/routing.md`.
+- Archive folders (when the user names one): read the folder's `README.md` first for its known gaps, then treat the `.jsonl` files as above.
+
+### Codex records
+- Codex lines sit in the same files as Claude's, with `tool: "codex"`. Compare results per logged `model` (the model Codex reports), not per tier name across tools. See `docs/codex-mapping.md`, "Models and effort".
+- Delegation lines have `source: "director"` (written by the Director before spawning, with the parsed task and WHY) or `source: "hook"` (written on spawn or resume when the Director did not log). Dedupe by `task_name` + `task.attempt`, preferring `source: "director"`. Hook resume fallbacks have `task: {}` because the message is encrypted; take the task card from the Director line for that `task_name`.
+- Reviews: count one verdict per reviewer agent + attempt. A review may appear both from the hook and from a Director `log-event.js review` line, so dedupe by task id + attempt + verdict.
+- `tokens_detail` holds `input`, `cached_input`, `output` and `reasoning_output`. Use it where present.
+- `codex-events.jsonl` is raw debug output. Ignore it.
+- Completions with `report_source: "reconcile"` were backfilled from transcripts. Trust them like hook lines.
+- `notes.jsonl` (in the logs folder, when present) may hold Director notes about verdicts the logger missed. Count them as verdicts, deduped as above.
 
 ## What to look for
 - Task type × difficulty combinations where the first attempt usually fails review, or usually needs escalation → start them higher.
