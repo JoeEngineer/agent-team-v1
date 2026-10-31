@@ -1,6 +1,6 @@
 # Codex mapping
 
-How each piece of the `agent-team` plugin (0.2.0) maps to Codex, as step 2 of supporting both harnesses as Director.
+How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting both harnesses as Director. Written against 0.2.0; the guard finding below was fixed in 0.2.1.
 
 **Checked against:**
 - Codex CLI 0.166.0 on Windows 11.
@@ -16,7 +16,7 @@ How each piece of the `agent-team` plugin (0.2.0) maps to Codex, as step 2 of su
 
 ## Summary
 
-0. **⚠️ The guard doesn't protect Codex sessions today.** Codex ignores exit code 2 from a `PreToolUse` hook (❌, contrary to its docs). It honours the JSON form, `hookSpecificOutput.permissionDecision: "deny"`. Because this repo already installs into Codex, `guard.js` must switch to the JSON response before anyone relies on it there. Claude Code accepts the same JSON, so one guard can serve both.
+0. **The guard didn't protect Codex sessions before 0.2.1. Fixed in 0.2.1 ([#4](https://github.com/JoeEngineer/agent-team-v1/pull/4)).** Codex ignores exit code 2 from a `PreToolUse` hook (❌, contrary to its docs) but honours the JSON form, `hookSpecificOutput.permissionDecision: "deny"`. Since 0.2.1, `guard.js` blocks with that JSON response, which Claude Code also accepts. It was verified live in both tools. The same release stopped the guard reading heredoc and multi-line quoted text as commands.
 1. **Codex is much closer to Claude Code than expected.** It uses the same hook event names and input fields, the same `hooks/hooks.json` location in plugins, and the same `SKILL.md` format. It even sets `CLAUDE_PLUGIN_ROOT` for hook commands.
 2. **This repo installs into Codex unchanged.** ✅ `codex plugin marketplace add JoeEngineer/agent-team-v1` reads `.claude-plugin/marketplace.json`. Installing it picks up version 0.2.0 and turns argument-free Claude commands into Codex skills.
 3. **So the plan changes:** one plugin package can serve both tools. Generate only the parts that really differ: agent definitions (Markdown header for Claude, TOML for Codex), tool names in hook matchers, and routing model names.
@@ -71,7 +71,7 @@ How each piece of the `agent-team` plugin (0.2.0) maps to Codex, as step 2 of su
 | Hooks run without asking | **Must be trusted.** Codex asks when it first starts in the project; `/hooks` reviews them later. Trust is stored in `~/.codex/config.toml` under `[hooks.state]`, one `trusted_hash` per hook entry (`<file>:<event>:<group>:<index>`). Installing a plugin doesn't trust its hooks | ✅ | The hash covers the hook **definition** (its command), not the script it runs: editing `guard.js` didn't need new trust, editing `hooks.json` would. So keep hook commands stable and put logic in scripts. One trust step per machine. `--dangerously-bypass-hook-trust` exists but shouldn't be used. |
 | Admins can't disable | `[features] hooks = false`, enforceable through managed `requirements.toml` | 📄 | **Work risk.** If hooks are off, there's no guard and no automatic logs. The Codex Director must check (SessionStart marker missing → warn), log by hand with `scripts/log-event.js`, and rely on GitHub rulesets. |
 | `PreToolUse` / `PostToolUse` | Same names | ✅ | Shell is **`Bash` even when the command is PowerShell** (`Get-ChildItem …` reported as `Bash`). File edits are `apply_patch`, MCP is `mcp__server__tool`, and spawns are `collaborationspawn_agent`. **They also fire for tool calls inside subagents:** the event's `transcript_path` is then the subagent's transcript, so the logger can tell who made the call. `session_id` is the parent's for both. |
-| Block with exit 2 + stderr | **Exit 2 is ignored**; JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}` on stdout with exit 0 **blocks** | ❌ / ✅ | Tested both against `git push origin main`. With exit 2 (`guard.js` as-is, and again through a wrapper) the push ran. With the JSON response it was blocked, and the agent reported the guard's reason. Run in `codex exec --sandbox workspace-write` (hook `permission_mode: bypassPermissions`). ❓ Whether exit 2 works in other approval modes. Don't depend on it. |
+| Block with exit 2 + stderr | **Exit 2 is ignored**; JSON `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"…"}}` on stdout with exit 0 **blocks** | ❌ / ✅ | Tested both against `git push origin main`. With exit 2 (`guard.js` 0.2.0, and again through a wrapper) the push ran. With the JSON response it was blocked, and the agent reported the guard's reason. `guard.js` 0.2.1 uses the JSON response and was re-tested as the only blocking hook: blocked, and no `PostToolUse` fired. Run in `codex exec --sandbox workspace-write` (hook `permission_mode: bypassPermissions`). ❓ Whether exit 2 works in other approval modes. Don't depend on it. |
 | `SubagentStop` + transcript parsing | `SubagentStop` with `agent_id`, `agent_type`, `agent_transcript_path`, `last_assistant_message` | ✅ | `last_assistant_message` held the scout's full reply, including its `result-json` block. Read results from it directly, without parsing the transcript. |
 | Tokens and actual effort | Subagent transcript (`agent_transcript_path`): `turn_context` has `model` and `effort`; `event_msg/token_count` has a running `total_token_usage` (`input_tokens`, `cached_input_tokens`, `output_tokens`, `reasoning_output_tokens`, `total_tokens`) | ✅ | Take the last `token_count` event. `session_meta` has `agent_role`, `agent_path`, `parent_thread_id` and `depth`, which is enough to link the result to its delegation. |
 | `SubagentStart` | Exists (`agent_id`, `agent_type`, plus the subagent's `transcript_path`) | ✅ | `agent_id` is the subagent's thread ID; the same value appears in its transcript file name. |
@@ -157,7 +157,7 @@ The earlier plan was a harness-neutral `core/` plus two generated adapters. With
   - Claude's `Agent` input vs Codex's `collaborationspawn_agent`.
   - Codex's `last_assistant_message` vs Claude's transcript parsing.
   - Codex's `task_name` link, since its spawn message is encrypted.
-- **Block with JSON, not exit codes.** `guard.js` returns `hookSpecificOutput.permissionDecision: "deny"` with exit 0. Do this first, as its own small fix, because Codex installs exist today.
+- **Block with JSON, not exit codes.** Done in 0.2.1 (#4). Any new blocking hook should follow the same pattern: `hookSpecificOutput.permissionDecision: "deny"` with exit 0.
 - **Director instructions:** one `director` skill with a short per-tool section on how to delegate:
   - Claude: `Agent` with worktree isolation, sessions.
   - Codex: spawn with `task_name` = task ID and a per-tier agent type, after logging the task card. Director-made worktrees. `codex exec` for long work.
@@ -178,7 +178,7 @@ Each run was `codex exec -m gpt-6-luna -c model_reasoning_effort="low" --sandbox
 | Agent TOML applied on Windows? | Yes. |
 | Do hooks fire inside subagents? | Yes. The scout's `Bash` call was captured, with the subagent's own `transcript_path`. |
 | Shell `tool_name` on Windows | `Bash`, even for PowerShell commands. |
-| Does the guard block a push? | **Not with exit code 2.** `guard.js` exited 2 with its reason, and the push ran anyway (twice). **Yes with the JSON response:** it was blocked, and the agent repeated the guard's reason. |
+| Does the guard block a push? | **Not with exit code 2.** `guard.js` 0.2.0 exited 2 with its reason, and the push ran anyway (twice). **Yes with the JSON response:** it was blocked, and the agent repeated the guard's reason. 0.2.1 ships the JSON response. |
 | Subagent result | `SubagentStop.last_assistant_message` has the full final reply, `result-json` block included. |
 | Tokens and actual effort | Subagent transcript: `turn_context` (`model`, `effort`) and the last `event_msg/token_count` (`total_token_usage`). |
 | Hook environment (project hooks) | No `PLUGIN_ROOT` / `CLAUDE_PLUGIN_ROOT` (they're for plugin hooks only), and no project directory variable. `cwd` was the repo root. |
