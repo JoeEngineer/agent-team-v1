@@ -19,3 +19,10 @@ One `codex exec` with two subagents on the small model: a few hundred thousand i
 
 ## Cleanup
 Automatic. If it prints "cleanup incomplete", delete the printed folder by hand.
+
+## Known limitation row
+Row (a) (`git worktree add` inside the exec sandbox) is expected to fail on the unelevated Windows sandbox, where `.git` is read-only (see `skills/director/references/codex.md`). It prints `KNOWN-LIMITATION` instead of `FAIL` and does not affect the exit code; it prints `PASS` if the worktree add works. Any other failing row exits 1.
+
+If the run is interrupted (Ctrl-C or SIGTERM), the handler deletes the temp folder, including the copied `auth.json`, and exits 130.
+
+`node tests/live/helpers-check.js` unit-checks the exit-code, cleanup-scoping and cache-version logic without Codex.
