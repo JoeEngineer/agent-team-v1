@@ -48,6 +48,27 @@ function claimOnce(input, key) {
   }
 }
 
+// Best-effort sweep of old .pending entries: dedupe markers (stop-*, review-*)
+// and leaked start files (toolu_*.json) older than maxAgeMs. Looks at no more
+// than `cap` entries per run, skips anything else (dotfiles, other tasks'
+// files) and swallows every error.
+const PRUNABLE = /^(stop-|review-|toolu_.*\.json$)/;
+function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
+  try {
+    const dir = path.join(lib.logDir(input), '.pending');
+    const now = Date.now();
+    let seen = 0;
+    for (const name of fs.readdirSync(dir)) {
+      if (name.startsWith('.') || !PRUNABLE.test(name)) continue;
+      if (++seen > cap) break;
+      try {
+        const f = path.join(dir, name);
+        if (now - fs.statSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f);
+      } catch { /* best effort */ }
+    }
+  } catch { /* no .pending yet */ }
+}
+
 const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
 // A review can be seen twice (PostToolUse for a foreground subagent, then
@@ -129,6 +150,6 @@ function logMerges(input, tool = 'claude') {
 }
 
 module.exports = {
-  base, startFile, takeDuration, claimOnce, shortHash, logReview,
+  base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   findDelegation, prState, mergeOutcome, logMerges,
 };
