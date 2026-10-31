@@ -31,9 +31,10 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 2 | merged | #43 | #66 |
 | CD-18 | README + 0.4.0 | implementer | small (haiku) / low | 1 | merged | #44 | #63 |
 | CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | 1 | done (8/8 pass) | #45 | |
-| CD-20 | Milestone final review | reviewer | large (opus) / high | 1 | in review | #46 | |
+| CD-20 | Milestone final review | reviewer | large (opus) / high | 1 | changes requested (log policy; fixes in CD-23) | #46 | |
 | CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
 | CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 2 | merged | #65 | #67 |
+| CD-23 | Final-review cleanups | implementer | medium (sonnet) / medium | 1 | in progress | #68 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -47,6 +48,7 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - `SubagentStart` is not registered: SubagentStop plus the transcript cover it, and each new hook costs Codex users a trust step (record 0007).
 - Live tests copy Codex credentials into a temporary Codex home and delete them at cleanup.
 - The optional backfill script (CD-6) is in scope.
+- Final review: logs stay gitignored and are archived at close, the default for team-init projects too (record 0008). The Coach report from PR #52 is published as is.
 
 ## Live findings (CD-1, Codex CLI 0.166)
 
