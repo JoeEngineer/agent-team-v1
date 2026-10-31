@@ -27,13 +27,13 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | merged | #39 | #50 |
 | CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / high | 3 | merged | #40 | #59 |
 | CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | 1 | merged | #41 | #58 |
-| CD-16 | Codex live test harness | implementer | medium (sonnet) / low | 1 | in review | #42 | #64 |
-| CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 1 | in progress | #43 | |
+| CD-16 | Codex live test harness | implementer | medium (sonnet) / medium | 2 | merged | #42 | #64 |
+| CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 2 | merged | #43 | #66 |
 | CD-18 | README + 0.4.0 | implementer | small (haiku) / low | 1 | merged | #44 | #63 |
-| CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | | planned | #45 | |
+| CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | 1 | in progress | #45 | |
 | CD-20 | Milestone final review | reviewer | large (opus) / high | | planned | #46 | |
 | CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
-| CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 1 | in progress | #65 | |
+| CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 2 | merged | #65 | #67 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
