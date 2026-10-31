@@ -217,7 +217,7 @@ const sleepMs = (ms) => { if (ms > 0) Atomics.wait(new Int32Array(new SharedArra
 // (each API message counted once), wall time, and the final report. The report
 // is the SubagentHandback tool's message when the agent used it, else the last
 // assistant text, both from the latest turn only.
-function readSubagentTranscript(file) {
+function readSubagentTranscript(file, upToTurn) {
   const out = { prompt: '', model: null, tokens: 0, first: null, last: null, lastText: '', handback: null, lastId: null, turn: 0 };
   const seen = new Set();
   let lastMsgId = null;
@@ -232,6 +232,7 @@ function readSubagentTranscript(file) {
     // only, so a lagging transcript can't hand back attempt 1's report for
     // attempt 2, and attempt 2's tokens and duration don't include attempt 1's.
     if (e.type === 'user' && isPrompt(m.content)) {
+      if (upToTurn && out.turn >= upToTurn) break; // reconcile reads one turn at a time
       out.turn++;
       out.handback = null;
       out.lastText = '';
@@ -309,8 +310,10 @@ function onSubagentStop(input) {
   const expectBlock = (agentType && agentType.startsWith('agent-team:')) ||
     (delegation && delegation.task && delegation.task.type === 'review');
   if (expectBlock && !hasBlock(report)) {
+    // AGENT_TEAM_STOP_RETRY_MS is a test-only override of the 500 ms retry
+    // delay. It is clamped to 1000 ms so a large value can't block the hook.
     const env = process.env.AGENT_TEAM_STOP_RETRY_MS;
-    const delay = env !== undefined && env !== '' && Number(env) >= 0 ? Number(env) : 500;
+    const delay = env !== undefined && env !== '' && Number(env) >= 0 ? Math.min(Number(env), 1000) : 500;
     for (let i = 0; i < 4 && !hasBlock(report); i++) {
       sleepMs(delay);
       ({ t, reportSource, report } = choose());
@@ -325,8 +328,16 @@ function onSubagentStop(input) {
   // Claimed only after the final choice, so a fenceless first read doesn't
   // shadow a later read with the block (different report, different key).
   if (agentId && !claimOnce(input, `stop-${agentId}-${t.turn}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
+  const record = completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report });
+  lib.appendJsonl(input, 'completions.jsonl', record);
+  if (record.review) logReview(input, record, record.review);
+}
+
+// The completions.jsonl line for one finished turn. Shared with
+// scripts/reconcile-logs.js so a backfilled line has the same shape.
+function completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report }) {
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
-  const record = {
+  return {
     ...base(input),
     kind: 'completion',
     agent: agentType,
@@ -351,8 +362,6 @@ function onSubagentStop(input) {
     result: lib.lastFencedJson(report, 'result-json'),
     review: lib.lastFencedJson(report, 'review-json'),
   };
-  lib.appendJsonl(input, 'completions.jsonl', record);
-  if (record.review) logReview(input, record, record.review);
 }
 
 function main() {
@@ -372,12 +381,17 @@ function main() {
   if (tool === 'SendMessage') return onPostSendMessage(input);
 }
 
-try {
-  main();
-} catch (err) {
+module.exports = { readSubagentTranscript, readMeta, completionRecord };
+
+// Only run as the hook; reconcile-logs.js requires this file for the helpers.
+if (require.main === module) {
   try {
-    const input = {};
-    lib.appendJsonl(input, 'hook-errors.jsonl', { ts: new Date().toISOString(), error: String(err && err.stack || err) });
-  } catch { /* ignore */ }
+    main();
+  } catch (err) {
+    try {
+      const input = {};
+      lib.appendJsonl(input, 'hook-errors.jsonl', { ts: new Date().toISOString(), error: String(err && err.stack || err) });
+    } catch { /* ignore */ }
+  }
+  process.exit(0);
 }
-process.exit(0);
