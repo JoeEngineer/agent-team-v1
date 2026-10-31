@@ -21,8 +21,8 @@ Branch: `milestone/shared-structure` · Issue: #6 · Started: 2026-10-31
 | SS-7 | Routing in tiers; agent `tier:` headers | implementer | medium (sonnet) / medium | 1 | merged | #13 | #23 |
 | SS-8 | README + 0.3.0 | implementer | small (haiku) / low | 2 | merged | #14 | #24 |
 | SS-9 | Live verification (Claude + Codex) | implementer | medium (sonnet) / low | 1 | done (9 pass, 1 open) | #15 | |
-| SS-10 | Milestone final review | reviewer | large (opus) / high | 1 | approved (7 minor findings) | #16 | |
-| SS-11 | Final-review cleanups | implementer | small (haiku) / medium | 1 | in progress | #25 | |
+| SS-10 | Milestone final review | reviewer | large (opus) / high | 1 | approved; findings fixed in SS-11 or deferred | #16 | |
+| SS-11 | Final-review cleanups | implementer | small (haiku) / medium | 1 | merged | #25 | #26 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -46,7 +46,8 @@ The Director checks remaining plan capacity before each wave and pauses below a 
 
 ## Needs the user
 
-- Merge the `milestone/shared-structure` → `main` PR at the end.
+- Merge the `milestone/shared-structure` → `main` PR (open; Director stops here).
+- Optional cleanup: the isolated Codex home and temp folder SS-9 left behind (see SS-9 report).
 
 ## Recent decisions
 
