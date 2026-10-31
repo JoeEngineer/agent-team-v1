@@ -81,6 +81,8 @@ const blocked = [
   ['push after a heredoc ends', "cat <<EOF > notes.txt\nsome text\nEOF\ngit push origin main"],
   ['push after a quoted <<- heredoc', "cat <<-'EOF'\n\tgit status\n\tEOF\ngit push origin main"],
   ['push chained after a heredoc line', "git commit -F - <<'EOF' && git push origin main\nmsg\nEOF"],
+  ['push after an arithmetic shift ($((1<<2)) is not a heredoc)', 'echo $((1<<2))\ngit push origin main'],
+  ['push after a (( )) shift with a variable', 'x=1; (( y = x<<n ))\ngit push origin main'],
 ];
 // The guard blocks with a JSON "deny" decision on stdout and exit 0, which both
 // Claude Code and Codex honour. Codex ignores exit code 2.

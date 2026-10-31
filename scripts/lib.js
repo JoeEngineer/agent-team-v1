@@ -151,6 +151,16 @@ function heredocWord(cmd, i) {
   return { word, end: i };
 }
 
+// True when position i is inside an unclosed `$((` … `))` (or `((` … `))`) on
+// its line, where `<<` is a bit shift, not a heredoc. Treating a shift as a
+// heredoc would skip every following line, so a guard must not guess that way.
+function inArithmetic(cmd, i) {
+  const before = cmd.slice(cmd.lastIndexOf('\n', i - 1) + 1, i);
+  const opens = (before.match(/\(\(/g) || []).length;
+  const closes = (before.match(/\)\)/g) || []).length;
+  return opens > closes;
+}
+
 // Split a command line into segments on && || ; | and newlines, then tokenize
 // each segment with basic single/double quote handling. Newlines inside quotes
 // stay in the token, and heredoc bodies (after `<<WORD`, `<<'WORD'`, `<<-WORD`)
@@ -168,7 +178,7 @@ function segments(cmd) {
       continue;
     }
     if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
-    if (c === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<') {
+    if (c === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<' && !inArithmetic(cmd, i)) {
       pushTok();
       let j = i + 2;
       const strip = cmd[j] === '-';
