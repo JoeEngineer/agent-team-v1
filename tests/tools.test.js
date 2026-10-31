@@ -50,7 +50,7 @@ const codexStop = {
   agent_transcript_path: '/t/ag1.jsonl', last_assistant_message: 'done',
 };
 
-test('codex events are logged to codex-events.jsonl only, without message', () => {
+test('codex events are logged raw to codex-events.jsonl and as one hook delegation, without message', () => {
   const dir = tmpProject();
   for (const ev of [codexPre, codexPost, codexStop]) {
     const r = run('log-delegation.js', ev, dir);
@@ -69,7 +69,12 @@ test('codex events are logged to codex-events.jsonl only, without message', () =
   eq(rows[2].last_assistant_message, 'done', 'last message');
   const raw = fs.readFileSync(path.join(dir, '.agent-team', 'logs', 'codex-events.jsonl'), 'utf8');
   assert(!raw.includes('"message"') && !raw.includes('gAAAA'), 'message must not be logged');
-  eq(readLog(dir, 'delegations.jsonl').length, 0, 'delegations.jsonl untouched');
+  const dels = readLog(dir, 'delegations.jsonl');
+  eq(dels.length, 1, 'one delegation line');
+  eq(dels[0].source, 'hook', 'delegation source');
+  eq(dels[0].task_name, 'worker1', 'delegation task_name');
+  const delRaw = fs.readFileSync(path.join(dir, '.agent-team', 'logs', 'delegations.jsonl'), 'utf8');
+  assert(!delRaw.includes('"message"') && !delRaw.includes('gAAAA'), 'message must not be logged in delegations');
 });
 
 test('codex Bash PostToolUse writes nothing', () => {

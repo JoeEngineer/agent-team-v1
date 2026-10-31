@@ -1,0 +1,368 @@
+// Codex logging: raw codex-events.jsonl plus normalized records in the shared
+// log files. Fixtures are trimmed, synthetic copies of live-captured shapes
+// (Codex CLI 0.166), with no task text.
+'use strict';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync, spawnSync } = require('child_process');
+const { ROOT, SCRIPTS, NO_MODELS_FILE, tmpProject, run, fakeGh, readLog, test, assert, eq } = require('./helpers');
+const lib = require(path.join(SCRIPTS, 'lib.js'));
+
+const SID = 'sess-1';
+const AID = 'agent-1';
+
+function hook(project, input, env) {
+  const r = run('log-delegation.js', { session_id: SID, turn_id: 'turn-1', cwd: project, model: 'gpt-test', permission_mode: 'bypassPermissions', ...input }, project, env);
+  eq(r.status, 0, 'hook exit');
+  return r;
+}
+
+const spawn = (over = {}) => ({
+  hook_event_name: 'PostToolUse',
+  tool_name: 'collaborationspawn_agent',
+  tool_input: { agent_type: 'implementer-medium', task_name: 'cd_7_a1', reasoning_effort: 'high', message: 'gAAAAAencrypted', fork_turns: 'all' },
+  tool_response: '{"task_name":"/root/cd_7_a1"}',
+  tool_use_id: 'call_1',
+  ...over,
+});
+
+function transcript(dir, { turns = 1, name = 'cd_7_a1', withTokens = true } = {}) {
+  const ev = (type, payload) => JSON.stringify({ timestamp: 't', type, payload });
+  const lines = [
+    ev('session_meta', { id: AID, agent_path: `/root/${name}`, source: { subagent: { thread_spawn: { agent_path: `/root/${name}` } } } }),
+    ev('session_meta', { id: SID, source: 'exec' }),
+    ev('turn_context', { turn_id: 'inherited', model: 'parent-model', effort: 'low' }),
+  ];
+  let cum = { input_tokens: 0, cached_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0, total_tokens: 0 };
+  for (let i = 1; i <= turns; i++) {
+    lines.push(ev('event_msg', { type: 'task_started', turn_id: `turn-${i}` }));
+    lines.push(ev('turn_context', { turn_id: `turn-${i}`, model: 'gpt-6.1-terra', effort: 'high' }));
+    if (withTokens) {
+      cum = {
+        input_tokens: cum.input_tokens + 1000 * i, cached_input_tokens: cum.cached_input_tokens + 400 * i,
+        output_tokens: cum.output_tokens + 50 * i, reasoning_output_tokens: cum.reasoning_output_tokens + 10 * i,
+        total_tokens: cum.total_tokens + 1050 * i,
+      };
+      lines.push(ev('event_msg', { type: 'token_count', info: { total_token_usage: cum, last_token_usage: {} } }));
+    }
+    lines.push(ev('event_msg', { type: 'task_complete', turn_id: `turn-${i}`, duration_ms: 1000 * i }));
+  }
+  const file = path.join(dir, `agent-${turns}-${withTokens}.jsonl`);
+  fs.writeFileSync(file, lines.join('\n') + '\n');
+  return file;
+}
+
+const stop = (project, file, over = {}) => ({
+  hook_event_name: 'SubagentStop',
+  agent_id: AID,
+  agent_type: 'implementer-medium',
+  agent_transcript_path: file,
+  stop_hook_active: false,
+  last_assistant_message: 'done\n```result-json\n{"status":"done"}\n```',
+  ...over,
+});
+
+const directorLine = (project, env = {}) =>
+  spawnSync('node', [path.join(SCRIPTS, 'log-event.js'), 'delegation', JSON.stringify({
+    card: 'TASK id=CD-7 type=implement attempt=1 tier=medium\nWHY routing table', tool: 'codex',
+    task_name: 'cd_7_a1', agent: 'implementer-medium', model: 'gpt-6.1-terra', tier: 'medium', effort: 'medium',
+  })], { cwd: project, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: project, CLAUDE_PLUGIN_ROOT: ROOT, ...env } });
+
+// --- raw log -----------------------------------------------------------------
+
+test('codex: raw events still logged for both prefixed and bare tool names, never the message', () => {
+  const p = tmpProject();
+  for (const name of ['collaborationfollowup_task', 'collaborationwait_agent', 'followup_task', 'wait_agent']) {
+    hook(p, { hook_event_name: 'PostToolUse', tool_name: name, tool_input: { target: 'x', message: 'SECRET' }, tool_response: '' });
+  }
+  const raw = readLog(p, 'codex-events.jsonl');
+  eq(raw.length, 4, 'raw lines');
+  assert(!JSON.stringify(raw).includes('SECRET'), 'message must not be logged');
+});
+
+test('codex: detectTool knows bare followup_task', () => {
+  eq(lib.detectTool({ tool_name: 'followup_task' }, {}), 'codex', 'followup_task');
+  eq(lib.detectTool({ tool_name: 'collaborationfollowup_task' }, {}), 'codex', 'prefixed');
+});
+
+// --- spawn fallback ----------------------------------------------------------
+
+test('codex: spawn writes a hook fallback delegation, tier from the agent name', () => {
+  const p = tmpProject();
+  hook(p, spawn());
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 1, 'one delegation');
+  eq(d[0].tool, 'codex', 'tool');
+  eq(d[0].kind, 'subagent', 'kind');
+  eq(d[0].source, 'hook', 'source');
+  eq(d[0].task_name, 'cd_7_a1', 'task_name');
+  eq(d[0].agent, 'implementer-medium', 'agent');
+  eq(d[0].effort, 'high', 'effort');
+  eq(d[0].tier, 'medium', 'tier');
+  eq(d[0].model_source, 'agent-name', 'model source');
+  assert(d[0].model && d[0].model !== 'inherited', 'model from the map');
+  assert(!JSON.stringify(d).includes('gAAAA'), 'message not logged');
+});
+
+test('codex: spawn reads model and effort from .codex/agents/<type>.toml when present', () => {
+  const p = tmpProject();
+  fs.mkdirSync(path.join(p, '.codex', 'agents'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.codex', 'agents', 'implementer-medium.toml'), 'name = "implementer-medium"\nmodel = "custom-model"\nmodel_reasoning_effort = "low"\n');
+  const input = spawn();
+  delete input.tool_input.reasoning_effort;
+  hook(p, input);
+  const d = readLog(p, 'delegations.jsonl')[0];
+  eq(d.model, 'custom-model', 'model');
+  eq(d.model_source, 'agent-file', 'source');
+  eq(d.effort, 'low', 'effort from toml');
+  eq(d.tier, 'medium', 'tier falls back to the name suffix');
+});
+
+test('codex: spawn with no agent_type or unknown type still logs, tier null', () => {
+  const p = tmpProject();
+  const input = spawn();
+  delete input.tool_input.agent_type;
+  hook(p, input);
+  const d = readLog(p, 'delegations.jsonl')[0];
+  eq(d.agent, null, 'agent');
+  eq(d.tier, null, 'tier');
+  eq(d.model, 'inherited', 'model');
+});
+
+test('codex: spawn is skipped when a delegation with that task_name exists (Director first)', () => {
+  const p = tmpProject();
+  const r = directorLine(p);
+  eq(r.status, 0, `log-event exit: ${r.stderr}`);
+  hook(p, spawn());
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 1, 'no fallback line');
+  eq(d[0].source, 'director', 'director line kept');
+  // one step past: a second spawn event for the same name still adds nothing
+  hook(p, spawn({ tool_use_id: 'call_2' }));
+  eq(readLog(p, 'delegations.jsonl').length, 1, 'still one');
+});
+
+test('codex: Director line after the hook fallback gives two lines (Coach dedupes)', () => {
+  const p = tmpProject();
+  hook(p, spawn());
+  directorLine(p);
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 2, 'both lines');
+  eq(d.map((x) => x.source).join(','), 'hook,director', 'order');
+});
+
+// --- completion --------------------------------------------------------------
+
+test('codex: SubagentStop writes a completion with tokens, model, effort, duration, linked to the Director card', () => {
+  const p = tmpProject();
+  directorLine(p);
+  const file = transcript(p);
+  hook(p, stop(p, file, { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl');
+  eq(c.length, 1, 'one completion');
+  eq(c[0].tool, 'codex', 'tool');
+  eq(c[0].task_name, 'cd_7_a1', 'task_name from agent_path');
+  eq(c[0].resolved_model, 'gpt-6.1-terra', 'last turn_context model');
+  eq(c[0].resolved_effort, 'high', 'last turn_context effort');
+  eq(c[0].tokens, 1050, 'tokens');
+  eq(c[0].tokens_detail.input, 1000, 'input');
+  eq(c[0].tokens_detail.cached_input, 400, 'cached');
+  eq(c[0].tokens_detail.output, 50, 'output');
+  eq(c[0].tokens_detail.reasoning_output, 10, 'reasoning');
+  eq(c[0].duration_ms, 1000, 'duration');
+  eq(c[0].report_source, 'hook-input', 'report source');
+  eq(c[0].result.status, 'done', 'result');
+  eq(c[0].task.id, 'CD-7', 'linked task');
+  eq(c[0].task.attempt, 1, 'attempt');
+  eq(c[0].tier, 'medium', 'tier from delegation');
+});
+
+test('codex: SubagentStop is deduped; a second report for the same agent is a new line', () => {
+  const p = tmpProject();
+  const file = transcript(p);
+  hook(p, stop(p, file, { turn_id: 'turn-1' }));
+  hook(p, stop(p, file, { turn_id: 'turn-1' }));
+  eq(readLog(p, 'completions.jsonl').length, 1, 'duplicate dropped');
+  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: 'again' }));
+  eq(readLog(p, 'completions.jsonl').length, 2, 'new report logged');
+});
+
+test('codex: resumed agent counts only the latest turn tokens', () => {
+  const p = tmpProject();
+  const file = transcript(p, { turns: 2 });
+  hook(p, stop(p, file, { turn_id: 'turn-2' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.tokens, 2100, 'turn 2 only (cumulative 3150 minus 1050)');
+  eq(c.tokens_detail.input, 2000, 'input delta');
+  eq(c.duration_ms, 2000, 'last task_complete duration');
+  eq(c.resolved_model, 'gpt-6.1-terra', 'last turn_context');
+});
+
+test('codex: no token_count events gives null tokens', () => {
+  const p = tmpProject();
+  const file = transcript(p, { withTokens: false });
+  hook(p, stop(p, file, { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.tokens, null, 'tokens');
+  eq(c.tokens_detail, null, 'detail');
+  eq(c.resolved_model, 'gpt-6.1-terra', 'model still read');
+});
+
+test('codex: missing transcript logs the completion from last_assistant_message only', () => {
+  const p = tmpProject();
+  hook(p, stop(p, path.join(p, 'nope.jsonl')));
+  const c = readLog(p, 'completions.jsonl');
+  eq(c.length, 1, 'completion');
+  eq(c[0].task_name, null, 'task_name');
+  eq(c[0].resolved_model, null, 'model');
+  eq(c[0].tokens, null, 'tokens');
+  eq(c[0].duration_ms, null, 'duration');
+  eq(c[0].result.status, 'done', 'result from message');
+  // absent transcript path and empty message are also fine
+  hook(p, stop(p, undefined, { agent_id: 'a2', agent_transcript_path: undefined, last_assistant_message: '' }));
+  eq(readLog(p, 'completions.jsonl').length, 2, 'second completion');
+});
+
+test('codex: a review block in the final message writes one reviews.jsonl line with tool codex', () => {
+  const p = tmpProject();
+  const file = transcript(p);
+  const msg = 'ok\n```review-json\n{"verdict":"approve","findings":[]}\n```';
+  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: msg }));
+  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: msg }));
+  const r = readLog(p, 'reviews.jsonl');
+  eq(r.length, 1, 'one review (deduped)');
+  eq(r[0].tool, 'codex', 'tool');
+  eq(r[0].verdict, 'approve', 'verdict');
+  eq(r[0].agent_id, AID, 'agent id');
+  eq(readLog(p, 'completions.jsonl')[0].review.verdict, 'approve', 'completion carries review');
+});
+
+// --- follow-up ---------------------------------------------------------------
+
+test('codex: follow-up to a known task_name writes one resume fallback, never the message', () => {
+  const p = tmpProject();
+  hook(p, spawn());
+  const fu = { hook_event_name: 'PostToolUse', tool_name: 'collaborationfollowup_task', tool_input: { target: 'cd_7_a1', message: 'SECRET' }, tool_response: '', tool_use_id: 'call_f' };
+  hook(p, fu);
+  hook(p, fu);
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 2, 'spawn + one resume');
+  eq(d[1].kind, 'resume', 'kind');
+  eq(d[1].source, 'hook', 'source');
+  eq(d[1].task_name, 'cd_7_a1', 'task_name');
+  eq(d[1].tool, 'codex', 'tool');
+  assert(!JSON.stringify(d).includes('SECRET'), 'message not logged');
+});
+
+test('codex: follow-up to an unknown target writes no delegation line', () => {
+  const p = tmpProject();
+  hook(p, { hook_event_name: 'PostToolUse', tool_name: 'collaborationfollowup_task', tool_input: { target: 'ghost' }, tool_response: '', tool_use_id: 'call_g' });
+  eq(readLog(p, 'delegations.jsonl').length, 0, 'nothing');
+  eq(readLog(p, 'codex-events.jsonl').length, 1, 'raw still logged');
+});
+
+// --- merges ------------------------------------------------------------------
+
+test('codex: Bash gh pr merge writes a merge line with tool codex', () => {
+  const p = tmpProject();
+  hook(p, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'gh pr merge 5 --squash' }, tool_response: 'ok', tool_use_id: 'exec-1' },
+    fakeGh(JSON.stringify({ number: 5, state: 'MERGED', autoMergeRequest: null })));
+  const m = readLog(p, 'merges.jsonl');
+  eq(m.length, 1, 'one merge');
+  eq(m[0].tool, 'codex', 'tool');
+  eq(m[0].outcome, 'merged', 'outcome');
+  hook(p, { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command: 'ls' }, tool_response: '', tool_use_id: 'exec-2' });
+  eq(readLog(p, 'merges.jsonl').length, 1, 'other commands add nothing');
+});
+
+// --- project dir -------------------------------------------------------------
+
+test('codex: with CLAUDE_PROJECT_DIR unset, a hook run from a subfolder logs at the git root', () => {
+  const p = tmpProject();
+  const sub = path.join(p, 'sub', 'deeper');
+  fs.mkdirSync(sub, { recursive: true });
+  const r = run('log-delegation.js', { ...spawn(), session_id: SID, turn_id: 't', cwd: sub }, '');
+  eq(r.status, 0, 'exit');
+  const real = fs.realpathSync(p);
+  assert(fs.existsSync(path.join(real, '.agent-team', 'logs', 'delegations.jsonl')), 'log at root');
+  assert(!fs.existsSync(path.join(sub, '.agent-team')), 'nothing in the subfolder');
+});
+
+test('codex: projectDir falls back to cwd outside git, honours CLAUDE_PROJECT_DIR', () => {
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-nogit-'));
+  const saved = process.env.CLAUDE_PROJECT_DIR;
+  delete process.env.CLAUDE_PROJECT_DIR;
+  try {
+    // A temp folder is not inside a repo here; if it somehow is, the git root is still returned.
+    let inRepo = true;
+    try { execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: plain, stdio: 'ignore' }); } catch { inRepo = false; }
+    if (!inRepo) eq(lib.projectDir({ cwd: plain }), plain, 'fallback to cwd');
+    process.env.CLAUDE_PROJECT_DIR = 'X:/forced';
+    eq(lib.projectDir({ cwd: plain }), 'X:/forced', 'env wins');
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
+  }
+});
+
+// --- log-event.js -------------------------------------------------------------
+
+function logEvent(project, kind, data, env = {}) {
+  return spawnSync('node', [path.join(SCRIPTS, 'log-event.js'), kind, JSON.stringify(data)], {
+    cwd: project, encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PROJECT_DIR: project, CLAUDE_PLUGIN_ROOT: ROOT, AGENT_TEAM_MODELS: NO_MODELS_FILE, ...env },
+  });
+}
+
+test('log-event: delegation parses the card, WHY, tool and source', () => {
+  const p = tmpProject();
+  const r = logEvent(p, 'delegation', { card: 'TASK id=X-1 type=implement attempt=2 tier=small\nWHY cheap and clear', task_name: 'x_1_a2', agent: 'implementer-small' }, { AGENT_TEAM_TOOL: 'codex' });
+  eq(r.status, 0, r.stderr);
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.length, 1, 'one line');
+  eq(d[0].tool, 'codex', 'tool from env');
+  eq(d[0].source, 'director', 'source');
+  eq(d[0].task.id, 'X-1', 'task id');
+  eq(d[0].task.attempt, 2, 'attempt number');
+  eq(d[0].task.why, 'cheap and clear', 'why');
+  eq(d[0].task_name, 'x_1_a2', 'task_name');
+  assert(d[0].card === undefined, 'raw card not stored');
+});
+
+test('log-event: tool defaults to unknown, why field works, explicit tool wins, no card is fine', () => {
+  const p = tmpProject();
+  logEvent(p, 'delegation', { card: 'TASK id=X-1', why: 'because' }, { AGENT_TEAM_TOOL: '' });
+  logEvent(p, 'delegation', { tool: 'claude', task_name: 'n' });
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d[0].tool, 'unknown', 'default');
+  eq(d[0].task.why, 'because', 'why field');
+  eq(d[1].tool, 'claude', 'explicit');
+  eq(JSON.stringify(d[1].task), '{}', 'empty task');
+});
+
+test('log-event: review goes to reviews.jsonl in the logReview shape', () => {
+  const p = tmpProject();
+  const r = logEvent(p, 'review', { card: 'TASK id=X-2 type=review reviewed_task=X-1 pr=9 attempt=1', verdict: 'approve', agent_id: 'r1', tool: 'codex', model: 'gpt-6.1-sol' });
+  eq(r.status, 0, r.stderr);
+  const v = readLog(p, 'reviews.jsonl');
+  eq(v.length, 1, 'one review');
+  eq(v[0].task_id, 'X-1', 'reviewed task');
+  eq(v[0].pr, '9', 'pr');
+  eq(v[0].attempt, 1, 'attempt');
+  eq(v[0].reviewer_model, 'gpt-6.1-sol', 'reviewer model');
+  eq(v[0].verdict, 'approve', 'verdict');
+  eq(v[0].tool, 'codex', 'tool');
+  eq(v[0].source, 'director', 'source');
+});
+
+test('log-event: existing kinds unchanged and bad input rejected', () => {
+  const p = tmpProject();
+  eq(logEvent(p, 'note', { text: 'hi' }).status, 0, 'note ok');
+  const n = readLog(p, 'notes.jsonl');
+  eq(n[0].text, 'hi', 'note body');
+  assert(n[0].source === undefined && n[0].tool === undefined, 'no extra fields');
+  eq(logEvent(p, 'bogus', {}).status, 1, 'unknown kind');
+  const bad = spawnSync('node', [path.join(SCRIPTS, 'log-event.js'), 'note', '{nope'], { cwd: p, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: p } });
+  eq(bad.status, 1, 'bad JSON');
+});

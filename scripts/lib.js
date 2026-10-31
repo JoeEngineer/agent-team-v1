@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { execFileSync } = require('child_process');
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..');
 
@@ -16,8 +17,18 @@ function readStdin() {
   }
 }
 
+// Claude sets CLAUDE_PROJECT_DIR. Codex does not, and its hooks run from the
+// session cwd (possibly a subfolder), so use the git root of that cwd.
 function projectDir(input) {
-  return process.env.CLAUDE_PROJECT_DIR || (input && input.cwd) || process.cwd();
+  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  const cwd = (input && typeof input.cwd === 'string' && input.cwd) || process.cwd();
+  try {
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    }).trim();
+    if (top) return top;
+  } catch { /* not a git folder, or git missing */ }
+  return cwd;
 }
 
 function logDir(input) {
@@ -253,7 +264,7 @@ function findPrMerges(cmd) {
 }
 
 // Which tool sent this hook event: 'claude' (default) or 'codex'.
-const CODEX_ONLY_TOOLS = new Set(['send_input', 'resume_agent', 'wait_agent', 'close_agent', 'list_agents', 'apply_patch']);
+const CODEX_ONLY_TOOLS = new Set(['send_input', 'resume_agent', 'followup_task', 'wait_agent', 'close_agent', 'list_agents', 'apply_patch']);
 function detectTool(input, env = process.env) {
   const forced = env && env.AGENT_TEAM_TOOL;
   if (forced === 'claude' || forced === 'codex') return forced;
