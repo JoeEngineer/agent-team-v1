@@ -2,6 +2,7 @@
 name: implementer
 description: Writes and changes code against a clear spec — features, fixes, refactors, tests. Use when the task card says what "done" looks like. Not for open design questions (use architect).
 tools: Read, Grep, Glob, Bash, Edit, Write
+tier: medium
 model: sonnet
 effort: medium
 ---

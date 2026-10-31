@@ -4,16 +4,17 @@ Every delegation prompt — subagent, session, or bridge — starts with these t
 
 ```
 TASK id=AUTH-14 type=implement difficulty=medium milestone=auth attempt=1 branch=task/AUTH-14 base=milestone/auth
-WHY sonnet/medium per routing table; clear spec, follows existing handler pattern
+WHY medium tier (sonnet) / medium effort per routing table; clear spec, follows existing handler pattern
 ```
 
 - `TASK` line: space-separated `key=value`, no spaces inside values.
   - Required: `id`, `type`, `difficulty`, `milestone`, `attempt`.
+  - Optional: `tier` (`small|medium|large|xlarge`), the tier chosen from the routing table.
   - Also required for any task that runs in a worktree: `base` (the branch to start from, usually `milestone/<slug>`).
   - Optional: `branch`, `pr`, `issue`.
   - `type`: one of `research`, `breakdown`, `design`, `implement`, `fix`, `test`, `docs`, `review`, `coach`.
   - `difficulty`: `easy`, `medium`, `hard`.
-- `WHY` line: free text — why this agent/model/effort. On escalations, say which ladder step.
+- `WHY` line: free text — why this agent/tier/effort. On escalations, say which ladder step.
 
 Then the brief:
 
