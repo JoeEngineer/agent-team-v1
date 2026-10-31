@@ -1,4 +1,4 @@
-# Status
+||||| 1 | in progress ||||| 1 | in progress ||||| 1 | in progress |||| medium (sonnet) / high | 2 | changes requested || #50 |||||| merged || #47 |||||| merged || #51 |||||| merged || #49 |||||| merged || #48 # Status
 
 _Maintained by the Director. Last updated: 2026-10-31_
 
@@ -55,6 +55,12 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - Per-spawn `reasoning_effort` applies when the agent file pins only `model`.
 - SessionStart `additionalContext` reaches the model.
 - In the unelevated `workspace-write` sandbox `.git` is read-only (no worktree or commit). Needs a re-check under the elevated sandbox (CD-16).
+
+## Follow-ups
+
+- CD-3 review: the xlarge `auto: false` test also has `billing: credits`, so it doesn't isolate the tier rule (minor).
+- CD-8 review: `.codex/agents/` is not gitignored yet; CD-12 adds it with team-init.
+- Reviewer verdicts for CD-3, CD-4, CD-8 and CD-9 were not captured by the logger (the bug CD-5 fixes); the Director logged notes, and CD-6's backfill should recover them.
 
 ## Blocked
 
