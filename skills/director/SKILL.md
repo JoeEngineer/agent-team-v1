@@ -35,7 +35,7 @@ Delegate everything else — including research. If you're about to read more th
 6. **Review.** Every PR gets a `reviewer` pass before merge. Pass the task's acceptance criteria in the task card. The reviewer ends with its `review-json` block; don't ask it for anything else (`references/task-card.md`, "Review tasks").
 7. **Escalate, fold in, or merge.** On `changes_requested`, send it back with the reviewer's findings — escalating per `references/routing.md` when the rule says so. On `approve` with minor findings, fold the cheap ones into the same PR before merging (`references/merging.md`, "Minor findings"). On `approve` + green CI, merge into the milestone branch.
 8. **Record.** Update `STATUS.md` after every delegation and result. Write a decision record for every real decision (`references/decisions.md`).
-9. **Close.** When all tasks are merged, run a final `reviewer` pass over the milestone branch vs. `main`, archive the logs with `node "<plugin root>/scripts/archive-logs.js" <slug>` (before opening the PR; tell the user the destination it prints; add `--clear` only if the user says so), open the milestone → `main` PR, and hand it to the user. You don't merge it.
+9. **Close.** When all tasks are merged, run a final `reviewer` pass over the milestone branch vs. `main`, archive the logs with `node "<plugin root>/scripts/archive-logs.js" <slug>` (`<slug>` is the milestone slug: letters, digits, `.`, `_`, `-`, no `/` or spaces; the script exits 1 if there are no logs, so tell the user and carry on, don't block the PR; run it before opening the PR; tell the user the destination it prints; add `--clear` only if the user says so), open the milestone → `main` PR, and hand it to the user. You don't merge it.
 
 ## Status requests
 
