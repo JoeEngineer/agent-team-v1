@@ -17,22 +17,22 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-3 | `models.js up/down` + routing.md | implementer | small (haiku) / medium | 1 | merged | #29 | #48 |
 | CD-4 | Extract record helpers to `records.js` | implementer | medium (sonnet) / medium | 1 | merged | #30 | #49 |
 | CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | 1 | merged | #31 | #54 |
-| CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | 1 | in review | #32 | #56 |
+| CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | 1 | merged | #32 | #56 |
 | CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | 1 | merged | #33 | #55 |
 | CD-8 | Codex agent TOML generator | implementer | medium (sonnet) / medium | 1 | merged | #34 | #51 |
 | CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | merged | #35 | #47 |
 | CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | merged | #36 | #53 |
-| CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | 1 | in progress | #37 | |
-| CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | | planned | #38 | |
+| CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | 1 | merged | #37 | #60 |
+| CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | 1 | in progress | #38 | |
 | CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | merged | #39 | #50 |
-| CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / medium | 1 | in progress | #40 | |
-| CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | 1 | in progress | #41 | |
+| CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / high | 3 | merged | #40 | #59 |
+| CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | 1 | merged | #41 | #58 |
 | CD-16 | Codex live test harness | implementer | medium (sonnet) / low | | planned | #42 | |
 | CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | | planned | #43 | |
 | CD-18 | README + 0.4.0 | implementer | small (haiku) / low | | planned | #44 | |
 | CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | | planned | #45 | |
 | CD-20 | Milestone final review | reviewer | large (opus) / high | | planned | #46 | |
-| CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | | planned | #57 | |
+| CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | in review | #57 | #61 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
 
@@ -64,10 +64,12 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - Reviewer verdicts for CD-3, CD-4, CD-8 and CD-9 were not captured by the logger (the bug CD-5 fixes); the Director logged notes, and CD-6's backfill should recover them.
 - CD-10 review: note in 0007 that SessionStart also fires on resume/clear/compact (batched into CD-17).
 - CD-7: the Coach must dedupe delegations by `task_name` + `task.attempt`, preferring `source: "director"` (CD-15).
+- Batched into CD-17 (docs): 0006 should note that plugin-hook logging is skipped while project hooks are untrusted; `references/codex.md` "shell tool is named `Bash`" wording.
+- CD-11 review: `codex-hooks.js` merge collapses interleaved agent-team groups (edge case; generated files never interleave).
 
 ## Blocked
 
-- CD-21 waits for CD-6 and CD-15 (shared files with PR #52).
+- (none)
 
 ## Needs the user
 
