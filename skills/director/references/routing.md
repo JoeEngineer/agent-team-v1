@@ -51,7 +51,7 @@ The table and ladder name tiers (small, medium, large; xlarge is opt-in). Each t
 - To get the model for a tier, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/models.js" resolve <tier> --tool claude`.
 - xlarge, and any entry with `enabled: false` or `billing: "credits"`, is never chosen by the routing table or the ladder.
 - A tool with no entries in the map is never routed to.
-- If a mapped model is missing at run time, fall back one tier down (`node "${CLAUDE_PLUGIN_ROOT}/scripts/models.js" down <tier> --tool <t>`), log it with `node "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.js" tier_fallback '{"task":…,"from":…,"to":…,"tool":…,"reason":…}'`, and tell the user. Never fall back up.
+- If a mapped model is missing at run time, fall back one tier down (`node "${CLAUDE_PLUGIN_ROOT}/scripts/models.js" down <tier> --tool <t>`), log it with `node "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.js" tier_fallback '{"task":…,"from":…,"to":…,"tool":…,"reason":…}'`, and tell the user. Never fall back up. In PowerShell, or for JSON with quotes or newlines, pass `-` and pipe the JSON on stdin (see `codex.md`).
 - Agent files' `model:` headers match the default map. When `show` reports `differs_from_default` for a tier, pass `model` explicitly on the delegation.
 - When passing `model` to Claude's Agent tool, use the map's model for the tier.
 

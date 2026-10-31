@@ -47,7 +47,22 @@ node "<plugin root>/scripts/log-event.js" delegation - <<'EOF'
 {"tool":"codex","kind":"resume","task_name":"cd_7_a1","card":"TASK id=CD-7 ... attempt=2 ...\nWHY ...","agent":"implementer-medium","tier":"medium","effort":"medium","vehicle":"subagent"}
 EOF
 ```
-- Escalation: `node "<plugin root>/scripts/models.js" up <tier> --tool codex` (or `down`). If the map has no Codex model for the routed tier, use `models.js down`, spawn at that tier and log it: `log-event.js tier_fallback '{"task":"X-1","from":"large","to":"medium","tool":"codex","reason":"no model mapped"}'`.
+- Escalation: `node "<plugin root>/scripts/models.js" up <tier> --tool codex` (or `down`). If the map has no Codex model for the routed tier, use `models.js down`, spawn at that tier and log it with the stdin form:
+
+```
+node "<plugin root>/scripts/log-event.js" tier_fallback - <<'EOF'
+{"task":"X-1","from":"large","to":"medium","tool":"codex","reason":"no model mapped"}
+EOF
+```
+
+In PowerShell (Windows PowerShell 5.1), pipe the same JSON from a single-quoted here-string:
+
+```
+@'
+{"task":"X-1","from":"large","to":"medium","tool":"codex","reason":"no model mapped"}
+'@ | node "<plugin root>/scripts/log-event.js" tier_fallback -
+```
+
 - xlarge only with the user's yes, and only if its agent file exists.
 
 ## Worktrees

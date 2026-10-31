@@ -31,6 +31,6 @@ Which one, and the main reason.
 What this makes easier/harder; what to watch for.
 ```
 
-After writing it, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.js" decision '{"id":"0007","task":"AUTH-3","decided_by":"director","model":"opus","effort":"high","title":"..."}'` so it also lands in `.agent-team/logs/decisions.jsonl` for the Coach.
+After writing it, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.js" decision '{"id":"0007","task":"AUTH-3","decided_by":"director","model":"opus","effort":"high","title":"..."}'` so it also lands in `.agent-team/logs/decisions.jsonl` for the Coach. In PowerShell, or for JSON with quotes or newlines, pass `-` and pipe the JSON on stdin (see `codex.md`).
 
 Use the model id from your own system context for `model`. If you don't know your effort level, write `unknown` — don't guess.
