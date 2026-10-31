@@ -179,6 +179,63 @@ test('codex: SubagentStop writes a completion with tokens, model, effort, durati
   eq(c[0].tier, 'medium', 'tier from delegation');
 });
 
+const delegationLine = (project, data) => {
+  const r = logEvent(project, 'delegation', { tool: 'codex', task_name: 'cd_7_a1', agent: 'implementer-medium', ...data });
+  eq(r.status, 0, r.stderr);
+};
+
+test('codex: with both a hook line and a Director line, the completion links to the Director card and keeps its routing fields', () => {
+  const p = tmpProject();
+  hook(p, spawn());
+  delegationLine(p, { card: 'TASK id=CD-7 type=implement attempt=2 tier=large', model: 'director-model', effort: 'low', tier: 'large', tier_source: 'card' });
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d.map((x) => x.source).join(','), 'hook,director', 'precondition: both lines present');
+  hook(p, stop(p, transcript(p), { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.task.id, 'CD-7', 'linked to the Director card, not the hook line (empty task)');
+  eq(c.task.attempt, 2, 'attempt from the card');
+  eq(c.model, 'director-model', 'Director model, not the hook line model');
+  eq(c.effort, 'low', 'Director effort, not the hook line effort (high)');
+  eq(c.tier, 'large', 'Director tier, not the hook line tier (medium)');
+  eq(c.tier_source, 'card', 'Director tier source');
+});
+
+test('codex: a Director line without model/effort/tier is filled from the hook fallback line', () => {
+  const p = tmpProject();
+  hook(p, spawn());
+  delegationLine(p, { card: 'TASK id=CD-7 type=implement attempt=1' });
+  const d = readLog(p, 'delegations.jsonl');
+  eq(d[1].source, 'director', 'precondition: the Director line is the latest');
+  assert(d[1].model === undefined && d[1].effort === undefined && d[1].tier === undefined, 'precondition: Director line has no routing fields');
+  hook(p, stop(p, transcript(p), { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.task.id, 'CD-7', 'still the Director card');
+  eq(c.model, d[0].model, 'model from the hook line');
+  eq(c.effort, 'high', 'effort from the hook line');
+  eq(c.tier, 'medium', 'tier from the hook line');
+  eq(c.tier_source, 'agent-name', 'tier source from the hook line');
+});
+
+test('codex: with no hook line, tier comes from the task card before the resolved model', () => {
+  const p = tmpProject();
+  delegationLine(p, { card: 'TASK id=CD-7 type=implement attempt=1 tier=small' });
+  eq(readLog(p, 'delegations.jsonl').length, 1, 'precondition: only the Director line');
+  hook(p, stop(p, transcript(p), { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.resolved_model, 'gpt-6.1-terra', 'the resolved model would give medium');
+  eq(c.tier, 'small', 'task.tier wins over the tier of the resolved model');
+  eq(c.tier_source, 'task-card', 'source');
+});
+
+test('codex: with no hook line and no task.tier, the tier is derived from the resolved model', () => {
+  const p = tmpProject();
+  delegationLine(p, { card: 'TASK id=CD-7 type=implement attempt=1' });
+  hook(p, stop(p, transcript(p), { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.tier, 'medium', 'tier of gpt-6.1-terra');
+  eq(c.tier_source, 'resolved', 'source');
+});
+
 test('codex: SubagentStop is deduped; a second report for the same agent is a new line', () => {
   const p = tmpProject();
   const file = transcript(p);
@@ -290,20 +347,73 @@ test('codex: with CLAUDE_PROJECT_DIR unset, a hook run from a subfolder logs at 
   assert(!fs.existsSync(path.join(sub, '.agent-team')), 'nothing in the subfolder');
 });
 
+// Run fn with CLAUDE_PROJECT_DIR unset and, if given, GIT_CEILING_DIRECTORIES set.
+function withEnv(set, fn) {
+  const saved = {};
+  for (const k of Object.keys(set)) {
+    saved[k] = process.env[k];
+    if (set[k] === undefined) delete process.env[k]; else process.env[k] = set[k];
+  }
+  try { return fn(); } finally {
+    for (const k of Object.keys(saved)) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+  }
+}
+
 test('codex: projectDir falls back to cwd outside git, honours CLAUDE_PROJECT_DIR', () => {
-  const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-nogit-'));
-  const saved = process.env.CLAUDE_PROJECT_DIR;
-  delete process.env.CLAUDE_PROJECT_DIR;
-  try {
-    // A temp folder is not inside a repo here; if it somehow is, the git root is still returned.
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-nogit-'));
+  const plain = path.join(parent, 'plain');
+  fs.mkdirSync(plain);
+  // Git must not look above the parent: the precondition below fails loudly if
+  // the folder is still inside a repo (it never skips the assertion).
+  withEnv({ CLAUDE_PROJECT_DIR: undefined, GIT_CEILING_DIRECTORIES: parent }, () => {
     let inRepo = true;
     try { execFileSync('git', ['rev-parse', '--show-toplevel'], { cwd: plain, stdio: 'ignore' }); } catch { inRepo = false; }
-    if (!inRepo) eq(lib.projectDir({ cwd: plain }), plain, 'fallback to cwd');
+    assert(!inRepo, `precondition: ${plain} must not be inside a git repo`);
+    eq(lib.projectDir({ cwd: plain }), plain, 'fallback to cwd');
     process.env.CLAUDE_PROJECT_DIR = 'X:/forced';
     eq(lib.projectDir({ cwd: plain }), 'X:/forced', 'env wins');
-  } finally {
-    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
-  }
+  });
+});
+
+test('codex: projectDir remembers the git lookup per cwd within a process', () => {
+  const p = tmpProject();
+  const sub = path.join(p, 'a', 'b');
+  fs.mkdirSync(sub, { recursive: true });
+  withEnv({ CLAUDE_PROJECT_DIR: undefined, GIT_CEILING_DIRECTORIES: path.dirname(p) }, () => {
+    const root = lib.projectDir({ cwd: sub });
+    assert(root.endsWith(path.basename(p)), `first call finds the git root, got ${root}`);
+    // Remove the repo: a fresh lookup would now fall back to the subfolder.
+    fs.rmSync(path.join(p, '.git'), { recursive: true, force: true });
+    eq(lib.projectDir({ cwd: sub }), root, 'second call is served from memory (no new git spawn)');
+    // A different cwd is looked up separately.
+    eq(lib.projectDir({ cwd: p }), p, 'other cwd is its own entry (no repo any more)');
+  });
+});
+
+test('codex: a plugin-hook event is ignored when the project hooks file runs the shim; the shim itself still logs', () => {
+  const p = tmpProject();
+  fs.mkdirSync(path.join(p, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.codex', 'hooks.json'), JSON.stringify({ hooks: { SubagentStop: [{ hooks: [{ type: 'command', command: 'node -e "..." log-delegation # agent-team-hook.js' }] }] } }));
+  // plugin hook: AGENT_TEAM_HOOK_SOURCE unset
+  hook(p, spawn(), { AGENT_TEAM_HOOK_SOURCE: '' });
+  eq(readLog(p, 'delegations.jsonl').length, 0, 'plugin copy skipped: no delegation');
+  eq(readLog(p, 'codex-events.jsonl').length, 0, 'plugin copy skipped: no raw event');
+  // one step past: the same event through the project hook is logged
+  hook(p, spawn(), { AGENT_TEAM_HOOK_SOURCE: 'project' });
+  eq(readLog(p, 'delegations.jsonl').length, 1, 'project hook logs');
+  eq(readLog(p, 'codex-events.jsonl').length, 1, 'project hook logs raw event');
+});
+
+test('codex: a plugin-hook event is logged when the project hooks file does not mention the shim', () => {
+  const p = tmpProject();
+  fs.mkdirSync(path.join(p, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(p, '.codex', 'hooks.json'), JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'echo user hook' }] }] } }));
+  hook(p, spawn(), { AGENT_TEAM_HOOK_SOURCE: '' });
+  eq(readLog(p, 'delegations.jsonl').length, 1, 'logged');
+  // and with no hooks file at all
+  const q = tmpProject();
+  hook(q, spawn(), { AGENT_TEAM_HOOK_SOURCE: '' });
+  eq(readLog(q, 'delegations.jsonl').length, 1, 'logged without a hooks file');
 });
 
 // --- log-event.js -------------------------------------------------------------

@@ -19,16 +19,23 @@ function readStdin() {
 
 // Claude sets CLAUDE_PROJECT_DIR. Codex does not, and its hooks run from the
 // session cwd (possibly a subfolder), so use the git root of that cwd.
+// The git lookup costs a process spawn (~60 ms), so the answer is remembered per
+// cwd for the life of this process: a hook run is short, and a folder does not
+// become a repo mid-run.
+const GIT_ROOTS = new Map();
 function projectDir(input) {
   if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
   const cwd = (input && typeof input.cwd === 'string' && input.cwd) || process.cwd();
+  if (GIT_ROOTS.has(cwd)) return GIT_ROOTS.get(cwd);
+  let found = cwd;
   try {
     const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
     }).trim();
-    if (top) return top;
+    if (top) found = top;
   } catch { /* not a git folder, or git missing */ }
-  return cwd;
+  GIT_ROOTS.set(cwd, found);
+  return found;
 }
 
 function logDir(input) {

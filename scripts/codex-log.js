@@ -115,6 +115,35 @@ function latestDelegation(input, name) {
     records.findDelegation(input, hasTaskName(name));
 }
 
+const lacking = (v) => v == null || v === '' || v === 'inherited' || v === 'unknown';
+
+// The delegation a completion links to. A Director line may lack model, effort
+// or tier (it only knows what the Director passed); fill those from the hook
+// fallback line for the same task_name, then tier from the task card, so the
+// completion keeps its routing fields. The tier is derived from the resolved
+// model only after this (see onSubagentStop).
+function linkedDelegation(input, name) {
+  const d = latestDelegation(input, name);
+  if (!d || d.source !== 'director') return d;
+  if (!lacking(d.model) && !lacking(d.effort) && !lacking(d.tier)) return d;
+  const hook = records.findDelegation(input, (r) => r.task_name === name && r.source === 'hook');
+  const out = { ...d };
+  if (hook) {
+    if (lacking(out.model) && !lacking(hook.model)) { out.model = hook.model; out.model_source = hook.model_source; }
+    if (lacking(out.effort) && !lacking(hook.effort)) { out.effort = hook.effort; out.effort_source = hook.effort_source; }
+    if (lacking(out.tier) && hook.tier != null) { out.tier = hook.tier; out.tier_source = hook.tier_source; }
+  }
+  if (lacking(out.tier) && d.task && models.TIERS.includes(d.task.tier)) {
+    out.tier = d.task.tier;
+    out.tier_source = 'task-card';
+  }
+  if (out.tier && !out.billing) {
+    const e = models.entry(tierMap(), 'codex', out.tier);
+    if (e && e.billing) out.billing = e.billing;
+  }
+  return out;
+}
+
 function onSpawn(input) {
   const ti = input.tool_input || {};
   const name = ti.task_name;
@@ -231,7 +260,7 @@ function onSubagentStop(input) {
   const agentId = input.agent_id || null;
   const key = `stop-${agentId || 'none'}-${input.turn_id || 'none'}-${records.shortHash(report || 'none')}`;
   if (!records.claimOnce(input, key)) return;
-  const delegation = latestDelegation(input, t.taskName);
+  const delegation = linkedDelegation(input, t.taskName);
   const resolvedModel = t.model || null;
   const map = tierMap();
   let tier = delegation && delegation.tier != null ? delegation.tier : null;
@@ -276,9 +305,23 @@ function normalized(input) {
   if (FOLLOWUP_TOOL.test(tool)) return onFollowup(input);
 }
 
+// True when this project's .codex/hooks.json calls the agent-team shim.
+function projectHooksInstalled(input) {
+  try {
+    const text = fs.readFileSync(path.join(lib.projectDir(input), '.codex', 'hooks.json'), 'utf8');
+    return text.includes('agent-team-hook.js');
+  } catch {
+    return false;
+  }
+}
+
 function handle(input) {
   try {
     if (!input || typeof input !== 'object') return;
+    // Project hooks win: if the project's hooks file runs the shim, this event
+    // is (or will be) logged through it. Skip the plugin copy so a CLI that
+    // runs both does not log twice.
+    if (process.env.AGENT_TEAM_HOOK_SOURCE !== 'project' && projectHooksInstalled(input)) return;
     try { rawLog(input); } catch { /* keep going */ }
     normalized(input);
   } catch { /* hooks must never break a session */ }
