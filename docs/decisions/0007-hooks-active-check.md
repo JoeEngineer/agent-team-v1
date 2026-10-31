@@ -18,7 +18,8 @@ way for a session to learn that the hooks are running. See
   Verified on Codex CLI 0.166: SessionStart `additionalContext` is injected.
 - It also writes `.agent-team/logs/.pending/hooks-alive.json`
   `{ts, tool, guidance_version, session_id}`, but only when `.agent-team/`
-  already exists, so unrelated repos get no new folders. If Codex (or a future
+  already exists, so unrelated repos get no new folders. `team-init` already
+  creates `.agent-team/logs/`, so the marker is written once team-init has run. If Codex (or a future
   version) does not inject `additionalContext`, this marker file is the
   fallback check. A non-git project works the same: nothing here needs git.
 - SessionStart has no matcher, so it also fires on resume, clear and compact.
