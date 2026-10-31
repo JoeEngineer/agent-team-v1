@@ -86,20 +86,21 @@ function checkGitPush(args, cwd) {
 }
 
 // `git add -A` / `git add .` would commit agent worktrees under .claude/worktrees/
-// as gitlinks. Block it only while that folder exists and isn't ignored.
+// or .agent-team/worktrees/ as gitlinks. Block it only while that folder exists and isn't ignored.
 function checkGitAdd(args, cwd) {
   const all = args.some((a) => a === '-A' || a === '--all' || a === '.' || a === ':/' || /^-[a-zA-Z]*A/.test(a));
   if (!all) return;
   const git = (...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   let top;
   try { top = git('rev-parse', '--show-toplevel'); } catch { return; }
-  const wt = path.join(top, '.claude', 'worktrees');
-  if (!fs.existsSync(wt)) return;
-  try {
-    git('-C', top, 'check-ignore', '-q', '.claude/worktrees/');
-    return; // ignored, so -A can't pick it up
-  } catch { /* not ignored */ }
-  block('`git add -A` / `git add .` while `.claude/worktrees/` exists and isn\'t in .gitignore — it would commit agent worktrees. Stage explicit paths, or add `.claude/worktrees/` to .gitignore');
+  for (const rel of ['.claude/worktrees', '.agent-team/worktrees']) {
+    if (!fs.existsSync(path.join(top, ...rel.split('/')))) continue;
+    try {
+      git('-C', top, 'check-ignore', '-q', rel + '/');
+      continue; // ignored, so -A can't pick it up
+    } catch { /* not ignored */ }
+    block(`\`git add -A\` / \`git add .\` while \`${rel}/\` exists and isn't in .gitignore — it would commit agent worktrees. Stage explicit paths, or add \`${rel}/\` to .gitignore`);
+  }
 }
 
 function checkGhPrMerge(args, cwd) {
