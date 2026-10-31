@@ -54,7 +54,9 @@ missing it warns on stderr and exits 0.
 through a plugin hook (`AGENT_TEAM_HOOK_SOURCE` unset) when the project's
 `.codex/hooks.json` references the shim. If a future CLI runs both, the project
 hooks win and each event is logged once. (The guard may run twice; that is
-harmless.)
+harmless.) The skip applies whenever the project's hooks reference the shim, so
+on such a build it also suppresses plugin-hook logging while the project hooks
+are not yet trusted. Until the user trusts them, nothing is logged.
 
 **Trust.** Codex runs a project hook only after it is trusted, once per project:
 open `/hooks` or accept the startup prompt. Untrusted hooks fail silently, with
