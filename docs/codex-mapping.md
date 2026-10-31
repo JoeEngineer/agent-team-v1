@@ -47,6 +47,8 @@ How each piece of the `agent-team` plugin maps to Codex, as step 2 of supporting
 | `skills/director/SKILL.md` + `references/` | `skills/<name>/SKILL.md`, found automatically | 📄 (format ✅ in bundled plugins) | Same frontmatter (`name`, `description`). Optional `agents/openai.yaml` in a skill is **display metadata only**, not a subagent. ❓ How plugin skills are named when invoked (`$director`? `agent-team:director`?). |
 | `commands/*.md` (slash commands) | Converted into skills under `.codex-plugin/migrated-command-skills/` | ✅ partly | **Only `status` and `team-init` converted.** `milestone` and `coach` (which take `$ARGUMENTS`) were dropped. Fix: ship them as real skills that read their arguments from the user's message. |
 
+Since 0.3.0 the four commands are skills under `skills/`, so Codex gets all of them.
+
 ### Agents and delegation
 
 | agent-team (Claude) | Codex | Status | Notes |
