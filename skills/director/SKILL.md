@@ -30,8 +30,8 @@ Delegate everything else — including research. If you're about to read more th
 3. **Route.** Pick agent, model, effort and vehicle (subagent vs. session) from `references/routing.md`. Start at the table's tier; don't start higher "to be safe".
 4. **Delegate.** Every delegation prompt starts with a task card (`references/task-card.md`). The logging hook reads it — without it, the delegation is logged without task fields and the Coach can't use it.
 5. **Verify.** Read the agent's `result-json`. Check the claim (diff, PR, test run) — a result block is a report, not proof.
-6. **Review.** Every PR gets a `reviewer` pass before merge. Pass the task's acceptance criteria in the task card.
-7. **Escalate or merge.** On `changes_requested`, send it back with the reviewer's findings — escalating per `references/routing.md` when the rule says so. On `approve` + green CI, merge into the milestone branch.
+6. **Review.** Every PR gets a `reviewer` pass before merge. Pass the task's acceptance criteria in the task card. The reviewer ends with its `review-json` block; don't ask it for anything else (`references/task-card.md`, "Review tasks").
+7. **Escalate, fold in, or merge.** On `changes_requested`, send it back with the reviewer's findings — escalating per `references/routing.md` when the rule says so. On `approve` with minor findings, fold the cheap ones into the same PR before merging (`references/merging.md`, "Minor findings"). On `approve` + green CI, merge into the milestone branch.
 8. **Record.** Update `STATUS.md` after every delegation and result. Write a decision record for every real decision (`references/decisions.md`).
 9. **Close.** When all tasks are merged, run a final `reviewer` pass over the milestone branch vs. `main`, open the milestone → `main` PR, and hand it to the user. You don't merge it.
 
@@ -45,6 +45,11 @@ When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegation
 - Subagents that write code use `isolation: "worktree"`.
 - Sessions get their own worktree and end in a PR against the milestone branch.
 - Cloud sessions can't report back yet — don't use them for work you need to track.
+- Parallel agents share the machine. Give every Docker-using task a unique name prefix (`references/task-card.md`, "Standard CONTEXT lines"), and don't run a task that needs fixed container or volume names alongside other Docker tasks.
+
+## CI
+
+Before the first task that adds a CI job uploading artifacts (images, build output), ask the user about Actions storage headroom, and put the CI-artifact line from `references/task-card.md` in the card. Artifact storage is account-wide and a full quota blocks every PR's checks.
 
 ## Local-only routes
 
@@ -58,4 +63,4 @@ Codex and Antigravity bridges (`mcp__codex-bridge__*`, `mcp__antigravity-bridge_
 | `docs/decisions/NNNN-*.md` | Decision records |
 | `.agent-team/logs/*.jsonl` | Written by hooks. Don't edit by hand; append via `scripts/log-event.js` if you need to add an event. |
 
-Commit `STATUS.md`, decisions and logs to the milestone branch regularly so the record survives this session.
+Commit `STATUS.md`, decisions and logs to the milestone branch regularly so the record survives this session. Stage explicit paths (`git add STATUS.md docs/ .agent-team/logs/`), never `git add -A` or `git add .`: agent worktrees under `.claude/worktrees/` would be committed as gitlinks. The guard blocks `-A`/`.` while that folder exists and isn't ignored.

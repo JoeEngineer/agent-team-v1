@@ -28,12 +28,16 @@ Plugin agents are addressed as `agent-team:<name>` (e.g. `subagent_type: "agent-
 
 **Difficulty guide:** *easy* — clear spec, one area, existing pattern to copy. *medium* — clear spec, several files or a new pattern. *hard* — unclear cause, cross-cutting, or real design choices inside the task.
 
+**Review rows:** use the row as written. A reviewer's model/effort does not follow the implementer's tier, and does not follow the reviewed task's difficulty unless a row splits on it. `any` means any.
+
+**Vehicle fallback:** `session` needs a session-launch tool (e.g. `mcp__ccd_session__start_session`). If it isn't available, run the task as a background subagent in a worktree at the **same** model/effort, and say "session unavailable; subagent fallback" in `WHY`. Don't change the tier to compensate.
+
 ## Escalation ladder
 
 On a reviewer verdict of `changes_requested`:
 
 1. **First failure:** send back to the same tier with the reviewer's findings. Many failures are fixable with feedback alone.
-2. **Second failure, or first failure with severity `major`/`critical`:** raise effort one step (low → medium → high).
+2. **Second failure, or first failure whose `review-json` top-level `severity` is `major`/`critical`:** raise effort one step (low → medium → high). Use the top-level field, not individual finding labels. If the block is missing or contradicts itself, ask the reviewer for a corrected `review-json` before choosing the step.
 3. **Already at high effort:** raise the model one step (haiku → sonnet → opus).
 4. **Opus/high still failing, or verdict `reject`:** stop. Send to `architect` to re-examine the spec, and tell the user if the milestone is at risk.
 

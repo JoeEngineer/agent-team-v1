@@ -11,7 +11,7 @@ A Claude Code plugin for the **Director pattern**: one session acts as Director,
 | `commands/` | `/agent-team:team-init`, `/agent-team:milestone`, `/agent-team:status`, `/agent-team:coach` |
 | `hooks/hooks.json` | Wires up the logger and the guard |
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
-| `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases |
+| `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist |
 | `scripts/log-event.js` | Manual logging (decisions, escalations, notes) |
 | `templates/project/` | Files `/agent-team:team-init` copies into a project |
 
@@ -177,8 +177,10 @@ Bump `version` in `.claude-plugin/plugin.json` whenever routing or agent prompts
 
 - **The guard is a guardrail, not a sandbox.** It parses commands simply. GitHub's branch rules are the real enforcement; see [Protect your branches](#protect-your-branches).
 - **Background subagents:** Claude Code may run a subagent in the background even when the call doesn't ask for it. The delegation line then records only the launch (`background: true`, `agent_id`, `resolved_model`). The result, tokens and duration land in `completions.jsonl` with the same `agent_id`, read from the subagent transcript when it stops. Reviewer verdicts are logged once, whichever path sees them first.
-- **Hook input formats aren't a published contract.** The logger relies on fields seen in Claude Code 2.1.314 (`agentId`, `isAsync`, `resolvedModel`, `agent_transcript_path`, the transcript JSONL shape). It never fails a tool call if they change, but log fields may come out empty. Errors go to `.agent-team/logs/hook-errors.jsonl`.
+- **Hook input formats aren't a published contract.** The logger relies on fields seen in Claude Code 2.1.314 (`agentId`, `isAsync`, `resolvedModel`, `agent_transcript_path`, SubagentStop's `last_assistant_message` and `effort`, the transcript JSONL shape, the `SubagentHandback` tool's `message`, `SendMessage`'s `to`/`message`). It never fails a tool call if they change, but log fields may come out empty. Errors go to `.agent-team/logs/hook-errors.jsonl`.
 - **Two token numbers:** `tokens` on a delegation line is Claude Code's own total for the subagent, and it doesn't include cached input. `tokens_with_cache` on a completion line is summed from the transcript, cache included. Compare like with like.
+- **Merge outcomes** come from `gh pr view` right after the `gh pr merge` call (7 s timeout). If GitHub can't be asked, the line says `outcome: "unknown"` rather than guessing.
+- **Retries by `SendMessage`** are logged as `kind: "resume"` delegations only when the message carries a TASK line.
 - **Sessions:** token usage of separate sessions isn't captured automatically yet.
 - **Effort of the Director itself** isn't visible to hooks. Decision records say `unknown` unless the Director knows it.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.

@@ -11,7 +11,9 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 ## Inputs
 - `.agent-team/logs/delegations.jsonl` — one line per delegation: agent, model, effort, task id/type/difficulty, guidance version, duration, tokens, parsed result.
 - `.agent-team/logs/completions.jsonl` — one line per finished subagent, linked to its delegation by `agent_id`. For background subagents this is where the result, duration and tokens are. Its `tokens_with_cache` includes cached input; the delegation line's `tokens` does not.
-- `.agent-team/logs/reviews.jsonl` — one line per reviewer verdict, linked by task id.
+- `.agent-team/logs/reviews.jsonl` — one line per reviewer verdict, linked by task id. Since 0.2.0 it carries `findings` (severity, category, path, blocking) and `ci`.
+- `delegations.jsonl` lines with `kind: "resume"` are retries sent to an existing agent with `SendMessage` (same `agent_id`; model/effort copied from the original delegation).
+- `merges.jsonl` `outcome` is read from GitHub after the call (`merged`, `not-merged`, `auto-merge-queued`, or `unknown` when GitHub couldn't be asked). Lines before 0.2.0 guessed it from the command output and are unreliable.
 - `.agent-team/logs/merges.jsonl`, `decisions.jsonl` — merges and decision events.
 - `docs/decisions/` — decision records.
 - The current routing table: the plugin's `skills/director/references/routing.md`.
