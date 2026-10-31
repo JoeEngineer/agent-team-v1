@@ -9,6 +9,47 @@ const path = require('path');
 const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const lib = require('./lib');
+const models = require('./models');
+
+// Loaded once per hook run; loadMap never throws, but stay safe anyway.
+let MAP = null;
+function tierMap() {
+  if (!MAP) {
+    try { MAP = models.loadMap().map; } catch { MAP = {}; }
+  }
+  return MAP;
+}
+
+// tier, tier_source and (when the map entry has one) billing for a model.
+// source: 'override' | 'agent-file' | 'inherited' (use the resolved model).
+// Never throws: any failure gives tier null.
+function tierFields({ model, source, agentTier, resolved }) {
+  try {
+    const map = tierMap();
+    let tier = null;
+    let tierSource = null;
+    if (source === 'override') {
+      tier = models.modelToTier(map, 'claude', model);
+      tierSource = tier ? 'override' : null;
+    } else if (source === 'agent-file') {
+      tier = (models.TIERS.includes(agentTier) && agentTier) || models.modelToTier(map, 'claude', model);
+      tierSource = tier ? 'agent-file' : null;
+    } else {
+      tier = models.modelToTier(map, 'claude', resolved);
+      tierSource = tier ? 'resolved' : null;
+    }
+    const out = { tier: tier || null, tier_source: tierSource };
+    const e = tier && models.entry(map, 'claude', tier);
+    if (e && e.billing) out.billing = e.billing;
+    return out;
+  } catch {
+    return { tier: null, tier_source: null };
+  }
+}
+
+function agentTierOf(input, type) {
+  try { return lib.agentDefaults(input, type).tier; } catch { return undefined; }
+}
 
 const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
 const SESSION_START = 'mcp__ccd_session__start_session';
@@ -94,6 +135,7 @@ function logReview(input, record, review) {
     attempt: record.task.attempt,
     reviewer_model: record.resolved_model || record.model,
     reviewer_effort: record.effort,
+    reviewer_tier: record.tier === undefined ? null : record.tier,
     ...review,
   });
 }
@@ -107,13 +149,15 @@ function onPostSubagent(input) {
   // ask for it; the response then only confirms the launch.
   const background = !!ti.run_in_background || r.isAsync === true || r.status === 'async_launched';
   const elapsed = takeDuration(input);
+  const routing = resolveRouting(input, ti);
   const record = {
     ...base(input),
     kind: 'subagent',
     agent: ti.subagent_type || 'general-purpose',
     agent_id: r.agentId || null,
     tool_use_id: input.tool_use_id || null,
-    ...resolveRouting(input, ti),
+    ...routing,
+    ...tierFields({ model: routing.model, source: routing.model_source, agentTier: agentTierOf(input, ti.subagent_type), resolved: r.resolvedModel }),
     resolved_model: r.resolvedModel || null,
     isolation: ti.isolation || null,
     background,
@@ -146,6 +190,7 @@ function onPostSession(input) {
     agent: 'session',
     model: ti.model || 'default',
     model_source: ti.model ? 'override' : 'default',
+    ...tierFields({ model: ti.model, source: ti.model ? 'override' : 'inherited', resolved: null }),
     effort: ti.effort || 'default',
     effort_source: ti.effort ? 'override' : 'default',
     title: ti.title,
@@ -248,6 +293,8 @@ function onPostSendMessage(input) {
     agent_id: agentId,
     tool_use_id: input.tool_use_id || null,
     model: prior.model || 'unknown',
+    ...(prior.tier != null ? { tier: prior.tier, tier_source: prior.tier_source, ...(prior.billing ? { billing: prior.billing } : {}) }
+      : tierFields({ source: 'inherited', resolved: prior.resolved_model })),
     model_source: prior.model ? 'prior-delegation' : 'unknown',
     resolved_model: prior.resolved_model || null,
     effort: prior.effort || 'unknown',
@@ -367,6 +414,9 @@ function onSubagentStop(input) {
     agent_id: agentId,
     tool_use_id: meta.toolUseId || null,
     model: routing.model,
+    ...(delegation && delegation.tier != null
+      ? { tier: delegation.tier, tier_source: delegation.tier_source, ...(delegation.billing ? { billing: delegation.billing } : {}) }
+      : tierFields({ model: routing.model, source: routing.model_source, agentTier: agentTierOf(input, agentType), resolved: t.model })),
     resolved_model: t.model,
     effort: routing.effort,
     // The effort Claude Code actually ran the subagent at, when the hook says.

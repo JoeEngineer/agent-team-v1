@@ -69,7 +69,7 @@ function agentDefaults(input, subagentType) {
   for (const file of candidates) {
     if (fs.existsSync(file)) {
       const fm = readFrontmatter(file);
-      return { found: true, file, model: fm.model, effort: fm.effort };
+      return { found: true, file, model: fm.model, effort: fm.effort, tier: fm.tier };
     }
   }
   return { found: false };
