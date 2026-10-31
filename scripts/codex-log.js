@@ -14,7 +14,7 @@ function smallResponse(resp) {
   try {
     const s = typeof resp === 'string' ? resp : JSON.stringify(resp);
     if (s.length <= MAX_RESPONSE) return resp;
-    return s.slice(0, MAX_RESPONSE) + '...[truncated]';
+    return { truncated: s.slice(0, MAX_RESPONSE) + '...[truncated]' };
   } catch {
     return null;
   }

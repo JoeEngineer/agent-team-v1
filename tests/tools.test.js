@@ -2,7 +2,6 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execFileSync } = require('child_process');
 const { test, assert, eq, run, tmpProject, readLog, ROOT } = require('./helpers');
 const lib = require('../scripts/lib');
 
@@ -32,6 +31,10 @@ test('detectTool: Claude-shaped inputs and garbage', () => {
   for (const t of ['Agent', 'Task', 'Bash', 'SendMessage', 'mcp__ccd_session__start_session']) {
     eq(det({ tool_name: t, model: 'x' }), 'claude', t);
   }
+  eq(det({ tool_name: 'mcp__codex-bridge__spawn_agent' }), 'claude', 'mcp spawn_agent');
+  eq(det({ tool_name: 'mcp__x__send_input' }), 'claude', 'mcp send_input');
+  eq(det({ tool_name: 'spawn_agent' }), 'codex', 'bare spawn_agent');
+  eq(det({ tool_name: 'collaborationspawn_agent' }), 'codex', 'collaborationspawn_agent');
   eq(det({}), 'claude', 'empty');
   eq(det(null), 'claude', 'null');
   eq(det('str'), 'claude', 'string');
@@ -84,7 +87,9 @@ test('long last_assistant_message is truncated to 2000 chars; big tool_response 
   run('log-delegation.js', { ...codexPost, tool_response: { x: 'b'.repeat(5000) } }, dir);
   const rows = readLog(dir, 'codex-events.jsonl');
   eq(rows[0].last_assistant_message.length, 2000, 'truncated');
-  assert(JSON.stringify(rows[1].tool_response).length < 700, 'response truncated');
+  eq(typeof rows[1].tool_response.truncated, 'string', 'truncated object');
+  assert(rows[1].tool_response.truncated.endsWith('...[truncated]'), 'truncation marker');
+  assert(rows[1].tool_response.truncated.length < 700, 'response truncated');
 });
 
 test('codex event with missing fields still logs with nulls', () => {
@@ -116,30 +121,40 @@ test('garbage stdin exits 0', () => {
 });
 
 const hooks = JSON.parse(fs.readFileSync(path.join(ROOT, 'hooks', 'hooks.json'), 'utf8'));
-const entries = Object.values(hooks.hooks).flat();
-const commandsOf = (h) => Object.values(h.hooks).flat().flatMap((e) => e.hooks.map((x) => x.command));
+const GUARD_MATCHER = 'Bash|PowerShell';
+const LOGGER_PRE_MATCHER = 'Agent|Task|mcp__ccd_session__start_session|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|.*spawn_agent|send_input|resume_agent|wait_agent|close_agent';
+const LOGGER_POST_MATCHER = 'Agent|Task|SendMessage|Bash|PowerShell|mcp__ccd_session__start_session|mcp__ccd_session_mgmt__set_session_model|mcp__ccd_session_mgmt__set_session_effort|mcp__codex-bridge__.*|mcp__antigravity-bridge__.*|.*spawn_agent|send_input|resume_agent|wait_agent|close_agent';
+const GUARD_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/guard.js"';
+const LOGGER_CMD = 'node "${CLAUDE_PLUGIN_ROOT}/scripts/log-delegation.js"';
 
-test('hooks.json: matchers compile; logger matches Codex and Claude tools; guard unchanged', () => {
-  for (const e of entries) if (e.matcher) new RegExp(e.matcher);
-  const m = (e, t) => new RegExp(`^(?:${e.matcher})$`).test(t);
-  const pre = hooks.hooks.PreToolUse;
-  const guard = pre.find((e) => e.hooks[0].command.includes('guard.js'));
-  const logger = [pre.find((e) => e.hooks[0].command.includes('log-delegation.js')), hooks.hooks.PostToolUse[0]];
-  eq(guard.matcher, 'Bash|PowerShell', 'guard matcher');
-  assert(m(guard, 'Bash') && m(guard, 'PowerShell'), 'guard matches shells');
-  assert(!m(guard, 'collaborationspawn_agent'), 'guard ignores spawn');
-  for (const e of logger) for (const t of ['collaborationspawn_agent', 'send_input', 'Agent']) assert(m(e, t), `logger matches ${t}`);
+test('hooks.json: matchers pinned exactly and compile', () => {
+  const [guard, logPre] = hooks.hooks.PreToolUse;
+  const logPost = hooks.hooks.PostToolUse[0];
+  eq(guard.matcher, GUARD_MATCHER, 'guard matcher');
+  eq(logPre.matcher, LOGGER_PRE_MATCHER, 'logger pre matcher');
+  eq(logPost.matcher, LOGGER_POST_MATCHER, 'logger post matcher');
+  for (const e of Object.values(hooks.hooks).flat()) if (e.matcher) new RegExp(e.matcher);
 });
 
-test('hooks.json: commands unchanged and use CLAUDE_PLUGIN_ROOT', () => {
-  let old;
-  try {
-    old = JSON.parse(execFileSync('git', ['show', 'origin/milestone/shared-structure:hooks/hooks.json'], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
-  } catch { old = null; }
-  const now = commandsOf(hooks);
-  for (const c of now) assert(c.includes('${CLAUDE_PLUGIN_ROOT}'), 'uses CLAUDE_PLUGIN_ROOT');
-  if (old) {
-    const before = commandsOf(old);
-    for (const c of before) assert(now.includes(c), `command preserved: ${c}`);
+test('hooks.json: logger matches Codex tools and Claude-side tools still match', () => {
+  const m = (matcher, t) => new RegExp(`^(?:${matcher})$`).test(t);
+  for (const matcher of [LOGGER_PRE_MATCHER, LOGGER_POST_MATCHER]) {
+    for (const t of ['collaborationspawn_agent', 'send_input', 'Agent']) assert(m(matcher, t), `logger matches ${t}`);
+  }
+  for (const t of ['Bash', 'PowerShell']) assert(m(GUARD_MATCHER, t), `guard matches ${t}`);
+  for (const t of ['Agent', 'Task', 'SendMessage', 'Bash', 'PowerShell', 'mcp__ccd_session__start_session',
+    'mcp__ccd_session_mgmt__set_session_model', 'mcp__ccd_session_mgmt__set_session_effort',
+    'mcp__codex-bridge__codex_run', 'mcp__antigravity-bridge__antigravity_run']) {
+    assert(m(LOGGER_POST_MATCHER, t), `post matcher matches ${t}`);
   }
 });
+
+test('hooks.json: commands pinned exactly (no git dependency)', () => {
+  const [guard, logPre] = hooks.hooks.PreToolUse;
+  eq(guard.hooks[0].command, GUARD_CMD, 'guard command');
+  eq(logPre.hooks[0].command, LOGGER_CMD, 'logger pre command');
+  eq(hooks.hooks.PostToolUse[0].hooks[0].command, LOGGER_CMD, 'logger post command');
+  eq(hooks.hooks.SubagentStop[0].hooks[0].command, LOGGER_CMD, 'subagent stop command');
+  eq(hooks.hooks.SubagentStop[0].matcher, undefined, 'subagent stop has no matcher');
+});
+
