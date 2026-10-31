@@ -27,13 +27,21 @@ States: `planned` · `in progress` · `in review` · `changes requested` · `mer
 
 Dependencies: SS-1 → SS-2…SS-5 (parallel) → SS-6 (needs SS-3, SS-4), SS-7 (needs SS-3) → SS-8 → SS-9 → SS-10.
 
+## Capacity
+
+Before each wave, the Director checks `runway --refresh --json` (Claude 5-hour window and `blockedBy`):
+- more than 40% left in the 5-hour window: start the whole wave;
+- 20–40% left: start at most two tasks, and keep the rest for after the window renews;
+- under 20% left, or anything in `blockedBy`: `runway wait` (in the background) before starting.
+
+Last check 2026-10-31 12:10 UTC: 5-hour window 34% left (renews 15:20 UTC), weekly 29% left (lasts to renewal).
+
 ## Blocked
 
 - (none)
 
 ## Needs the user
 
-- Add the `milestone/*` ruleset (README → "Protect your branches", ruleset 2) before the first merge into `milestone/shared-structure`.
 - Merge the `milestone/shared-structure` → `main` PR at the end.
 
 ## Recent decisions
