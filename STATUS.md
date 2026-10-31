@@ -16,15 +16,15 @@ Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
 | CD-2 | Review-logging diagnosis | scout | medium (sonnet) / medium | 1 | done | #28 | |
 | CD-3 | `models.js up/down` + routing.md | implementer | small (haiku) / medium | 1 | merged | #29 | #48 |
 | CD-4 | Extract record helpers to `records.js` | implementer | medium (sonnet) / medium | 1 | merged | #30 | #49 |
-| CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | 1 | in progress | #31 | |
-| CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | | planned | #32 | |
-| CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | 1 | in progress | #33 | |
+| CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | 1 | merged | #31 | #54 |
+| CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | 1 | in progress | #32 | |
+| CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | 1 | in review | #33 | #55 |
 | CD-8 | Codex agent TOML generator | implementer | medium (sonnet) / medium | 1 | merged | #34 | #51 |
 | CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | merged | #35 | #47 |
-| CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | in review | #36 | #53 |
+| CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | merged | #36 | #53 |
 | CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | | planned | #37 | |
 | CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | | planned | #38 | |
-| CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | changes requested | #39 | #50 |
+| CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | merged | #39 | #50 |
 | CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / medium | | planned | #40 | |
 | CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | | planned | #41 | |
 | CD-16 | Codex live test harness | implementer | medium (sonnet) / low | | planned | #42 | |
@@ -61,6 +61,8 @@ Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as backgrou
 - CD-3 review: the xlarge `auto: false` test also has `billing: credits`, so it doesn't isolate the tier rule (minor).
 - CD-8 review: `.codex/agents/` is not gitignored yet; CD-12 adds it with team-init.
 - Reviewer verdicts for CD-3, CD-4, CD-8 and CD-9 were not captured by the logger (the bug CD-5 fixes); the Director logged notes, and CD-6's backfill should recover them.
+- CD-10 review: note in 0007 that SessionStart also fires on resume/clear/compact (batched into CD-17).
+- CD-7: the Coach must dedupe delegations by `task_name` + `task.attempt`, preferring `source: "director"` (CD-15).
 
 ## Blocked
 
