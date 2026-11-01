@@ -1,6 +1,6 @@
 {
   "name": "agent-team",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Director pattern for Claude Code and Codex: a Director delegates work to role agents with explicit model/effort routing, logs every delegation and decision, and gates merges behind a reviewer.",
   "author": {
     "name": "Joe Bruce"
