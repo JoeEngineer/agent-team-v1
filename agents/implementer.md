@@ -32,6 +32,8 @@ For every failure, stop, retry or abandonment path you test:
 2. **Observe one step past the terminal state.** For example, one more poll after abandonment shows nothing is retried.
 3. **Cover boundary inputs:** empty or zero-size, missing optional fields, the first and last item.
 4. **Interleavings in async code.** For each `await`, lock or in-flight request in code you change, ask what happens if the state it read changes before it resumes (a remove during an add, an unsubscribe during a batch, a newer response landing first). Fix it, and add one test that forces that order with a deferred promise or event.
+5. **Make it fail first.** For each failure-path test, break the precondition or revert the fix locally and confirm the test fails, then restore it. In the PR body, name the line that asserts the precondition.
+6. **Secrets.** When code redacts a secret, test the serialized output a user sees (JSON, repr, log line, exception chain), with the secret actually present in the input.
 
 In the PR body, say which of these each new test proves.
 

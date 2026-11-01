@@ -20,8 +20,10 @@ Plugin agents are addressed as `agent-team:<name>` (e.g. `subagent_type: "agent-
 | fix | easy | implementer | small | medium | subagent (worktree) |
 | fix | medium | implementer | medium | medium | subagent (worktree) |
 | fix | hard | architect | large | high | session |
-| test | any | implementer | medium | low | subagent (worktree) |
-| docs | any | implementer | small | low | subagent (worktree) |
+| test | any | implementer | medium | medium | subagent (worktree) |
+| test | hard | implementer | medium | high | subagent (worktree) or session if > ~1 hour |
+| docs | easy | implementer | small | low | subagent (worktree) |
+| docs | medium/hard | implementer | small | medium | subagent (worktree) |
 | review | any | reviewer | medium | high | subagent |
 | review (milestone final) | any | reviewer | large | high | subagent |
 | coach | any | coach | large | high | subagent |
