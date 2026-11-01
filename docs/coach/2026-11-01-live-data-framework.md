@@ -1,7 +1,7 @@
-# Coach report: TastyTrade prototype, milestone `live-data-framework` (2026-11-01)
+# Coach report: application project, milestone `live-data-framework` (2026-11-01)
 
 Task COACH-20261101 (attempt 1). This is the first project built on plugin **0.4.1**, which was released in PR #71 on top of 0.4.0 (PR #70).
-Logs: the milestone archive folder (identical to the project's `.agent-team/logs/`). Project: tastytrade-prototype. The project uses its milestone PRs #13–#23; PR #24 is the milestone PR to `main`.
+Logs: the milestone archive folder (identical to the project's `.agent-team/logs/`). Project: a private application repo. The project uses its milestone PRs #13–#23; PR #24 is the milestone PR to `main`.
 Routing table compared: plugin 0.4.1 `skills/director/references/routing.md`. It is byte-identical to 0.4.0.
 Baselines: [2026-10-31-codex-director.md](2026-10-31-codex-director.md) ("B") and [2026-10-31-shared-structure.md](2026-10-31-shared-structure.md) ("A"). This milestone is called "C" below.
 
@@ -31,10 +31,10 @@ Only delegations and completions carry `milestone`; the README counts 0 mileston
 
 | Record | Rule | Count |
 |---|---|---|
-| Delegations | `task.milestone: live-data-framework`, session `8f77bad7…` | 40 (22 spawns, 18 resumes) |
+| Delegations | `task.milestone: live-data-framework` and the Director session | 40 (22 spawns, 18 resumes) |
 | Completions | Same session; all have a milestone task card | 40, all `report_source: handback`, all `guidance_version: 0.4.1` |
 | Reviews | `task_id` `M1-*`, linked to M1 delegations by `agent_id`; one session; the logs folder holds only this milestone | 20 (20 unique `review_id`, no duplicates) |
-| Merges | Session `8f77bad7`; PRs #13–#21 and #23 match STATUS.md's task PRs (all into `milestone/live-data-framework`) | 10, all `outcome: merged` from `gh pr view` |
+| Merges | Director session; PRs #13–#21 and #23 match STATUS.md's task PRs (all into `milestone/live-data-framework`) | 10, all `outcome: merged` from `gh pr view` |
 | Not logged | Milestone PR #24 to `main` (opened at close, merged by the user); no `notes.jsonl`, `escalations.jsonl`, `decisions.jsonl` or `tier_fallbacks.jsonl` | — |
 
 - **Ground truth.** I rebuilt every turn from the subagent transcripts in the session's `subagents/` folder, read-only. I split turns on each `TASK id=` prompt and on `isMeta` "coordinator sent a message" resumes, and counted usage once per message id.
@@ -51,7 +51,7 @@ Only delegations and completions carry `milestone`; the README counts 0 mileston
 
 | | A `shared-structure` | B `codex-director` | C `live-data-framework` |
 |---|---|---|---|
-| Project / plugin | plugin repo / 0.2.1 | plugin repo / 0.3.0 | TastyTrade app / **0.4.1** |
+| Project / plugin | plugin repo / 0.2.1 | plugin repo / 0.3.0 | application / **0.4.1** |
 | Tasks / agent turns | 12 / 31 | 24 / 59 | 10 (+ final) / 40 |
 | Tokens (incl. cache) | 7.44M | 29.26M | 26.22M (cache read 92%) |
 | Estimated cost | not priced | ≈ $27.3 | **≈ $23.3**: sonnet $14.95, opus $7.86, haiku $0.45 |
@@ -101,10 +101,10 @@ Only delegations and completions carry `milestone`; the README counts 0 mileston
 
 ### 1. implement/medium on sonnet/medium: keep (n = 7 here, 19 pooled; medium–high confidence)
 - **What failed.** The two send-backs were real, reproduced bugs:
-  - M1-3 (hub): `subscribe` checked `client.closed` outside the lock and leaked a provider subscription. A raising `status()` also silently killed the sender task.
-  - M1-6 (watchlist): `handleAdd` used stale `inputs` after an `await`, so a removed symbol came back and was persisted.
+  - M1-3: a subscribe path checked a closed flag outside the lock and leaked an upstream subscription. A raising status call also silently killed a background sender task.
+  - M1-6: an add handler used stale input state after an `await`, so a removed item came back and was persisted.
 - **The fix.** Each was fixed by one new sonnet/high spawn ($0.79 and $0.57) and approved on re-review.
-- **The architect's suggestion.** The Director's WHY notes that the architect had suggested large/high for M1-3 and M1-8 ("concurrency", "P&L math"). The Director started at the table tier: M1-3 failed and M1-8 passed. That is n = 2, and the unflagged M1-6 also failed, so there is no evidence that a flag predicts failure.
+- **The architect's suggestion.** The Director's WHY notes that the architect had suggested large/high for M1-3 and M1-8 ("concurrency", "accounting math"). The Director started at the table tier: M1-3 failed and M1-8 passed. That is n = 2, and the unflagged M1-6 also failed, so there is no evidence that a flag predicts failure.
 - **Don't raise the row.** Starting all 7 at high would have to cost less than ≈ $0.30 extra per task to beat the $2.08 actually spent on rework. The data can't show that, so the row stays.
 
 ### 2. Async staleness and races are the recurring defect class (n = 7 PRs; medium confidence; guidance fix)
@@ -112,8 +112,8 @@ Only delegations and completions carry `milestone`; the README counts 0 mileston
   - M1-3 (major)
   - M1-5 (an in-flight batch after unsubscribe is cached forever)
   - M1-6 (major)
-  - M1-7 (the old chain flashes on A→B→A)
-  - M1-9 (an in-flight poll overwrites a fresher account)
+  - M1-7 (stale data flashes on a quick A→B→A switch)
+  - M1-9 (an in-flight poll overwrites fresher state)
 - **The missing tests.** Missing-tests findings appeared in **6 of 9** first reviews (67%), against 28% in B and 33% in A. At least 4 of them ask for exactly the interleaving test that would have caught the bug: M1-3, M1-6, M1-7 and M1-9.
 - **The general rule wasn't enough.** The 0.4.0 rule "every new branch, CLI flag, record field or error path gets a test" was live. It doesn't name interleavings, and it didn't stop this.
 - **Context.** A and B had almost no async UI code, so the rise is partly the project. A specific rule is still cheap and directly targeted.
@@ -173,7 +173,7 @@ Only delegations and completions carry `milestone`; the README counts 0 mileston
 | 3 | Run command examples as written in each documented shell; consistent severity | **No.** Agent prompts are unchanged since 0.4.0. | **Recurred**, as the only final-review major. Running literally also caused global-env damage. | **Keep, raise to high, and add safety rails** (finding 3) |
 | 4 | Keep implement/medium sonnet/medium and the effort-first ladder | Followed | 5/7 first-pass; ladder 2/2 | **Keep** (16/19, 6/6 pooled) |
 | 5 | `milestone` on reviews/merges/notes/escalations; log pauses | **No** | **Recurred.** README: 0 for reviews and merges. A 6 h 35 m wait for the user's ruleset change is logged nowhere. | **Keep, medium** |
-| 6 | Re-measure missing tests and sibling leftovers with the 0.4.0 guidance live | Measured | Missing tests 6/9 PRs (67%, up from 28%). Final review: 2 of 6 findings were cross-PR leftovers (M1-8 added `PAPER_STRATEGIES` but the README config table wasn't updated; handoff.md was stale). | **Change:** the generic rule didn't help in an async app, so add the targeted async rule (finding 2) |
+| 6 | Re-measure missing tests and sibling leftovers with the 0.4.0 guidance live | Measured | Missing tests 6/9 PRs (67%, up from 28%). Final review: 2 of 6 findings were cross-PR leftovers (M1-8 added a config setting but the README config table wasn't updated; handoff.md was stale). | **Change:** the generic rule didn't help in an async app, so add the targeted async rule (finding 2) |
 | 7 | Watch: implement/easy haiku vs sonnet; docs haiku/low; opus re-review of fix PRs; test tasks that ship code | — | implement/easy haiku n = 5 (5/5); docs haiku/low n = 5 (4/5); opus fix-PR re-review n = 2; test n = 0 | **Settle** implement/easy (keep small; drop the candidate). Docs: keep the row, candidate still n = 1. Fix-PR review: clarify the wording. Test: keep watching. |
 | — | Director: STATUS.md tier from logs; avoid same-file tasks in one wave | Not in the skill | Followed anyway: STATUS.md matches, and decision 0008 split the files | Keep as advisory; low |
 | — | `coach.md` note on 0.4.0-reconciled archives | **No.** 0.4.1's `coach.md` changed only the Codex and resume wording. | n/a | Keep, and fold in the G9 per-turn rule |
