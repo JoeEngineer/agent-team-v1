@@ -130,6 +130,16 @@ function appendOnce(input, file, idField, record) {
   });
 }
 
+// The milestone for a line about a task: the task's own card, else the card of
+// the latest delegation for the task id (a review's card may not carry it).
+// Returns undefined when neither has one.
+function milestoneFor(input, taskId, task) {
+  if (task && task.milestone) return task.milestone;
+  if (!taskId) return undefined;
+  const d = findDelegation(input, (r) => r.task && r.task.id === taskId && r.task.milestone);
+  return d ? d.task.milestone : undefined;
+}
+
 function reviewIdentity(input, record, review, tool = 'claude') {
   const task = record.task || {};
   const identity = task.id || record.turn_id;
@@ -140,6 +150,8 @@ function reviewIdentity(input, record, review, tool = 'claude') {
   ]))}` : null;
 }
 
+const milestoneField = (m) => (m ? { milestone: m } : {});
+
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
 function logReview(input, record, review, tool = 'claude') {
@@ -149,6 +161,8 @@ function logReview(input, record, review, tool = 'claude') {
   if (record.agent_id && !identity && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return false;
   const row = {
     ...base(input, tool),
+    // A backfilled line keeps the run's version and says which version wrote it.
+    ...(record.reconciled_by ? { guidance_version: record.guidance_version, reconciled_by: record.reconciled_by } : {}),
     ...(reviewId ? { review_id: reviewId } : {}),
     ...(record.turn_id ? { turn_id: record.turn_id } : {}),
     agent_id: record.agent_id || null,
@@ -157,6 +171,7 @@ function logReview(input, record, review, tool = 'claude') {
     role: task.role || task.type || record.agent || null,
     pr: task.pr,
     attempt: task.attempt,
+    ...milestoneField(milestoneFor(input, task.reviewed_task || task.id, task)),
     reviewer_model: tool === 'codex' && record.resolved_model !== undefined ? record.resolved_model : (record.resolved_model || record.model),
     reviewer_effort: tool === 'codex' && record.resolved_effort !== undefined ? record.resolved_effort : (record.resolved_effort || record.effort),
     requested_model: record.model ?? null,
@@ -189,7 +204,7 @@ function prState(input, { target, repo }) {
   const args = ['pr', 'view'];
   if (target) args.push(target);
   if (repo) args.push('--repo', repo);
-  args.push('--json', 'number,state,autoMergeRequest');
+  args.push('--json', 'number,state,autoMergeRequest,baseRefName');
   // Tests point AGENT_TEAM_FAKE_GH at a Node script: on Windows, execFileSync
   // only finds gh.exe on PATH, so a fake `gh` script there would be skipped.
   const fake = process.env.AGENT_TEAM_FAKE_GH;
@@ -212,6 +227,12 @@ function mergeOutcome(state) {
   return 'not-merged';
 }
 
+// "milestone/<name>" base branch -> "<name>"; any other base has no milestone.
+function milestoneOfBase(state) {
+  const m = state && typeof state.baseRefName === 'string' && state.baseRefName.match(/^milestone\/(.+)$/);
+  return m ? m[1] : undefined;
+}
+
 function logMerges(input, tool = 'claude') {
   const cmd = (input.tool_input && input.tool_input.command) || '';
   if (!/\bgh\s+pr\s+merge\b/.test(cmd)) return;
@@ -222,6 +243,7 @@ function logMerges(input, tool = 'claude') {
       ...base(input, tool),
       command: cmd.slice(0, 300),
       pr: state && state.number != null ? String(state.number) : m.target,
+      ...milestoneField(milestoneOfBase(state)),
       outcome: mergeOutcome(state),
       outcome_source: state ? 'gh pr view' : 'none',
       chained: lib.segments(cmd).length > 1,
@@ -231,5 +253,5 @@ function logMerges(input, tool = 'claude') {
 
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
-  readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, prState, mergeOutcome, logMerges,
+  readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
 };
