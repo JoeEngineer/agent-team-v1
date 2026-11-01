@@ -131,6 +131,32 @@ test('codex: spawn with no agent_type or unknown type still logs, tier null', ()
   eq(d.model, 'inherited', 'model');
 });
 
+test('codex: explicit spawn model overrides role-file and agent-name defaults without claiming observed settings', () => {
+  for (const withRoleFile of [false, true]) {
+    for (const model of ['gpt-requested', 'gpt-6-luna']) {
+      const p = tmpProject();
+      if (withRoleFile) {
+        fs.mkdirSync(path.join(p, '.codex', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(p, '.codex', 'agents', 'implementer-medium.toml'), 'model = "gpt-6.1-terra"\nmodel_reasoning_effort = "low"\n');
+      }
+      const input = spawn();
+      input.tool_input.model = model;
+      hook(p, input);
+      const d = readLog(p, 'delegations.jsonl')[0];
+      eq(d.model, model, 'explicit requested model');
+      eq(d.model_source, 'override', 'override source');
+      eq(d.tier, model === 'gpt-6-luna' ? 'small' : null, 'tier belongs to requested model, not role name');
+      eq(d.tier_source, model === 'gpt-6-luna' ? 'override' : null, 'tier source');
+      eq(d.effort, 'high', 'explicit requested effort');
+      eq(d.resolved_model, null, 'spawn does not prove actual model');
+      hook(p, stop(p, transcript(p)));
+      const c = readLog(p, 'completions.jsonl')[0];
+      eq(c.model, model, 'completion retains requested model');
+      eq(c.resolved_model, 'gpt-6.1-terra', 'completion records transcript model separately');
+    }
+  }
+});
+
 test('codex: spawn is skipped when a delegation with that task_name exists (Director first)', () => {
   const p = tmpProject();
   const r = directorLine(p);
@@ -407,6 +433,36 @@ test('codex: absent prior usage and reset counters do not fabricate resume token
     eq(c.tokens, null, missingBaseline ? 'missing baseline' : 'reset cumulative counters');
     eq(c.tokens_detail, null, 'unknown token details');
     eq(c.duration_ms, 2000, 'other metrics remain available');
+  }
+});
+
+test('codex: token baseline requires the immediately preceding turn final usage evidence', () => {
+  for (const boundary of ['known', 'missing', 'empty', 'missing-info', 'torn', 'wrong-turn', 'incomplete', 'empty-after-known', 'missing-info-after-known', 'torn-after-known']) {
+    const p = tmpProject();
+    const file = transcript(p, { turns: 3 });
+    let turn;
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').flatMap((line) => {
+      const e = JSON.parse(line), payload = e.payload || {};
+      if (payload.type === 'task_started') turn = payload.turn_id;
+      if (turn === 'turn-2' && payload.type === 'token_count') {
+        if (boundary === 'empty-after-known') return [line, JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: {} } } })];
+        if (boundary === 'missing-info-after-known') return [line, JSON.stringify({ type: 'event_msg', payload: { type: 'token_count' } })];
+        if (boundary === 'torn-after-known') return [line, '{"type":"event_msg","payload":{"type":"token_count"'];
+        if (boundary === 'missing') return [];
+        if (boundary === 'empty') payload.info.total_token_usage = {};
+        if (boundary === 'missing-info') delete payload.info;
+        if (boundary === 'torn') return ['{"type":"event_msg","payload":{"type":"token_count"'];
+        if (boundary === 'wrong-turn') payload.turn_id = 'turn-1';
+      }
+      if (turn === 'turn-2' && payload.type === 'task_complete' && boundary === 'incomplete') return [];
+      return [JSON.stringify(e)];
+    });
+    fs.writeFileSync(file, lines.join('\n') + '\n');
+    hook(p, stop(p, file, { turn_id: 'turn-3' }));
+    const c = readLog(p, 'completions.jsonl')[0];
+    eq(c.tokens, boundary === 'known' ? 3150 : null, `${boundary} immediately preceding endpoint`);
+    eq(c.tokens_detail && c.tokens_detail.input, boundary === 'known' ? 3000 : null, `${boundary} input evidence`);
+    eq(c.duration_ms, 3000, 'duration is independently known');
   }
 });
 

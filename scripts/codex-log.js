@@ -81,12 +81,17 @@ function readAgentToml(input, agentType) {
 }
 
 // model, tier and where they came from, for a Codex agent type.
-function routingFor(input, agentType) {
+function routingFor(input, agentType, requestedModel) {
   const toml = readAgentToml(input, agentType);
   const suffix = ((agentType || '').match(TIER_SUFFIX) || [])[1] || null;
   const map = tierMap();
   const out = { model: 'inherited', model_source: 'inherited', tier: null, tier_source: null, tomlEffort: toml && toml.effort };
-  if (toml && toml.model) {
+  if (typeof requestedModel === 'string' && requestedModel) {
+    out.model = requestedModel;
+    out.model_source = 'override';
+    out.tier = models.modelToTier(map, 'codex', requestedModel);
+    out.tier_source = out.tier ? 'override' : null;
+  } else if (toml && toml.model) {
     out.model = toml.model;
     out.model_source = 'agent-file';
     out.tier = models.modelToTier(map, 'codex', toml.model) || suffix;
@@ -148,7 +153,7 @@ function onSpawn(input) {
   const ti = input.tool_input || {};
   const name = ti.task_name;
   if (!name || records.findDelegation(input, hasTaskName(name))) return;
-  const r = routingFor(input, ti.agent_type);
+  const r = routingFor(input, ti.agent_type, ti.model);
   lib.appendJsonl(input, 'delegations.jsonl', {
     ...records.base(input, 'codex'),
     kind: 'subagent',
@@ -201,7 +206,20 @@ function onFollowup(input) {
 // about this stop. A stop hook can run before task_complete has been appended.
 function readTranscript(file, turnId) {
   const out = { taskName: null, model: null, effort: null, tokens: null, detail: null, duration_ms: null, turnFound: false, complete: false };
-  const events = records.readJsonl(file);
+  const events = [];
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        events.push(e && typeof e === 'object' && !Array.isArray(e) ? e : { type: 'unreadable' });
+      } catch {
+        // A torn record might be the final cumulative endpoint. Preserve the
+        // uncertainty instead of silently retaining an earlier usage sample.
+        events.push({ type: 'unreadable' });
+      }
+    }
+  } catch { return out; }
   const pathOf = (p) => (p && (p.agent_path || (p.source && p.source.subagent && p.source.subagent.thread_spawn && p.source.subagent.thread_spawn.agent_path))) || null;
   for (const e of events) {
     if (e.type !== 'session_meta' || !e.payload) continue;
@@ -224,27 +242,34 @@ function readTranscript(file, turnId) {
     // the next start. Unkeyed usage/context must still stop at that boundary.
     endIdx = Math.min(endIdx, completeIdx);
   }
+  const previousStart = events.slice(0, startIdx).findLastIndex(isStart);
   let baseline = null;
-  for (const e of events.slice(0, startIdx)) {
+  // A previous turn with no endpoint must not silently borrow an older
+  // cumulative total, which would charge several turns to this attempt.
+  const previousId = previousStart >= 0 ? events[previousStart].payload.turn_id : null;
+  const previousComplete = previousStart >= 0 ? events.findIndex((e, i) => i > previousStart && i < startIdx && e.type === 'event_msg' && e.payload && e.payload.type === 'task_complete' && e.payload.turn_id === previousId) : startIdx;
+  for (const e of events.slice(previousStart + 1, previousComplete >= 0 ? previousComplete : previousStart + 1)) {
+    if (e.type === 'unreadable') baseline = null;
     const p = e.payload;
-    if (e.type === 'event_msg' && p && p.type === 'token_count' && p.info && p.info.total_token_usage) baseline = p.info.total_token_usage;
+    if (e.type === 'event_msg' && p && p.type === 'token_count' && (!p.turn_id || p.turn_id === previousId)) baseline = p.info && p.info.total_token_usage || null;
   }
   let finalUsage = null;
   for (const e of events.slice(startIdx + 1, endIdx)) {
+    if (e.type === 'unreadable') finalUsage = null;
     const p = e.payload;
     if (!p || (p.turn_id && p.turn_id !== turnId)) continue;
     if (e.type === 'turn_context' && p) {
       if (p.model) out.model = p.model;
       if (p.effort) out.effort = p.effort;
     } else if (e.type === 'event_msg' && p) {
-      if (p.type === 'token_count' && p.info && p.info.total_token_usage) {
-        finalUsage = p.info.total_token_usage;
+      if (p.type === 'token_count') {
+        finalUsage = p.info && p.info.total_token_usage || null;
       }
     }
   }
   // Cumulative counts need both endpoints after a resume. Only the first turn
   // may use zero as its baseline; absent/reset counters are unknown, not zero.
-  if (finalUsage && (baseline || !events.slice(0, startIdx).some(isStart))) {
+  if (finalUsage && (baseline || previousStart < 0)) {
     const d = (k) => {
       const before = baseline ? baseline[k] : 0;
       return Number.isFinite(finalUsage[k]) && Number.isFinite(before) && finalUsage[k] >= before ? finalUsage[k] - before : null;
