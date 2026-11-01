@@ -34,8 +34,8 @@ function transcript(dir, agentId, reports, card = (n) => `TASK id=RC-1 type=revi
   return file;
 }
 
-function stop(proj, file, agentId, agentType, env = {}) {
-  return run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: agentType, agent_transcript_path: file }, proj, { AGENT_TEAM_STOP_RETRY_MS: '0', ...env });
+function stop(proj, file, agentId, agentType, env = {}, extra = {}) {
+  return run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: agentId, agent_type: agentType, agent_transcript_path: file, ...extra }, proj, { AGENT_TEAM_STOP_RETRY_MS: '0', ...env });
 }
 
 // G9: turn on completion lines
@@ -258,11 +258,137 @@ test('stop hook: a role agent ending without its JSON block gets a nudge naming 
   eq(readLog(proj, 'completions.jsonl').length, 1, 'precondition: completion logged');
   const ctx = JSON.parse(r.stdout).hookSpecificOutput;
   eq(ctx.hookEventName, 'SubagentStop', 'event name');
-  assert(ctx.additionalContext.includes('agent-team:reviewer') && ctx.additionalContext.includes('nd1') && /ask it for the block/.test(ctx.additionalContext), ctx.additionalContext);
+  eq(ctx.additionalContext, 'agent-team: your reply ended without its `review-json` block. End your reply with your `review-json` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.', 'nudge is addressed to the subagent and names the block');
   // One step past: the same stop firing again logs and nudges nothing.
   eq(stop(proj, bare, 'nd1', 'agent-team:reviewer').stdout, '', 'repeat stop: no second nudge');
   const ok = transcript(dir, 'nd2', [REVIEW('approve', 'ok')]);
   eq(stop(proj, ok, 'nd2', 'agent-team:reviewer').stdout, '', 'block present: no nudge');
   const other = transcript(dir, 'nd3', ['no block']);
   eq(stop(proj, other, 'nd3', 'general-purpose').stdout, '', 'non-role agent: no nudge');
+});
+
+test('stop hook: the nudge asks implementers for result-json, and a review task for review-json', () => {
+  const proj = tmpProject();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tr-'));
+  const impl = stop(proj, transcript(dir, 'nd4', ['no block']), 'nd4', 'agent-team:implementer');
+  assert(/`result-json` block/.test(JSON.parse(impl.stdout).hookSpecificOutput.additionalContext) && !/review-json/.test(impl.stdout), impl.stdout);
+});
+
+test('stop hook: with stop_hook_active no second nudge, and the repeated stop does not double count the turn', () => {
+  const proj = tmpProject();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tr-'));
+  const first = stop(proj, transcript(dir, 'nd5', ['all done, no block']), 'nd5', 'agent-team:reviewer');
+  assert(first.stdout.includes('additionalContext'), 'precondition: the first stop nudged');
+  // The subagent continued after the nudge and again ended without a block: a different report, same turn.
+  const again = stop(proj, transcript(dir, 'nd5', ['still no block']), 'nd5', 'agent-team:reviewer', {}, { stop_hook_active: true });
+  eq(again.stdout, '', 'stop_hook_active: no second nudge');
+  const cs = readLog(proj, 'completions.jsonl');
+  eq(cs.length, 2, 'precondition: both stops wrote a line for the same turn');
+  eq(JSON.stringify(cs.map((c) => c.turn)), '[1,1]', 'same turn on both lines');
+  // Readers keep the last line per agent_id + turn; summing that gives the turn's tokens once.
+  const lastPerTurn = [...new Map(cs.map((c) => [c.agent_id + ':' + c.turn, c])).values()];
+  eq(lastPerTurn.length, 1, 'one line per agent and turn after dedupe');
+  eq(lastPerTurn.reduce((n, c) => n + c.tokens_with_cache, 0), cs[0].tokens_with_cache, 'turn counted once');
+  assert(cs.reduce((n, c) => n + c.tokens_with_cache, 0) > cs[0].tokens_with_cache, 'a plain sum of all lines would double count');
+  // Without stop_hook_active the same second stop on a new agent would nudge (the guard is what silences it).
+  const noGuard = stop(proj, transcript(dir, 'nd6', ['no block']), 'nd6', 'agent-team:reviewer', {}, { stop_hook_active: false });
+  assert(noGuard.stdout.includes('additionalContext'), 'stop_hook_active false still nudges');
+});
+
+// reconcile rewrite safety
+
+const readRaw = (proj, file) => fs.readFileSync(path.join(logsOf(proj), file), 'utf8');
+const tmpFiles = (proj) => fs.readdirSync(logsOf(proj)).filter((f) => f.endsWith('.tmp'));
+
+// Setup with a shifted hook line (attempt 2 holding turn 1's report) among a crash-truncated
+// line, a line with CRLF and non-ASCII text, and an ordinary line.
+function shiftedSetup(agentId) {
+  const reports = [REVIEW('changes_requested', 'one'), REVIEW('approve', 'two')];
+  const s = reconcileSetup(agentId, reports);
+  const shifted = { ts: 't', tool: 'claude', kind: 'completion', agent_id: agentId, task: { id: 'RC-1', attempt: 2 }, review: parsed(reports[0]) };
+  const lines = ['{"truncated by crash', JSON.stringify(shifted), '{"other":"caf\u00e9 \u2713"}\r', '{"after":1}'];
+  fs.mkdirSync(logsOf(s.proj), { recursive: true });
+  fs.writeFileSync(path.join(logsOf(s.proj), 'completions.jsonl'), lines.join('\n') + '\n');
+  return { ...s, lines, shifted };
+}
+
+// Runs fn with the env a reconcile run reads, console output captured.
+function inProcess(s, fn) {
+  const keep = {};
+  const env = { CLAUDE_PROJECT_DIR: s.proj, CLAUDE_PLUGIN_ROOT: ROOT, AGENT_TEAM_PROJECTS_ROOT: s.root, AGENT_TEAM_MODELS: NO_MODELS_FILE };
+  for (const k of Object.keys(env)) { keep[k] = process.env[k]; process.env[k] = env[k]; }
+  const out = [];
+  const log = console.log; const err = console.error;
+  console.log = (...a) => out.push(a.join(' ')); console.error = (...a) => out.push(a.join(' '));
+  try { return { value: fn(), out }; } finally {
+    console.log = log; console.error = err;
+    for (const k of Object.keys(env)) { if (keep[k] === undefined) delete process.env[k]; else process.env[k] = keep[k]; }
+  }
+}
+
+test('reconcile: a line that is not valid JSON is kept byte for byte; the count and file are printed; a second run is a no-op', () => {
+  const s = shiftedSetup('rw1');
+  const r = reconcile(s);
+  eq(r.status, 0, r.stderr);
+  const after = readRaw(s.proj, 'completions.jsonl').split('\n');
+  const marked = JSON.parse(after[1]);
+  eq(marked.stale_of, '1', 'precondition: the shifted line was marked');
+  eq(after[0], s.lines[0], 'truncated line kept verbatim');
+  eq(after[2], s.lines[2], 'CRLF/non-ASCII line kept verbatim');
+  eq(after[3], s.lines[3], 'last line kept verbatim');
+  eq(after.slice(4).filter((l) => l).length, 2, 'the two backfilled turns follow the original four lines');
+  assert(/1 lines marked stale_of .* in completions\.jsonl/.test(r.stdout), r.stdout);
+  eq(tmpFiles(s.proj).length, 0, 'no temp file left');
+  // One step past: the second run marks nothing, rewrites nothing and says nothing about it.
+  const before = readRaw(s.proj, 'completions.jsonl');
+  const r2 = reconcile(s);
+  eq(readRaw(s.proj, 'completions.jsonl'), before, 'second run: file unchanged');
+  assert(!/marked stale_of/.test(r2.stdout), r2.stdout);
+  eq(r2.status, 0, 'second run exit');
+});
+
+test('reconcile: --dry-run says how many lines would be marked and leaves the file alone', () => {
+  const s = shiftedSetup('rw2');
+  const before = readRaw(s.proj, 'completions.jsonl');
+  const r = reconcile(s, ['--dry-run']);
+  assert(/\[dry run\] 1 lines would be marked stale_of/.test(r.stdout), r.stdout);
+  eq(readRaw(s.proj, 'completions.jsonl'), before, 'file untouched');
+});
+
+test('reconcile: a line a hook appends between the read and the rename is kept', () => {
+  const s = shiftedSetup('rw3');
+  const rc = require(path.join(SCRIPTS, 'reconcile-logs.js'));
+  const file = path.join(logsOf(s.proj), 'completions.jsonl');
+  const late = JSON.stringify({ kind: 'completion', agent_id: 'late', note: 'appended mid-rewrite' });
+  const rounds = [];
+  rc.hooks.beforeRename = (f, round) => { rounds.push(round); if (round === 0) fs.appendFileSync(file, late + '\n'); };
+  let res;
+  try { res = inProcess(s, () => rc.main([])); } finally { rc.hooks.beforeRename = null; }
+  eq(res.value, 0, `exit code (${res.out.join(' | ')})`);
+  eq(JSON.stringify(rounds), '[0,1]', 'precondition: the append landed on round 0 and the file was checked again');
+  const after = readRaw(s.proj, 'completions.jsonl').split('\n');
+  eq(after[after.length - 2], late, 'appended line present, last');
+  eq(JSON.parse(after[1]).stale_of, '1', 'stale mark applied');
+  eq(after[0], s.lines[0], 'truncated line still verbatim');
+  eq(tmpFiles(s.proj).length, 0, 'no temp file left');
+});
+
+test('reconcile: a failed rename removes the temp file, leaves the log as it was, and exits 1 with a message', () => {
+  const s = shiftedSetup('rw4');
+  const rc = require(path.join(SCRIPTS, 'reconcile-logs.js'));
+  let before = null;
+  let sawTmp = false;
+  rc.hooks.rename = () => { sawTmp = tmpFiles(s.proj).length === 1; before = readRaw(s.proj, 'completions.jsonl'); const e = new Error('EPERM: operation not permitted, rename'); e.code = 'EPERM'; throw e; };
+  let res;
+  try { res = inProcess(s, () => rc.main([])); } finally { rc.hooks.rename = (a, b) => fs.renameSync(a, b); }
+  assert(sawTmp, 'precondition: the temp file existed when the rename failed');
+  eq(res.value, 1, 'exit code');
+  assert(res.out.some((l) => /could not rewrite completions\.jsonl: EPERM/.test(l)), res.out.join(' | '));
+  eq(tmpFiles(s.proj).length, 0, 'temp file removed');
+  assert(!/stale_of/.test(before), 'precondition: no stale mark in the log when the rename failed');
+  eq(readRaw(s.proj, 'completions.jsonl'), before, 'log unchanged by the failed rewrite');
+  // One step past: with the rename working again the next run completes.
+  const again = inProcess(s, () => rc.main([]));
+  eq(again.value, 0, 'retry exit code');
+  eq(JSON.parse(readRaw(s.proj, 'completions.jsonl').split('\n')[1]).stale_of, '1', 'retry marked the line');
 });

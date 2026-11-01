@@ -351,9 +351,18 @@ function onSubagentStop(input) {
   const record = completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report });
   lib.appendJsonl(input, 'completions.jsonl', record);
   if (record.review) logReview(input, record, record.review);
-  // A role agent that ended without its JSON block: tell the Director to ask for it.
-  if (agentType && agentType.startsWith('agent-team:') && !hasBlock(report)) {
-    return `agent-team: ${agentType} (${agentId || 'unknown id'}) ended without a result-json/review-json block; ask it for the block (SendMessage) before using its report`;
+  // A role agent that ended without its JSON block gets a nudge. SubagentStop's
+  // additionalContext is delivered to the subagent (which continues so it can
+  // act on it), not to the Director, so the text speaks to the subagent. It
+  // needs a Claude Code whose SubagentStop accepts additionalContext (seen in
+  // 2.1.314); older versions may ignore it. At most once per turn: when the
+  // hook fires again because of an earlier nudge (stop_hook_active) it stays
+  // quiet. That second stop still writes its own completion line (its report
+  // differs); readers use the last line per agent_id + turn.
+  if (agentType && agentType.startsWith('agent-team:') && !hasBlock(report) && !input.stop_hook_active) {
+    const isReview = agentType === 'agent-team:reviewer' || !!(delegation && delegation.task && delegation.task.type === 'review');
+    const block = isReview ? 'review-json' : 'result-json';
+    return `agent-team: your reply ended without its \`${block}\` block. End your reply with your \`${block}\` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.`;
   }
 }
 
