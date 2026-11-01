@@ -18,6 +18,7 @@ const path = require('path');
 const lib = require('./lib');
 const { claimOnce, shortHash, logReview } = require('./records');
 const { readSubagentTranscript, readMeta, completionRecord } = require('./log-delegation');
+const { drainPending } = require('./codex-log');
 
 const hasBlock = (v) => /```(result|review)-json/.test(v);
 
@@ -64,7 +65,10 @@ function reconcile({ dryRun = false } = {}) {
   const input = {};
   const logDir = lib.logDir(input);
   const root = projectsRoot();
-  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0 };
+  // Codex snapshots already identify their transcript and frozen delegation.
+  // Process them even on Codex-only installs with no ~/.claude/projects.
+  const codex = drainPending(input, { dryRun, cap: Infinity });
+  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, codex };
   const delegations = readJsonl(path.join(logDir, 'delegations.jsonl'));
   const completions = readJsonl(path.join(logDir, 'completions.jsonl'));
   if (!fs.existsSync(root)) return { ...stats, noRoot: root };
@@ -134,8 +138,11 @@ function reconcile({ dryRun = false } = {}) {
 function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const s = reconcile({ dryRun });
+  if (s.codex.checked) {
+    console.log(`${dryRun ? '[dry run] ' : ''}Codex: ${s.codex.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ${s.codex.present} already present, ${s.codex.pending} pending`);
+  }
   if (s.noRoot) {
-    console.log(`No Claude Code projects folder found (${s.noRoot}); nothing to reconcile.`);
+    console.log(`No Claude Code projects folder found (${s.noRoot}); nothing to reconcile for Claude Code.`);
     return;
   }
   console.log(`${dryRun ? '[dry run] ' : ''}checked ${s.checked} agents: ` +

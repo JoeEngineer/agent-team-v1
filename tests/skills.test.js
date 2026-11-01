@@ -55,3 +55,32 @@ test('no $ARGUMENTS or commands/ references in shipped files', () => {
     assert(!/commands[\/\\]/.test(text), `commands/ reference in ${f}`);
   }
 });
+
+test('Codex guidance distinguishes same-settings followups from changed-settings spawns', () => {
+  const skill = fs.readFileSync(path.join(skillsDir, 'director', 'SKILL.md'), 'utf8');
+  const codex = fs.readFileSync(path.join(skillsDir, 'director', 'references', 'codex.md'), 'utf8');
+  assert(!skill.includes('Codex has no per-spawn model'), 'stale claim that Codex lacks per-spawn model selection');
+  assert(codex.includes('only when retaining that agent\'s model and effort is intended'));
+  assert(codex.includes('fresh spawn with a unique task name'));
+  assert(codex.includes('fork_turns: "none"'));
+  assert(codex.includes('Log the new name as a new delegation before spawning'));
+  assert(codex.includes('resolved model and effort'));
+  assert(codex.includes('exact `turn_id` window'));
+  assert(codex.includes('.pending/codex-completions/<event_id>.json'));
+  assert(codex.includes('including a `wait_agent` dispatch'));
+  assert(codex.includes('`--dry-run` previews reconciliation and does not mutate'));
+});
+
+test('Codex mapping and Coach guidance separate requested from observed settings', () => {
+  const mapping = fs.readFileSync(path.join(ROOT, 'docs', 'codex-mapping.md'), 'utf8');
+  const coach = fs.readFileSync(path.join(ROOT, 'agents', 'coach.md'), 'utf8');
+  assert(mapping.includes('full-history fork does not apply setting overrides'));
+  assert(mapping.includes('this session\'s runtime result'));
+  assert(coach.includes('not requested settings'));
+  assert(coach.includes('Don\'t count a requested escalation as an executed higher-setting trial'));
+  const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  assert(readme.includes('drains snapshots from observed Codex stop events'));
+  assert(readme.includes('An entirely missed Codex stop leaves no snapshot to recover'));
+  assert(readme.includes('rebuilds missing Claude completion or review records'));
+  assert(!readme.includes('Codex records come from its hooks'));
+});

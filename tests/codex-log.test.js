@@ -131,6 +131,32 @@ test('codex: spawn with no agent_type or unknown type still logs, tier null', ()
   eq(d.model, 'inherited', 'model');
 });
 
+test('codex: explicit spawn model overrides role-file and agent-name defaults without claiming observed settings', () => {
+  for (const withRoleFile of [false, true]) {
+    for (const model of ['gpt-requested', 'gpt-6-luna']) {
+      const p = tmpProject();
+      if (withRoleFile) {
+        fs.mkdirSync(path.join(p, '.codex', 'agents'), { recursive: true });
+        fs.writeFileSync(path.join(p, '.codex', 'agents', 'implementer-medium.toml'), 'model = "gpt-6.1-terra"\nmodel_reasoning_effort = "low"\n');
+      }
+      const input = spawn();
+      input.tool_input.model = model;
+      hook(p, input);
+      const d = readLog(p, 'delegations.jsonl')[0];
+      eq(d.model, model, 'explicit requested model');
+      eq(d.model_source, 'override', 'override source');
+      eq(d.tier, model === 'gpt-6-luna' ? 'small' : null, 'tier belongs to requested model, not role name');
+      eq(d.tier_source, model === 'gpt-6-luna' ? 'override' : null, 'tier source');
+      eq(d.effort, 'high', 'explicit requested effort');
+      eq(d.resolved_model, null, 'spawn does not prove actual model');
+      hook(p, stop(p, transcript(p)));
+      const c = readLog(p, 'completions.jsonl')[0];
+      eq(c.model, model, 'completion retains requested model');
+      eq(c.resolved_model, 'gpt-6.1-terra', 'completion records transcript model separately');
+    }
+  }
+});
+
 test('codex: spawn is skipped when a delegation with that task_name exists (Director first)', () => {
   const p = tmpProject();
   const r = directorLine(p);
@@ -236,14 +262,256 @@ test('codex: with no hook line and no task.tier, the tier is derived from the re
   eq(c.tier_source, 'resolved', 'source');
 });
 
-test('codex: SubagentStop is deduped; a second report for the same agent is a new line', () => {
+test('codex: a known child turn is deduped independently of its report text', () => {
   const p = tmpProject();
   const file = transcript(p);
   hook(p, stop(p, file, { turn_id: 'turn-1' }));
   hook(p, stop(p, file, { turn_id: 'turn-1' }));
   eq(readLog(p, 'completions.jsonl').length, 1, 'duplicate dropped');
   hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: 'again' }));
-  eq(readLog(p, 'completions.jsonl').length, 2, 'new report logged');
+  eq(readLog(p, 'completions.jsonl').length, 1, 'same turn remains one event');
+});
+
+const eventLine = (type, payload) => JSON.stringify({ type, payload }) + '\n';
+const completeTurn = (file, id, duration) => fs.appendFileSync(file,
+  eventLine('event_msg', { type: 'task_complete', turn_id: id, duration_ms: duration }));
+const waitHook = (p) => hook(p, { hook_event_name: 'PostToolUse', tool_name: 'collaborationwait_agent', tool_input: { timeout_ms: 1 } });
+const pendingFiles = (p) => {
+  const dir = path.join(p, '.agent-team', 'logs', '.pending', 'codex-completions');
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => path.join(dir, f)) : [];
+};
+
+test('codex: stop before task_complete survives restart and a later wait drains it once', () => {
+  const p = tmpProject();
+  directorLine(p);
+  const file = transcript(p);
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  fs.writeFileSync(file, lines.slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file));
+  eq(readLog(p, 'completions.jsonl').length, 0, 'unfinished turn deferred');
+  hook(p, stop(p, file, { last_assistant_message: 'changed callback text' }));
+  completeTurn(file, 'turn-1', 1234);
+  waitHook(p); // Each hook runs in a fresh Node process.
+  waitHook(p);
+  const cs = readLog(p, 'completions.jsonl');
+  eq(cs.length, 1, 'one completion after restart');
+  eq(cs[0].duration_ms, 1234, 'current turn duration');
+  eq(cs[0].task.id, 'CD-7', 'frozen card');
+  eq(cs[0].turn_id, 'turn-1', 'child turn identity');
+  eq(cs[0].result.status, 'done', 'first stop report preserved');
+});
+
+test('codex: an earlier turn never takes later context, usage or duration', () => {
+  const p = tmpProject();
+  const file = transcript(p, { turns: 2 });
+  const text = fs.readFileSync(file, 'utf8').replace(
+    '"turn_id":"turn-2","model":"gpt-6.1-terra","effort":"high"',
+    '"turn_id":"turn-2","model":"future-model","effort":"low"');
+  fs.writeFileSync(file, text);
+  hook(p, stop(p, file, { turn_id: 'turn-1' }));
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.resolved_model, 'gpt-6.1-terra', 'selected context');
+  eq(c.resolved_effort, 'high', 'selected effort');
+  eq(c.tokens, 1050, 'selected cumulative endpoint');
+  eq(c.duration_ms, 1000, 'matching completion');
+});
+
+test('codex: delayed reconciliation freezes the task card and separates a reused thread new task', () => {
+  const p = tmpProject();
+  delegationLine(p, { card: 'TASK id=OLD type=review attempt=1', model: 'requested-old', effort: 'medium' });
+  const file = transcript(p);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  const msg = '```review-json\n{"verdict":"approve","findings":[]}\n```';
+  hook(p, stop(p, file, { last_assistant_message: msg }));
+  delegationLine(p, { kind: 'resume', card: 'TASK id=NEW type=review attempt=1', model: 'requested-new', effort: 'low' });
+  completeTurn(file, 'turn-1', 123);
+  fs.appendFileSync(file,
+    eventLine('event_msg', { type: 'task_started', turn_id: 'turn-2' }) +
+    eventLine('turn_context', { turn_id: 'turn-2', model: 'future-model', effort: 'low' }) +
+    eventLine('event_msg', { type: 'token_count', info: { total_token_usage: { input_tokens: 1500, cached_input_tokens: 600, output_tokens: 80, reasoning_output_tokens: 15, total_tokens: 1580 } } }));
+  completeTurn(file, 'turn-2', 456);
+  waitHook(p);
+  hook(p, stop(p, file, { turn_id: 'turn-2', last_assistant_message: msg }));
+  const cs = readLog(p, 'completions.jsonl');
+  eq(cs.length, 2, 'two child turns');
+  eq(cs[0].task.id, 'OLD', 'queued card preserved');
+  eq(cs[0].model, 'requested-old', 'queued requested model');
+  eq(cs[0].effort, 'medium', 'queued requested effort');
+  eq(cs[0].resolved_model, 'gpt-6.1-terra', 'earlier observed model');
+  eq(cs[0].tokens, 1050, 'earlier token endpoint');
+  eq(cs[0].duration_ms, 123, 'earlier matching duration');
+  eq(cs[1].task.id, 'NEW', 'new task card');
+  eq(cs[1].task.attempt, 1, 'attempt resets for new task');
+  eq(cs[1].tokens, 530, 'new task token delta');
+  assert(cs[0].attempt_key !== cs[1].attempt_key, 'task identity is part of the attempt key');
+  assert(cs[0].event_id !== cs[1].event_id, 'child turns have separate identities');
+  const rs = readLog(p, 'reviews.jsonl');
+  eq(rs.length, 2, 'identical approvals both survive');
+  eq(rs[0].reviewer_effort, 'high', 'observed rather than requested reviewer effort');
+  eq(rs[0].requested_effort, 'medium', 'request separately preserved');
+});
+
+test('codex: unresolved snapshots survive marker pruning and contain no raw prompt or report prose', () => {
+  const p = tmpProject();
+  const file = transcript(p, { turns: 2 });
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file, { turn_id: 'turn-2', tool_input: { message: 'PRIVATE TOOL PROMPT' }, last_assistant_message: 'PRIVATE PROSE\n```result-json\n{"status":"done"}\n```' }));
+  eq(readLog(p, 'completions.jsonl').length, 0, 'prior completed turn cannot complete this one');
+  const [pending] = pendingFiles(p);
+  assert(pending, 'durable pending snapshot');
+  const text = fs.readFileSync(pending, 'utf8');
+  assert(!text.includes('PRIVATE TOOL PROMPT') && !text.includes('PRIVATE PROSE'), 'only parsed reports retained');
+  const old = new Date(Date.now() - 25 * 3600 * 1000);
+  fs.utimesSync(pending, old, old);
+  waitHook(p);
+  eq(pendingFiles(p).length, 1, 'ordinary prune keeps unfinished snapshot');
+  completeTurn(file, 'turn-2', 987);
+  waitHook(p);
+  eq(readLog(p, 'completions.jsonl')[0].duration_ms, 987, 'matching resumed duration');
+  eq(pendingFiles(p).length, 0, 'snapshot removed after output');
+  hook(p, stop(p, file, { turn_id: 'turn-2' }));
+  eq(readLog(p, 'completions.jsonl').length, 1, 'durable JSONL receipt dedupes after queue removal');
+});
+
+test('codex: unknown or missing turn ids keep metrics null and legacy reports remain distinct', () => {
+  const p = tmpProject();
+  const file = transcript(p, { turns: 2 });
+  hook(p, stop(p, file, { turn_id: 'unknown' }));
+  hook(p, stop(p, file, { turn_id: null }), { AGENT_TEAM_TOOL: 'codex' });
+  hook(p, stop(p, file, { turn_id: null, last_assistant_message: 'different legacy report' }), { AGENT_TEAM_TOOL: 'codex' });
+  const cs = readLog(p, 'completions.jsonl');
+  eq(cs.length, 3, 'legacy fallback preserves distinct reports');
+  for (const c of cs) for (const field of ['duration_ms', 'tokens', 'tokens_detail', 'resolved_model', 'resolved_effort']) eq(c[field], null, `unknown ${field}`);
+  eq(pendingFiles(p).length, 0, 'no guessed pending turn');
+});
+
+test('codex: a delayed exact completion after the next start does not extend the usage/context window', () => {
+  const p = tmpProject();
+  const file = transcript(p, { turns: 2 });
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  const terminal = lines.find((l) => l.includes('task_complete') && l.includes('turn-1'));
+  fs.writeFileSync(file, lines.filter((l) => l !== terminal).join('\n') + '\n');
+  hook(p, stop(p, file, { turn_id: 'turn-1' }));
+  eq(readLog(p, 'completions.jsonl').length, 0, 'matching completion still missing');
+  fs.appendFileSync(file, terminal + '\n');
+  waitHook(p);
+  const c = readLog(p, 'completions.jsonl')[0];
+  eq(c.duration_ms, 1000, 'exact late terminal record');
+  eq(c.tokens, 1050, 'usage window ends before next turn');
+  eq(c.resolved_effort, 'high', 'selected context retained');
+});
+
+test('codex: torn completion lines wait for repair; wrong-turn completion is ignored', () => {
+  const p = tmpProject();
+  const file = transcript(p);
+  const lines = fs.readFileSync(file, 'utf8').trim().split('\n');
+  fs.writeFileSync(file, lines.slice(0, -1).join('\n') + '\n' + eventLine('event_msg', { type: 'task_complete', turn_id: 'unrelated', duration_ms: 9999 }) + '{"type":"event_msg"');
+  hook(p, stop(p, file));
+  eq(readLog(p, 'completions.jsonl').length, 0, 'unrelated/torn completion cannot finalize');
+  fs.appendFileSync(file, ',"payload":{"type":"task_complete","turn_id":"turn-1","duration_ms":321}}\n');
+  waitHook(p);
+  eq(readLog(p, 'completions.jsonl')[0].duration_ms, 321, 'repaired exact completion');
+});
+
+test('codex: absent prior usage and reset counters do not fabricate resume tokens', () => {
+  for (const missingBaseline of [true, false]) {
+    const p = tmpProject();
+    const file = transcript(p, { turns: 2 });
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    let counts = 0;
+    const filtered = rows.filter((e) => {
+      if (e.payload && e.payload.type === 'token_count') {
+        counts++;
+        if (counts === 1 && missingBaseline) return false;
+        if (counts === 2 && !missingBaseline) for (const k of Object.keys(e.payload.info.total_token_usage)) e.payload.info.total_token_usage[k] = 0;
+      }
+      return true;
+    });
+    fs.writeFileSync(file, filtered.map(JSON.stringify).join('\n') + '\n');
+    hook(p, stop(p, file, { turn_id: 'turn-2' }));
+    const c = readLog(p, 'completions.jsonl')[0];
+    eq(c.tokens, null, missingBaseline ? 'missing baseline' : 'reset cumulative counters');
+    eq(c.tokens_detail, null, 'unknown token details');
+    eq(c.duration_ms, 2000, 'other metrics remain available');
+  }
+});
+
+test('codex: token baseline requires the immediately preceding turn final usage evidence', () => {
+  for (const boundary of ['known', 'missing', 'empty', 'missing-info', 'torn', 'wrong-turn', 'incomplete', 'empty-after-known', 'missing-info-after-known', 'torn-after-known']) {
+    const p = tmpProject();
+    const file = transcript(p, { turns: 3 });
+    let turn;
+    const lines = fs.readFileSync(file, 'utf8').trim().split('\n').flatMap((line) => {
+      const e = JSON.parse(line), payload = e.payload || {};
+      if (payload.type === 'task_started') turn = payload.turn_id;
+      if (turn === 'turn-2' && payload.type === 'token_count') {
+        if (boundary === 'empty-after-known') return [line, JSON.stringify({ type: 'event_msg', payload: { type: 'token_count', info: { total_token_usage: {} } } })];
+        if (boundary === 'missing-info-after-known') return [line, JSON.stringify({ type: 'event_msg', payload: { type: 'token_count' } })];
+        if (boundary === 'torn-after-known') return [line, '{"type":"event_msg","payload":{"type":"token_count"'];
+        if (boundary === 'missing') return [];
+        if (boundary === 'empty') payload.info.total_token_usage = {};
+        if (boundary === 'missing-info') delete payload.info;
+        if (boundary === 'torn') return ['{"type":"event_msg","payload":{"type":"token_count"'];
+        if (boundary === 'wrong-turn') payload.turn_id = 'turn-1';
+      }
+      if (turn === 'turn-2' && payload.type === 'task_complete' && boundary === 'incomplete') return [];
+      return [JSON.stringify(e)];
+    });
+    fs.writeFileSync(file, lines.join('\n') + '\n');
+    hook(p, stop(p, file, { turn_id: 'turn-3' }));
+    const c = readLog(p, 'completions.jsonl')[0];
+    eq(c.tokens, boundary === 'known' ? 3150 : null, `${boundary} immediately preceding endpoint`);
+    eq(c.tokens_detail && c.tokens_detail.input, boundary === 'known' ? 3000 : null, `${boundary} input evidence`);
+    eq(c.duration_ms, 3000, 'duration is independently known');
+  }
+});
+
+test('codex: pending state recovers a dead writer lock and a failed review append', () => {
+  const p = tmpProject();
+  const file = transcript(p);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file, { last_assistant_message: '```review-json\n{"verdict":"approve"}\n```' }));
+  const [pending] = pendingFiles(p);
+  const records = require(path.join(SCRIPTS, 'records.js'));
+  const lockDir = path.join(p, '.agent-team', 'logs', '.pending', 'record-locks');
+  const lock = path.join(lockDir, `${records.shortHash(`codex-stop:${path.basename(pending)}`)}.lock`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: 2147483647 }));
+  const reviewFile = path.join(p, '.agent-team', 'logs', 'reviews.jsonl');
+  fs.mkdirSync(reviewFile); // Make the separate review append fail after completion append.
+  completeTurn(file, 'turn-1', 654);
+  waitHook(p);
+  eq(readLog(p, 'completions.jsonl').length, 1, 'completion committed once after dead-lock recovery');
+  eq(pendingFiles(p).length, 1, 'failed review retains the snapshot');
+  fs.rmdirSync(reviewFile);
+  fs.unlinkSync(file); // The durable completion supplies the already captured facts.
+  waitHook(p);
+  eq(readLog(p, 'completions.jsonl').length, 1, 'completion receipt avoids a duplicate');
+  eq(readLog(p, 'reviews.jsonl').length, 1, 'review append recovered');
+  eq(pendingFiles(p).length, 0, 'snapshot removed only after both records');
+});
+
+test('codex: pending drain respects its cap and later calls make progress', () => {
+  const p = tmpProject();
+  const file = transcript(p);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file));
+  const [first] = pendingFiles(p);
+  const snapshot = JSON.parse(fs.readFileSync(first, 'utf8'));
+  const dir = path.dirname(first);
+  for (let n = 1; n <= 2; n++) {
+    const event_id = `codex-${String(n).padStart(12, '0')}`;
+    fs.writeFileSync(path.join(dir, `${event_id}.json`), JSON.stringify({ ...snapshot, record: { ...snapshot.record, event_id, agent_id: `other-${n}` } }));
+  }
+  completeTurn(file, 'turn-1', 123);
+  const invoke = () => spawnSync('node', ['-e', 'const c=require(process.argv[1]); process.stdout.write(JSON.stringify(c.drainPending({cwd:process.cwd()},{cap:1})));', path.join(SCRIPTS, 'codex-log.js')], { cwd: p, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: p, AGENT_TEAM_MODELS: NO_MODELS_FILE } });
+  const firstRun = invoke();
+  eq(firstRun.status, 0, 'drain exit');
+  eq(JSON.parse(firstRun.stdout).checked, 1, 'one snapshot checked');
+  eq(readLog(p, 'completions.jsonl').length, 1, 'one completion at cap one');
+  invoke();
+  invoke();
+  eq(readLog(p, 'completions.jsonl').length, 3, 'remaining calls complete the queue');
+  eq(pendingFiles(p).length, 0, 'queue exhausted');
 });
 
 test('codex: resumed agent counts only the latest turn tokens', () => {

@@ -145,3 +145,37 @@ test('reconcile: a resumed agent with identical reports on two turns gets both; 
   reconcile(s);
   eq(readLog(s.proj, 'completions.jsonl').length, 2, 'one step past: a second run adds nothing');
 });
+
+test('reconcile: Codex pending stops support dry-run and recovery without a Claude projects root', () => {
+  const proj = tmpProject();
+  const s = { proj, root: path.join(proj, 'no-claude-root') };
+  const file = path.join(proj, 'child.jsonl');
+  const ev = (type, payload) => JSON.stringify({ type, payload }) + '\n';
+  fs.writeFileSync(file,
+    ev('session_meta', { agent_path: '/root/rc_9_a1' }) +
+    ev('event_msg', { type: 'task_started', turn_id: 'child-turn' }) +
+    ev('turn_context', { turn_id: 'child-turn', model: 'actual-model', effort: 'low' }));
+  const input = { hook_event_name: 'SubagentStop', session_id: 'parent', turn_id: 'child-turn', agent_id: 'child', agent_transcript_path: file, last_assistant_message: REVIEW('approve') };
+  run('log-delegation.js', input, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 0, 'waiting for matching completion');
+  const waiting = reconcile(s, ['--dry-run']);
+  assert(/Codex: 0 would be backfilled.*1 pending/.test(waiting.stdout), waiting.stdout);
+  fs.appendFileSync(file, ev('event_msg', { type: 'task_complete', turn_id: 'child-turn', duration_ms: 4321 }));
+  const dry = reconcile(s, ['--dry-run']);
+  assert(/Codex: 1 would be backfilled/.test(dry.stdout), dry.stdout);
+  eq(readLog(proj, 'completions.jsonl').length, 0, 'dry-run did not write completion');
+  eq(readLog(proj, 'reviews.jsonl').length, 0, 'dry-run did not write review');
+  const real = reconcile(s);
+  eq(real.status, 0, 'exit');
+  assert(/Codex: 1 completions backfilled/.test(real.stdout), real.stdout);
+  assert(/No Claude Code projects folder/.test(real.stdout), 'Codex recovery precedes missing-Claude message');
+  const [c] = readLog(proj, 'completions.jsonl');
+  eq(c.duration_ms, 4321, 'recovered current duration');
+  eq(c.resolved_effort, 'low', 'observed effort recovered');
+  eq(c.review.verdict, 'approve', 'frozen parsed report');
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'separate review written');
+  reconcile(s);
+  run('log-delegation.js', input, proj);
+  eq(readLog(proj, 'completions.jsonl').length, 1, 'reconcile and later duplicate callback are idempotent');
+  eq(readLog(proj, 'reviews.jsonl').length, 1, 'review stays idempotent');
+});

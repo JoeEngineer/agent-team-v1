@@ -81,12 +81,17 @@ function readAgentToml(input, agentType) {
 }
 
 // model, tier and where they came from, for a Codex agent type.
-function routingFor(input, agentType) {
+function routingFor(input, agentType, requestedModel) {
   const toml = readAgentToml(input, agentType);
   const suffix = ((agentType || '').match(TIER_SUFFIX) || [])[1] || null;
   const map = tierMap();
   const out = { model: 'inherited', model_source: 'inherited', tier: null, tier_source: null, tomlEffort: toml && toml.effort };
-  if (toml && toml.model) {
+  if (typeof requestedModel === 'string' && requestedModel) {
+    out.model = requestedModel;
+    out.model_source = 'override';
+    out.tier = models.modelToTier(map, 'codex', requestedModel);
+    out.tier_source = out.tier ? 'override' : null;
+  } else if (toml && toml.model) {
     out.model = toml.model;
     out.model_source = 'agent-file';
     out.tier = models.modelToTier(map, 'codex', toml.model) || suffix;
@@ -148,7 +153,7 @@ function onSpawn(input) {
   const ti = input.tool_input || {};
   const name = ti.task_name;
   if (!name || records.findDelegation(input, hasTaskName(name))) return;
-  const r = routingFor(input, ti.agent_type);
+  const r = routingFor(input, ti.agent_type, ti.model);
   lib.appendJsonl(input, 'delegations.jsonl', {
     ...records.base(input, 'codex'),
     kind: 'subagent',
@@ -197,101 +202,200 @@ function onFollowup(input) {
   });
 }
 
-// Facts from the subagent transcript. Every field is null when absent.
+// Read exactly one child turn. Inherited context and later turns are not facts
+// about this stop. A stop hook can run before task_complete has been appended.
 function readTranscript(file, turnId) {
-  const out = { taskName: null, model: null, effort: null, tokens: null, detail: null, duration_ms: null };
-  let lines;
-  try {
-    lines = fs.readFileSync(file, 'utf8').split(/\r?\n/);
-  } catch {
-    return out;
-  }
+  const out = { taskName: null, model: null, effort: null, tokens: null, detail: null, duration_ms: null, turnFound: false, complete: false };
   const events = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try { events.push(JSON.parse(line)); } catch { /* skip a torn line */ }
-  }
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const e = JSON.parse(line);
+        events.push(e && typeof e === 'object' && !Array.isArray(e) ? e : { type: 'unreadable' });
+      } catch {
+        // A torn record might be the final cumulative endpoint. Preserve the
+        // uncertainty instead of silently retaining an earlier usage sample.
+        events.push({ type: 'unreadable' });
+      }
+    }
+  } catch { return out; }
   const pathOf = (p) => (p && (p.agent_path || (p.source && p.source.subagent && p.source.subagent.thread_spawn && p.source.subagent.thread_spawn.agent_path))) || null;
   for (const e of events) {
     if (e.type !== 'session_meta' || !e.payload) continue;
     const p = pathOf(e.payload);
     if (p) { out.taskName = String(p).split('/').filter(Boolean).pop() || null; break; }
   }
-  // Start of this turn: the task_started for turn_id, else the last one.
-  const starts = [];
-  events.forEach((e, i) => {
-    if (e.type === 'event_msg' && e.payload && e.payload.type === 'task_started') starts.push(i);
-  });
-  const own = starts.filter((i) => turnId && events[i].payload.turn_id === turnId);
-  const startIdx = own.length ? own[own.length - 1] : (starts.length ? starts[starts.length - 1] : -1);
-  let finalUsage = null, baseline = null;
-  events.forEach((e, i) => {
+  if (!turnId) return out;
+  const isStart = (e) => e.type === 'event_msg' && e.payload && e.payload.type === 'task_started';
+  const startIdx = events.findIndex((e) => isStart(e) && e.payload.turn_id === turnId);
+  if (startIdx < 0) return out;
+  out.turnFound = true;
+  let endIdx = events.findIndex((e, i) => i > startIdx && isStart(e));
+  if (endIdx < 0) endIdx = events.length;
+  const completeIdx = events.findIndex((e, i) => i > startIdx && e.type === 'event_msg' && e.payload && e.payload.type === 'task_complete' && e.payload.turn_id === turnId);
+  if (completeIdx >= 0) {
+    out.complete = true;
+    const duration = events[completeIdx].payload.duration_ms;
+    if (Number.isFinite(duration) && duration >= 0) out.duration_ms = duration;
+    // Terminal records have an exact id even if their append is delayed past
+    // the next start. Unkeyed usage/context must still stop at that boundary.
+    endIdx = Math.min(endIdx, completeIdx);
+  }
+  const previousStart = events.slice(0, startIdx).findLastIndex(isStart);
+  let baseline = null;
+  // A previous turn with no endpoint must not silently borrow an older
+  // cumulative total, which would charge several turns to this attempt.
+  const previousId = previousStart >= 0 ? events[previousStart].payload.turn_id : null;
+  const previousComplete = previousStart >= 0 ? events.findIndex((e, i) => i > previousStart && i < startIdx && e.type === 'event_msg' && e.payload && e.payload.type === 'task_complete' && e.payload.turn_id === previousId) : startIdx;
+  for (const e of events.slice(previousStart + 1, previousComplete >= 0 ? previousComplete : previousStart + 1)) {
+    if (e.type === 'unreadable') baseline = null;
     const p = e.payload;
+    if (e.type === 'event_msg' && p && p.type === 'token_count' && (!p.turn_id || p.turn_id === previousId)) baseline = p.info && p.info.total_token_usage || null;
+  }
+  let finalUsage = null;
+  for (const e of events.slice(startIdx + 1, endIdx)) {
+    if (e.type === 'unreadable') finalUsage = null;
+    const p = e.payload;
+    if (!p || (p.turn_id && p.turn_id !== turnId)) continue;
     if (e.type === 'turn_context' && p) {
       if (p.model) out.model = p.model;
       if (p.effort) out.effort = p.effort;
     } else if (e.type === 'event_msg' && p) {
-      if (p.type === 'token_count' && p.info && p.info.total_token_usage) {
-        finalUsage = p.info.total_token_usage;
-        if (i < startIdx) baseline = p.info.total_token_usage;
-      } else if (p.type === 'task_complete' && p.duration_ms != null) {
-        out.duration_ms = p.duration_ms;
+      if (p.type === 'token_count') {
+        finalUsage = p.info && p.info.total_token_usage || null;
       }
     }
-  });
-  if (finalUsage) {
-    // total_token_usage is cumulative: take this turn's share.
-    const d = (k) => (finalUsage[k] || 0) - (baseline && baseline[k] || 0);
-    out.tokens = d('total_tokens');
-    out.detail = {
-      input: d('input_tokens'),
-      cached_input: d('cached_input_tokens'),
-      output: d('output_tokens'),
-      reasoning_output: d('reasoning_output_tokens'),
+  }
+  // Cumulative counts need both endpoints after a resume. Only the first turn
+  // may use zero as its baseline; absent/reset counters are unknown, not zero.
+  if (finalUsage && (baseline || previousStart < 0)) {
+    const d = (k) => {
+      const before = baseline ? baseline[k] : 0;
+      return Number.isFinite(finalUsage[k]) && Number.isFinite(before) && finalUsage[k] >= before ? finalUsage[k] - before : null;
     };
+    const total = d('total_tokens');
+    const detail = { input: d('input_tokens'), cached_input: d('cached_input_tokens'), output: d('output_tokens'), reasoning_output: d('reasoning_output_tokens') };
+    if (total !== null && Object.values(detail).every((n) => n !== null)) {
+      out.tokens = total;
+      out.detail = detail;
+    }
   }
   return out;
 }
 
-function onSubagentStop(input) {
+const pendingDir = (input) => path.join(lib.logDir(input), '.pending', 'codex-completions');
+
+function completionRecord(input, t) {
   const report = typeof input.last_assistant_message === 'string' ? input.last_assistant_message : '';
-  const t = input.agent_transcript_path ? readTranscript(input.agent_transcript_path, input.turn_id)
-    : readTranscript('', null);
   const agentId = input.agent_id || null;
-  const key = `stop-${agentId || 'none'}-${input.turn_id || 'none'}-${records.shortHash(report || 'none')}`;
-  if (!records.claimOnce(input, key)) return;
   const delegation = linkedDelegation(input, t.taskName);
-  const resolvedModel = t.model || null;
-  const map = tierMap();
-  let tier = delegation && delegation.tier != null ? delegation.tier : null;
-  let tierSource = delegation && delegation.tier != null ? delegation.tier_source : null;
-  if (tier == null && resolvedModel) {
-    tier = models.modelToTier(map, 'codex', resolvedModel);
-    tierSource = tier ? 'resolved' : null;
-  }
-  const record = {
+  const turnId = input.turn_id || null;
+  // Known-turn identity is independent of callback report content. Legacy
+  // events without a turn id retain a report-based fallback.
+  const eventId = `codex-${records.shortHash(JSON.stringify([
+    input.session_id || null, agentId, turnId,
+    ...(turnId ? [] : [input.agent_transcript_path || null, report]),
+  ]))}`;
+  const task = delegation && delegation.task ? delegation.task : {};
+  return {
     ...records.base(input, 'codex'),
+    event_id: eventId,
+    turn_id: turnId,
+    attempt_key: records.shortHash(JSON.stringify([agentId, task.id || null, task.attempt == null ? null : String(task.attempt), task.role || task.type || input.agent_type || null])),
     kind: 'completion',
     agent: input.agent_type || null,
     agent_id: agentId,
     task_name: t.taskName,
     model: delegation ? delegation.model : (input.model || null),
-    tier,
-    tier_source: tierSource,
+    tier: delegation && delegation.tier != null ? delegation.tier : null,
+    tier_source: delegation && delegation.tier != null ? delegation.tier_source : null,
     ...(delegation && delegation.billing ? { billing: delegation.billing } : {}),
-    resolved_model: resolvedModel,
+    resolved_model: null,
     effort: delegation ? delegation.effort : null,
-    resolved_effort: t.effort || null,
-    task: delegation && delegation.task ? delegation.task : {},
-    duration_ms: t.duration_ms,
-    tokens: t.tokens,
-    tokens_detail: t.detail,
+    resolved_effort: null,
+    task,
+    duration_ms: null,
+    tokens: null,
+    tokens_detail: null,
     report_source: report ? 'hook-input' : 'none',
     result: lib.lastFencedJson(report, 'result-json'),
     review: lib.lastFencedJson(report, 'review-json'),
   };
-  lib.appendJsonl(input, 'completions.jsonl', record);
-  if (record.review) records.logReview(input, record, record.review, 'codex');
+}
+
+function finishPending(input, file, { dryRun = false } = {}) {
+  const finish = () => {
+    let pending;
+    try { pending = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { state: 'waiting' }; }
+    if (pending.version !== 1 || !pending.record || !pending.record.event_id) return { state: 'waiting' };
+    const original = pending.record;
+    const existing = records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).find((r) => r.event_id === original.event_id);
+    const t = readTranscript(pending.transcript_path, original.turn_id);
+    if (!existing && pending.wait_for_complete && (!t.turnFound || !t.complete)) return { state: 'waiting' };
+    const record = existing || { ...original, resolved_model: t.model, resolved_effort: t.effort, duration_ms: t.duration_ms, tokens: t.tokens, tokens_detail: t.detail };
+    if (record.tier == null && record.resolved_model) {
+      record.tier = models.modelToTier(tierMap(), 'codex', record.resolved_model);
+      record.tier_source = record.tier ? 'resolved' : null;
+    }
+    if (dryRun) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
+    if (!existing) lib.appendJsonl(input, 'completions.jsonl', record);
+    const sess = { ...input, session_id: record.session_id };
+    const reviewAdded = record.review ? records.logReview(sess, record, record.review, 'codex') : false;
+    // If a concurrent review writer owns the lock, leave the snapshot for a
+    // later run rather than losing the completion's separate review record.
+    if (record.review && !reviewAdded) {
+      const reviewId = records.reviewIdentity(sess, record, record.review, 'codex');
+      if (reviewId && !records.readJsonl(path.join(lib.logDir(input), 'reviews.jsonl')).some((r) => r.review_id === reviewId)) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
+    }
+    fs.unlinkSync(file);
+    return { state: existing ? 'present' : 'backfilled', reviews: reviewAdded ? 1 : 0 };
+  };
+  if (dryRun) return finish();
+  return records.withRecordLock(input, `codex-stop:${path.basename(file)}`, finish) || { state: 'waiting' };
+}
+
+// Durable snapshots contain only parsed reports and routing/task metadata, not
+// tool_input.message or an unbounded raw transcript. They survive marker prune.
+function onSubagentStop(input) {
+  const t = readTranscript(input.agent_transcript_path, input.turn_id);
+  const record = completionRecord(input, t);
+  const dir = pendingDir(input);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${record.event_id}.json`);
+  records.withRecordLock(input, `codex-stop:${path.basename(file)}`, () => {
+    if (fs.existsSync(file) || records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).some((r) => r.event_id === record.event_id)) return;
+    const temp = `${file}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(temp, JSON.stringify({ version: 1, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete, record }));
+      fs.renameSync(temp, file);
+    } finally {
+      try { fs.unlinkSync(temp); } catch { /* rename consumed it */ }
+    }
+  });
+  if (fs.existsSync(file)) finishPending(input, file);
+}
+
+// No sleep/poll loop: later hooks (including wait_agent) and explicit reconcile
+// revisit pending stops. Oldest-first touching gives a bounded sweep fairness.
+function drainPending(input = {}, { dryRun = false, cap = 20 } = {}) {
+  const stats = { checked: 0, backfilled: 0, present: 0, pending: 0, reviews: 0 };
+  const dir = pendingDir(input);
+  let files;
+  try {
+    files = fs.readdirSync(dir).filter((f) => /^codex-[a-f0-9]+\.json$/.test(f)).map((f) => ({ file: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.mtime - b.mtime);
+  } catch { return stats; }
+  for (const { file } of files.slice(0, cap)) {
+    stats.checked++;
+    try {
+      const result = finishPending(input, file, { dryRun });
+      if (result.state === 'backfilled' || result.state === 'present') stats[result.state]++;
+      stats.reviews += result.reviews || 0;
+      if (!dryRun && fs.existsSync(file)) { const now = new Date(); fs.utimesSync(file, now, now); }
+    } catch { /* retain snapshot for another hook/reconcile */ }
+  }
+  stats.pending = dryRun ? files.length - stats.backfilled - stats.present : fs.readdirSync(dir).filter((f) => f.endsWith('.json')).length;
+  return stats;
 }
 
 function normalized(input) {
@@ -323,9 +427,10 @@ function handle(input) {
     // runs both does not log twice.
     if (process.env.AGENT_TEAM_HOOK_SOURCE !== 'project' && projectHooksInstalled(input)) return;
     records.prunePending(input);
+    drainPending(input);
     try { rawLog(input); } catch { /* keep going */ }
     normalized(input);
   } catch { /* hooks must never break a session */ }
 }
 
-module.exports = { handle };
+module.exports = { handle, drainPending };

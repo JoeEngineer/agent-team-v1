@@ -20,7 +20,7 @@ Pass the JSON to `log-event.js <kind> -` (stdin) or `log-event.js <kind> --file 
 
 ## Spawning
 
-- Agent type is `<role>-<tier>` (for example `implementer-medium`). The files pin only the model, so always pass `reasoning_effort` on the spawn; it is honoured.
+- Inspect the collaboration tool schema exposed in this session. Some Codex clients expose `agent_type`, `model`, `reasoning_effort` and `fork_turns`; others expose only a subset. Use generated `<role>-<tier>` agent files when the client supports role selection. In a session without `agent_type`, put the role instructions in the task message. Do not invent unavailable fields.
 - `task_name` is the task id lowercased with `-` changed to `_`, plus `_a<attempt>`: `CD-7` attempt 1 is `cd_7_a1`. Codex allows only `[a-z0-9_]`, and the name must be unique in the session.
 - Log the delegation before every spawn or retry. The hooks may not see the card on Codex, so this line is the record:
 
@@ -40,13 +40,35 @@ In PowerShell (Windows PowerShell 5.1), pipe the same JSON from a single-quoted 
 
 Keep the card's line break as `\n` inside the JSON string, not as a real newline in the JSON.
 
-- Retries go through the follow-up tool (`followup_task`, `target` = the task_name). Log a new delegation line first with `"kind":"resume"`. It reuses the follow-up target's original `task_name` (the name the agent was spawned with, for example `cd_7_a1`), and the card's TASK line carries the bumped `attempt`. A different name would not match in `codex-log.js` (`onFollowup`), and the hook would add a duplicate resume line.
+- Retry with a follow-up only when retaining that agent's model and effort is intended. `followup_task` addresses the original `task_name`; send the bumped attempt and review findings, and log it first as `kind: "resume"` under that same name. The follow-up API does not change model or effort.
 
 ```
 node "<plugin root>/scripts/log-event.js" delegation - <<'EOF'
 {"tool":"codex","kind":"resume","task_name":"cd_7_a1","card":"TASK id=CD-7 ... attempt=2 ...\nWHY ...","agent":"implementer-medium","tier":"medium","effort":"medium","vehicle":"subagent"}
 EOF
 ```
+- If the retry changes model or effort, use a fresh spawn with a unique task name for the bumped attempt (for example `cd_7_a2`), the same task id, existing worktree and branch, findings, and a compact handoff of relevant context. When the tool supports overrides, pass the requested `model` and/or `reasoning_effort` with `fork_turns: "none"`; full-history fork does not apply those overrides. Log the new name as a new delegation before spawning, not as a resume on the old agent:
+
+```js
+// Illustrative only: include only fields present in this session's spawn schema.
+spawn_agent({
+  task_name: "cd_7_a2",
+  model: "<requested-model>",
+  reasoning_effort: "high",
+  fork_turns: "none",
+  message: "<role instructions; TASK id=CD-7 attempt=2; same worktree and branch; findings and concise handoff>"
+});
+```
+
+If overrides are unavailable, use a generated role file/configuration that selects the requested settings when supported, or a separate `codex exec` session with explicit model and effort configuration. Follow that client's actual interface; don't claim an escalation took effect until the completion reports the resolved model and effort. Record requested and observed settings separately, and mark unavailable observations unknown.
+
+## Completion logging and recovery
+
+Codex transcript events can arrive before the child turn has finished writing its transcript. When `SubagentStop` identifies a known child turn, the logger matches the exact `turn_id` window and reads only that turn's report, model, effort, tokens and duration. It must not fill a missing value from the latest earlier or later turn.
+
+If the stop event arrives before that turn's `task_complete`, the hook saves a durable parsed snapshot under `.agent-team/logs/.pending/codex-completions/<event_id>.json`. That pending file is a recovery snapshot, not a normalized completion record; until a later dispatch drains it, the shared completion log may not yet have the final record. A later Codex hook dispatch, including a `wait_agent` dispatch, drains pending snapshots with bounded checks and no sleep. The snapshot preserves the stop event's parsed data while the transcript finishes.
+
+To drain pending snapshots from observed Codex stop events, run `node scripts/reconcile-logs.js`. It processes those Codex snapshots before checking for the Claude projects root, so it also works in Codex-only projects. It cannot reconstruct a Codex stop event that was entirely missed and left no snapshot. Claude completion and review recovery from transcripts remains supported. `--dry-run` previews reconciliation and does not mutate logs or pending files.
 - Escalation: `node "<plugin root>/scripts/models.js" up <tier> --tool codex` (or `down`). If the map has no Codex model for the routed tier, use `models.js down`, spawn at that tier and log it with the stdin form:
 
 ```
