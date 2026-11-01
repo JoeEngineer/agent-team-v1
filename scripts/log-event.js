@@ -4,20 +4,24 @@
 //   node log-event.js <kind> -              (JSON read from stdin)
 //   node log-event.js <kind> --file <path>  (JSON read from a file)
 // The stdin and --file forms keep the JSON out of shell quoting.
-// kind: decision | escalation | merge | note | milestone | tier_fallback | delegation | review
+// kind: decision | escalation | merge | note | milestone | tier_fallback | delegation | review | pause
 //   tier_fallback e.g. '{"task":"X-1","from":"large","to":"medium","tool":"claude","reason":"model unavailable"}'
 //   delegation   e.g. '{"card":"TASK id=X-1 ... \nWHY ...","tool":"codex","task_name":"x_1_a1","agent":"implementer-medium","model":"gpt-6.1-terra","effort":"medium"}'
+//   pause        e.g. '{"reason":"user","note":"intake question"}' (reason: user | runway; optional note, until)
+//                Call it before asking the user a question or ending a turn on a user decision, and before a runway wait.
 //   review       e.g. '{"card":"TASK id=X-2 reviewed_task=X-1 pr=5 ...","verdict":"approve","agent_id":"..."}'
 // `card` is parsed into `task` (task card fields, plus `why` from a WHY line or a `why` field).
 // `tool` defaults to AGENT_TEAM_TOOL, else "unknown". Director-written lines carry source "director".
-// Writes to <project>/.agent-team/logs/<kind>s.jsonl, adding ts and guidance_version.
+// Writes to <project>/.agent-team/logs/<kind>s.jsonl (pauses.jsonl for pause), adding ts and guidance_version.
+// note and escalation lines get `milestone` from the linked task's delegation card when the JSON has none
+// (the task is the `task` or `task_id` field).
 'use strict';
 
 const fs = require('fs');
 const lib = require('./lib');
 const records = require('./records');
 
-const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review']);
+const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review', 'pause']);
 
 const USAGE = [
   `usage: log-event.js <${[...KINDS].join('|')}> <form>`,
@@ -99,6 +103,18 @@ function main(argv) {
     return 0;
   }
 
+  if (kind === 'pause') {
+    if (data.reason !== 'user' && data.reason !== 'runway') {
+      console.error('invalid pause: "reason" must be "user" or "runway"');
+      return 1;
+    }
+  }
+  if ((kind === 'note' || kind === 'escalation') && !data.milestone) {
+    const t = data.task_id || data.task;
+    const id = t && typeof t === 'object' ? t.id : t;
+    const m = typeof id === 'string' ? records.milestoneFor({}, id, t && typeof t === 'object' ? t : null) : undefined;
+    if (m) data.milestone = m;
+  }
   const record = { ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data };
   lib.appendJsonl({}, `${kind}s.jsonl`, record);
   console.log(`logged ${kind} to .agent-team/logs/${kind}s.jsonl`);

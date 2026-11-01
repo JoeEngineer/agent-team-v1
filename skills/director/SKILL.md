@@ -50,6 +50,24 @@ When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegation
 - Cloud sessions can't report back yet — don't use them for work you need to track.
 - Parallel agents share the machine. Give every Docker-using task a unique name prefix (`references/task-card.md`, "Standard CONTEXT lines"), and don't run a task that needs fixed container or volume names alongside other Docker tasks.
 
+## Pauses
+
+Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user` or `runway`; `note` and `until` are optional.
+
+```
+node "<plugin root>/scripts/log-event.js" pause - <<'EOF'
+{"reason":"user","note":"intake questions"}
+EOF
+```
+
+In PowerShell (Windows PowerShell 5.1):
+
+```
+@'
+{"reason":"runway","until":"2026-11-01T17:00:00Z"}
+'@ | node "<plugin root>/scripts/log-event.js" pause -
+```
+
 ## Hooks check
 
 At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running: warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on GitHub rulesets.

@@ -8,6 +8,9 @@
 // from the project dir), so every project folder is searched for the session.
 // The projects root is ~/.claude/projects, or AGENT_TEAM_PROJECTS_ROOT (tests).
 // Read-only on the transcripts: only .agent-team/logs of the project is written.
+// It may rewrite completions.jsonl/reviews.jsonl to add `stale_of` to lines whose
+// content belongs to another attempt; every other line is kept byte for byte.
+// Exit code 1 when a log could not be rewritten (the log is then left as it was).
 // Idempotent: a backfilled turn carries the same dedupe markers the hook uses,
 // and a turn whose result/review already appears in completions.jsonl is skipped.
 'use strict';
@@ -61,6 +64,92 @@ const sameContent = (a, b) =>
   JSON.stringify(a.result || null) === JSON.stringify(b.result || null) &&
   JSON.stringify(a.review || null) === JSON.stringify(b.review || null);
 
+const attemptOf = (k) => String((k.task && k.task.attempt) || k.attempt || '');
+
+// A reviews.jsonl row spreads the review's fields (it has `verdict`, no `review`
+// key), so it matches a review when every field of the review is equal on the row.
+const isReviewRow = (row) => row.verdict !== undefined && row.review === undefined;
+const rowHasReview = (row, review) =>
+  !!review && Object.keys(review).every((key) => JSON.stringify(row[key]) === JSON.stringify(review[key]));
+const rowMatches = (row, probe) => (isReviewRow(row) ? rowHasReview(row, probe.review) : hasContent(row) && sameContent(row, probe));
+
+// Test seams: runs just before each pre-rename check, and the rename itself.
+const hooks = { beforeRename: null, rename: (from, to) => fs.renameSync(from, to) };
+
+// A jsonl file as raw lines, so a rewrite keeps every line it doesn't change
+// byte for byte (including lines that are not valid JSON). `row` is the parsed
+// object or null; `buf` is the whole file as read.
+function readLines(file) {
+  let buf;
+  try { buf = fs.readFileSync(file); } catch { return { buf: Buffer.alloc(0), lines: [] }; }
+  const lines = [];
+  let start = 0;
+  for (let i = 0; i <= buf.length; i++) {
+    if (i < buf.length && buf[i] !== 0x0a) continue;
+    if (i === buf.length && start === i) break; // nothing after the last newline
+    const raw = buf.subarray(start, i);
+    let row = null;
+    try { const v = JSON.parse(raw.toString('utf8')); if (v && typeof v === 'object') row = v; } catch { /* kept as is */ }
+    lines.push({ raw, row, changed: false, hadNl: i < buf.length });
+    start = i + 1;
+  }
+  return { buf, lines };
+}
+
+// Rewrites `file` from the lines read, re-serialising only the lines flagged
+// `changed`. Just before the rename the file is read again: bytes a hook
+// appended since the first read are carried over (a few rounds, then it gives
+// up). A hook append landing between that last check and the rename can still
+// be lost; the window is a few microseconds. On any failure the temp file is
+// removed and the error is thrown, leaving the log as it was.
+function rewriteJsonl(file, read) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  try {
+    const parts = [];
+    for (const l of read.lines) {
+      let raw = l.raw;
+      if (l.changed) raw = Buffer.from(JSON.stringify(l.row) + (raw[raw.length - 1] === 0x0d ? '\r' : ''), 'utf8');
+      parts.push(raw, Buffer.from(l.hadNl ? '\n' : ''));
+    }
+    fs.writeFileSync(tmp, Buffer.concat(parts));
+    let handled = read.buf.length;
+    for (let round = 0; ; round++) {
+      if (hooks.beforeRename) hooks.beforeRename(file, round);
+      const now = fs.readFileSync(file);
+      if (now.length < handled || !now.subarray(0, handled).equals(read.buf)) {
+        throw new Error(`${path.basename(file)} was changed by something else while it was being rewritten`);
+      }
+      if (now.length === handled) break;
+      if (round >= 5) throw new Error(`${path.basename(file)} kept growing while it was being rewritten`);
+      fs.appendFileSync(tmp, now.subarray(handled));
+      read.buf = now;
+      handled = now.length;
+    }
+    hooks.rename(tmp, file);
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch { /* not created, or already gone */ }
+    throw err;
+  }
+}
+
+// Mark lines of this agent whose content belongs to another attempt: the 0.3.0
+// hook wrote turn n's report under attempt n+1. `stale_of` is the attempt the
+// content really belongs to (the first turn with that content). Readers drop
+// lines that have it. Lines written by reconcile are never marked. Mutates the
+// rows and returns how many it marked.
+function markStale(rows, agentId, turnInfos) {
+  let marked = 0;
+  for (const row of rows) {
+    if (row.agent_id !== agentId || row.stale_of != null || row.reconciled_by) continue;
+    if (!isReviewRow(row) && !hasContent(row)) continue;
+    const att = attemptOf(row);
+    if (turnInfos.some((ti) => ti.attempt === att && rowMatches(row, ti.probe))) continue;
+    const other = turnInfos.find((ti) => rowMatches(row, ti.probe));
+    if (other) { row.stale_of = other.attempt; marked++; }
+  }
+  return marked;
+}
+
 function reconcile({ dryRun = false } = {}) {
   const input = {};
   const logDir = lib.logDir(input);
@@ -68,7 +157,7 @@ function reconcile({ dryRun = false } = {}) {
   // Codex snapshots already identify their transcript and frozen delegation.
   // Process them even on Codex-only installs with no ~/.claude/projects.
   const codex = drainPending(input, { dryRun, cap: Infinity });
-  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, codex };
+  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, stale: 0, rewritten: [], errors: [], codex };
   const delegations = readJsonl(path.join(logDir, 'delegations.jsonl'));
   const completions = readJsonl(path.join(logDir, 'completions.jsonl'));
   if (!fs.existsSync(root)) return { ...stats, noRoot: root };
@@ -110,6 +199,7 @@ function reconcile({ dryRun = false } = {}) {
     const known = [...a.comps, ...a.dels.filter((d) => d.kind === 'subagent')].filter(hasContent);
     const agentType = (a.delegation && a.delegation.agent) || (a.comps.find((c) => c.agent) || {}).agent || meta.agentType || null;
     let added = 0;
+    const turnInfos = [];
     const turns = readSubagentTranscript(tPath).turn;
     for (let turn = 1; turn <= Math.max(turns, 1); turn++) {
       const t = readSubagentTranscript(tPath, turn);
@@ -117,24 +207,50 @@ function reconcile({ dryRun = false } = {}) {
       if (!source) continue; // no report block in this turn: nothing to backfill
       const [, report] = source;
       const probe = { result: lib.lastFencedJson(report, 'result-json'), review: lib.lastFencedJson(report, 'review-json') };
-      if (known.some((k) => sameContent(k, probe))) continue;
+      // Turn 1 is the original delegation, later turns are its SendMessage resumes.
+      const taskDel = [a.delegation, ...a.dels.filter((d) => d.kind === 'resume')][turn - 1] || a.delegation;
+      // A match counts only on the same attempt: a stale line (turn n's report under attempt n+1) must not hide turn n+1.
+      const att = String(t.task.attempt || (taskDel && taskDel.task && taskDel.task.attempt) || '');
+      turnInfos.push({ attempt: att, probe });
+      if (known.some((k) => sameContent(k, probe) && attemptOf(k) === att)) continue;
       const key = `stop-${a.id}-${t.turn}-${shortHash(report)}`;
       if (markerExists(logDir, key)) continue;
       added++;
       if (dryRun) continue;
       if (!claimOnce(input, key)) { added--; continue; }
       const sess = { session_id: a.session || undefined };
-      // Turn 1 is the original delegation, later turns are its SendMessage resumes.
-      const taskDel = [a.delegation, ...a.dels.filter((d) => d.kind === 'resume')][turn - 1] || a.delegation;
       const record = completionRecord(sess, { agentType, agentId: a.id, meta, delegation: taskDel, t, reportSource: 'reconcile', report });
+      // Keep the version of the run being backfilled, and say which version wrote the line.
+      record.guidance_version = (taskDel && taskDel.guidance_version) || record.guidance_version;
+      record.reconciled_by = lib.guidanceVersion();
       lib.appendJsonl(input, 'completions.jsonl', record);
       if (record.review) { logReview(sess, record, record.review); stats.reviews++; }
+    }
+    if (a.dels.some((d) => d.kind === 'resume')) {
+      for (const file of ['completions.jsonl', 'reviews.jsonl']) {
+        const full = path.join(logDir, file);
+        const read = readLines(full);
+        const rows = read.lines.map((l) => l.row).filter(Boolean);
+        const was = new Set(rows.filter((r) => r.stale_of != null));
+        const n = markStale(rows, a.id, turnInfos);
+        if (!n) continue;
+        for (const l of read.lines) l.changed = !!l.row && l.row.stale_of != null && !was.has(l.row);
+        if (!dryRun) {
+          try { rewriteJsonl(full, read); } catch (err) {
+            stats.errors.push(`could not rewrite ${file}: ${err && err.message || err}`);
+            continue;
+          }
+          if (!stats.rewritten.includes(file)) stats.rewritten.push(file);
+        }
+        stats.stale += n;
+      }
     }
     if (added) stats.backfilled += added; else stats.present++;
   }
   return stats;
 }
 
+// Returns the exit code: 1 when a log could not be rewritten.
 function main(argv) {
   const dryRun = argv.includes('--dry-run');
   const s = reconcile({ dryRun });
@@ -143,17 +259,25 @@ function main(argv) {
   }
   if (s.noRoot) {
     console.log(`No Claude Code projects folder found (${s.noRoot}); nothing to reconcile for Claude Code.`);
-    return;
+    return 0;
   }
   console.log(`${dryRun ? '[dry run] ' : ''}checked ${s.checked} agents: ` +
     `${s.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ` +
     `${s.present} already present, ${s.notFound} transcript not found` +
     (s.skipped ? `, ${s.skipped} non-Claude skipped` : ''));
+  if (s.stale) {
+    console.log(dryRun
+      ? `[dry run] ${s.stale} lines would be marked stale_of (content belongs to another attempt)`
+      : `${s.stale} lines marked stale_of (content belongs to another attempt) in ${s.rewritten.join(', ')}; all other lines kept as they were`);
+  }
+  for (const e of s.errors) console.error(`reconcile-logs: ${e}`);
+  return s.errors.length ? 1 : 0;
 }
 
-module.exports = { reconcile, findTranscript };
+module.exports = { reconcile, findTranscript, main, hooks };
 
 if (require.main === module) {
-  try { main(process.argv.slice(2)); } catch (err) { console.log(`reconcile-logs: ${err && err.message || err}`); }
-  process.exit(0);
+  let code = 0;
+  try { code = main(process.argv.slice(2)); } catch (err) { console.error(`reconcile-logs: ${err && err.message || err}`); code = 1; }
+  process.exit(code);
 }
