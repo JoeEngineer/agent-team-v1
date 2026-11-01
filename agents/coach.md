@@ -28,6 +28,8 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 - `tokens_detail` holds `input`, `cached_input`, `output` and `reasoning_output`. Use it where present.
 - `codex-events.jsonl` is raw debug output. Ignore it.
 - Completions with `report_source: "reconcile"` were backfilled from transcripts. Trust them like hook lines.
+- From 0.4.2: completion lines carry `turn` (1-based within the agent; turn 1 is the first delegation). Lines reconciled by 0.4.2+ carry the run's `guidance_version` and `reconciled_by` (the reconcile tool's version). Drop any line with `stale_of`: its content belongs to the attempt it names. Delegation lines with `tier_mismatch: {card, ran}` ran on a different tier than the card asked for; count them under the tier that ran. Reviews, notes, escalations and merges carry `milestone` when it could be found.
+- `pauses.jsonl` (0.4.2+) holds Director pauses (`reason`: `user` or `runway`). Subtract them from wall-clock time before judging speed.
 - `notes.jsonl` (in the logs folder, when present) holds free-form Director notes (`log-event.js note`). Read them as context. Count a note as a verdict only when it names the task, the attempt and the verdict; then dedupe as above.
 
 ## What to look for

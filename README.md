@@ -13,7 +13,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `hooks/hooks.json` | The plugin's hook set for Claude Code: logger, guard and the SessionStart hooks-active check. The Codex CLI doesn't run plugin hooks, so on Codex `team-init` writes project hooks from this file ([Codex](#codex)) |
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
 | `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist |
-| `scripts/log-event.js` | Manual logging: decisions, escalations, notes, and the Director's own delegation and review lines (used for Codex) |
+| `scripts/log-event.js` | Manual logging: decisions, escalations, notes, pauses, and the Director's own delegation and review lines (used for Codex) |
 | `scripts/models.js` | `show` prints the effective tier → model map; `resolve <tier> [--tool t]` prints the model for a tier; `up <tier>` and `down <tier>` move to the next auto-eligible tier for a tool |
 | `scripts/codex-log.js` | Codex hook handler. Writes full records (delegation, completion, review, merge) into the shared log files with `tool: "codex"`, and selected raw fields of Codex events into `codex-events.jsonl` |
 | `scripts/codex-agents.js` | Writes `.codex/agents/<role>-<tier>.toml` for each role and enabled Codex tier, from the model map. Per machine, gitignored. `--check` reports drift |
