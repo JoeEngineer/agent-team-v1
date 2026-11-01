@@ -65,6 +65,10 @@ test('Codex guidance distinguishes same-settings followups from changed-settings
   assert(codex.includes('fork_turns: "none"'));
   assert(codex.includes('Log the new name as a new delegation before spawning'));
   assert(codex.includes('resolved model and effort'));
+  assert(codex.includes('exact `turn_id` window'));
+  assert(codex.includes('.pending/codex-completions/<event_id>.json'));
+  assert(codex.includes('including a `wait_agent` dispatch'));
+  assert(codex.includes('`--dry-run` previews reconciliation and does not mutate'));
 });
 
 test('Codex mapping and Coach guidance separate requested from observed settings', () => {
@@ -74,4 +78,7 @@ test('Codex mapping and Coach guidance separate requested from observed settings
   assert(mapping.includes('this session\'s runtime result'));
   assert(coach.includes('not requested settings'));
   assert(coach.includes('Don\'t count a requested escalation as an executed higher-setting trial'));
+  const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  assert(readme.includes('recovers pending Codex completion snapshots'));
+  assert(!readme.includes('Codex records come from its hooks'));
 });
