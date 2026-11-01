@@ -6,7 +6,7 @@ Change this file only through a PR against the plugin repo (that's how the Coach
 
 ## Starting tier
 
-Plugin agents are addressed as `agent-team:<name>` (e.g. `subagent_type: "agent-team:implementer"`). The agent's file sets its default tier and effort (and, on Claude, the matching `model:` header); only pass `model`/`effort` when this table says something different from the default. See "Tiers and models" below.
+Plugin agents are addressed as `agent-team:<name>` (e.g. `subagent_type: "agent-team:implementer"`). The agent's file sets a default tier and effort (and, on Claude, the matching `model:` header), but **pass `model` (from `models.js resolve <tier> --tool <t>`) and `effort` from this table on every spawn**, even when they match the default. The task card's `tier=` and `WHY` are not applied by themselves. See "Tiers and models" below.
 
 | Task type | Difficulty | Agent | Tier | Effort | Vehicle |
 |---|---|---|---|---|---|
@@ -25,6 +25,8 @@ Plugin agents are addressed as `agent-team:<name>` (e.g. `subagent_type: "agent-
 | review | any | reviewer | medium | high | subagent |
 | review (milestone final) | any | reviewer | large | high | subagent |
 | coach | any | coach | large | high | subagent |
+
+A fix PR for a finding from the milestone final review gets a normal per-PR review (the `review` row). Resume the final reviewer only to confirm its own blocking finding is resolved on the incremental diff, not for a fresh milestone check.
 
 **Difficulty guide:** *easy* — clear spec, one area, existing pattern to copy. *medium* — clear spec, several files or a new pattern. *hard* — unclear cause, cross-cutting, or real design choices inside the task.
 
