@@ -20,7 +20,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/codex-hooks.js` | Writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Both are committed |
 | `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run |
 | `scripts/archive-logs.js` | Milestone close: copies the project's logs to an archive folder outside the repo, and with `--clear` removes the live copies once the archive is verified |
-| `scripts/reconcile-logs.js` | Recovers pending Codex completions and backfills completion/review records missed by Claude Code stop hooks |
+| `scripts/reconcile-logs.js` | Drains snapshots from observed Codex stops and backfills Claude completion/review records from transcripts |
 | `plugin.json` (root) | Portable Agent Plugins manifest that Codex reads; `.claude-plugin/` stays for Claude Code |
 | `templates/project/` | Files `/agent-team:team-init` copies into a project, including the Codex hook shim |
 
@@ -43,7 +43,7 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
 - **Script commands:** run them from the project root with the plugin path, `node "<plugin root>/scripts/…"`, as `team-init` does. The commands below are written relative to the plugin root.
 - **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
-- **Backfill:** `node scripts/reconcile-logs.js` recovers pending Codex completion snapshots and rebuilds missing Claude completion or review records from Claude subagent transcripts. Codex stop events may be saved temporarily while the child transcript finishes; a later hook dispatch (including `wait_agent`) drains them. In Codex-only projects, reconciliation handles those pending completions before checking for a Claude projects root. `--dry-run` previews work without changing logs or pending files. Rebuilt Claude lines are marked `report_source: "reconcile"`.
+- **Backfill:** `node scripts/reconcile-logs.js` drains snapshots from observed Codex stop events and rebuilds missing Claude completion or review records from Claude subagent transcripts. Codex stop events may be saved temporarily while the child transcript finishes; a later hook dispatch (including `wait_agent`) or reconciliation drains them. An entirely missed Codex stop leaves no snapshot to recover. In Codex-only projects, reconciliation handles pending snapshots before checking for a Claude projects root. `--dry-run` previews work without changing logs or pending files. Rebuilt Claude lines are marked `report_source: "reconcile"`.
 
 ## Models and tiers
 

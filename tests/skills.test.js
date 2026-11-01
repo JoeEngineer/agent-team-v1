@@ -79,6 +79,8 @@ test('Codex mapping and Coach guidance separate requested from observed settings
   assert(coach.includes('not requested settings'));
   assert(coach.includes('Don\'t count a requested escalation as an executed higher-setting trial'));
   const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
-  assert(readme.includes('recovers pending Codex completion snapshots'));
+  assert(readme.includes('drains snapshots from observed Codex stop events'));
+  assert(readme.includes('An entirely missed Codex stop leaves no snapshot to recover'));
+  assert(readme.includes('rebuilds missing Claude completion or review records'));
   assert(!readme.includes('Codex records come from its hooks'));
 });

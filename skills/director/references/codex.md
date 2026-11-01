@@ -68,7 +68,7 @@ Codex transcript events can arrive before the child turn has finished writing it
 
 If the stop event arrives before that turn's `task_complete`, the hook saves a durable parsed snapshot under `.agent-team/logs/.pending/codex-completions/<event_id>.json`. That pending file is a recovery snapshot, not a normalized completion record; until a later dispatch drains it, the shared completion log may not yet have the final record. A later Codex hook dispatch, including a `wait_agent` dispatch, drains pending snapshots with bounded checks and no sleep. The snapshot preserves the stop event's parsed data while the transcript finishes.
 
-To recover after hooks were missed or a pending snapshot remains, run `node scripts/reconcile-logs.js`. It processes pending Codex completions before checking for the Claude projects root, so it also works in Codex-only projects. `--dry-run` previews reconciliation and does not mutate logs or pending files.
+To drain pending snapshots from observed Codex stop events, run `node scripts/reconcile-logs.js`. It processes those Codex snapshots before checking for the Claude projects root, so it also works in Codex-only projects. It cannot reconstruct a Codex stop event that was entirely missed and left no snapshot. Claude completion and review recovery from transcripts remains supported. `--dry-run` previews reconciliation and does not mutate logs or pending files.
 - Escalation: `node "<plugin root>/scripts/models.js" up <tier> --tool codex` (or `down`). If the map has no Codex model for the routed tier, use `models.js down`, spawn at that tier and log it with the stdin form:
 
 ```
