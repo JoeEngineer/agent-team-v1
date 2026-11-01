@@ -100,6 +100,41 @@ test('logMerges with tool codex: record is tagged codex and uses gh state', () =
   });
 });
 
+test('logReview: identical verdicts survive distinct attempts, task reuse and roles', () => {
+  const proj = tmpProject();
+  withProject(proj, {}, () => {
+    const input = inputFor(proj);
+    const review = { verdict: 'approve', findings: [] };
+    const rec = { agent_id: 'a1', model: 'requested', resolved_model: 'observed', effort: 'high', resolved_effort: 'low', task: { id: 'T-1', type: 'review', attempt: 1 } };
+    for (const task of [rec.task, { ...rec.task, attempt: 2 }, { ...rec.task, id: 'T-2' }, { ...rec.task, type: 'final_review' }]) {
+      records.logReview(input, { ...rec, task }, review, 'codex');
+      records.logReview(input, { ...rec, task }, review, 'codex');
+    }
+    const rs = readLog(proj, 'reviews.jsonl');
+    eq(rs.length, 4, 'one per task/attempt/role');
+    eq(rs[0].reviewer_model, 'observed', 'observed model');
+    eq(rs[0].reviewer_effort, 'low', 'observed effort');
+    eq(rs[0].requested_effort, 'high', 'requested effort retained');
+  });
+});
+
+test('logReview: distinct turns survive identical verdicts and durable receipts survive marker pruning', () => {
+  const proj = tmpProject();
+  withProject(proj, {}, () => {
+    const input = inputFor(proj);
+    const review = { verdict: 'approve' };
+    const rec = { agent_id: 'r1', model: 'requested', effort: 'high', resolved_model: null, resolved_effort: null, task: { id: 'T-1', type: 'review', attempt: 1 } };
+    for (const turn_id of ['child-1', 'child-2']) records.logReview(input, { ...rec, turn_id }, review, 'codex');
+    fs.rmSync(path.join(proj, '.agent-team', 'logs', '.pending'), { recursive: true, force: true });
+    records.logReview(input, { ...rec, turn_id: 'child-1' }, review, 'codex');
+    const rs = readLog(proj, 'reviews.jsonl');
+    eq(rs.length, 2, 'durable turn dedupe');
+    eq(rs[0].reviewer_effort, null, 'unknown observed effort stays unknown');
+    eq(rs[0].reviewer_model, null, 'unknown observed model stays unknown');
+    eq(rs[0].requested_effort, 'high', 'request retained');
+  });
+});
+
 test('logMerges: gh failure is unknown; non-merge command logs nothing', () => {
   const proj = tmpProject();
   withProject(proj, fakeGh('', 1), () => {

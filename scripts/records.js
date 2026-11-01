@@ -71,22 +71,102 @@ function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
 
 const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
 
-// A review can be seen twice (PostToolUse for a foreground subagent, then
-// SubagentStop). Log it once per agent id and verdict content, so a re-review
-// by the same (resumed) reviewer is still logged.
+function readJsonl(file) {
+  try {
+    return fs.readFileSync(file, 'utf8').split(/\r?\n/).flatMap((line) => {
+      try {
+        const r = JSON.parse(line);
+        return r && typeof r === 'object' ? [r] : [];
+      } catch { return []; }
+    });
+  } catch { return []; }
+}
+
+// Serialize writes of one durable event. Unlike claimOnce, a lock is released
+// after writing, so a process that dies before appending cannot consume the
+// event forever. Recover a dead process's lock on a later hook/reconcile run.
+function withRecordLock(input, id, fn) {
+  const dir = path.join(lib.logDir(input), '.pending', 'record-locks');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, `${shortHash(id)}.lock`);
+  let fd;
+  try {
+    try { fd = fs.openSync(file, 'wx'); } catch (err) {
+      if (err.code !== 'EEXIST') throw err;
+      let dead = false;
+      try {
+        const owner = JSON.parse(fs.readFileSync(file, 'utf8'));
+        if (Number.isInteger(owner.pid) && owner.pid > 0) {
+          try { process.kill(owner.pid, 0); } catch (e) { dead = e.code === 'ESRCH'; }
+        }
+      } catch {
+        // The owner may still be writing its pid. Only reap a torn lock after
+        // a generous grace period, never while another fresh hook is starting.
+        dead = Date.now() - fs.statSync(file).mtimeMs > 5 * 60 * 1000;
+      }
+      if (!dead) return false;
+      fs.unlinkSync(file);
+      try { fd = fs.openSync(file, 'wx'); } catch (e) {
+        if (e.code === 'EEXIST') return false;
+        throw e;
+      }
+    }
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid }));
+    return fn();
+  } finally {
+    if (fd !== undefined) {
+      fs.closeSync(fd);
+      fs.unlinkSync(file);
+    }
+  }
+}
+
+// The JSONL record, rather than an expiring marker, is the durable receipt.
+function appendOnce(input, file, idField, record) {
+  return withRecordLock(input, `${file}:${record[idField]}`, () => {
+    if (readJsonl(path.join(lib.logDir(input), file)).some((r) => r[idField] === record[idField])) return false;
+    lib.appendJsonl(input, file, record);
+    return true;
+  });
+}
+
+function reviewIdentity(input, record, review, tool = 'claude') {
+  const task = record.task || {};
+  const identity = task.id || record.turn_id;
+  return record.agent_id && identity ? `review-${shortHash(JSON.stringify([
+    tool, record.session_id || input.session_id || null, record.agent_id,
+    task.id || null, task.reviewed_task || null, task.attempt == null ? null : String(task.attempt),
+    task.role || task.type || record.agent || null, record.turn_id || null, review,
+  ]))}` : null;
+}
+
+// Task identity matters: a resumed reviewer may issue the same verdict for a
+// new attempt, or reuse its thread for a new task whose attempt resets to one.
 function logReview(input, record, review, tool = 'claude') {
-  if (record.agent_id && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return;
-  lib.appendJsonl(input, 'reviews.jsonl', {
+  const task = record.task || {};
+  const identity = task.id || record.turn_id;
+  const reviewId = reviewIdentity(input, record, review, tool);
+  if (record.agent_id && !identity && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return false;
+  const row = {
     ...base(input, tool),
+    ...(reviewId ? { review_id: reviewId } : {}),
+    ...(record.turn_id ? { turn_id: record.turn_id } : {}),
     agent_id: record.agent_id || null,
-    task_id: record.task.reviewed_task || record.task.id,
-    pr: record.task.pr,
-    attempt: record.task.attempt,
-    reviewer_model: record.resolved_model || record.model,
-    reviewer_effort: record.effort,
+    task_id: task.reviewed_task || task.id,
+    review_task_id: task.id,
+    role: task.role || task.type || record.agent || null,
+    pr: task.pr,
+    attempt: task.attempt,
+    reviewer_model: tool === 'codex' && record.resolved_model !== undefined ? record.resolved_model : (record.resolved_model || record.model),
+    reviewer_effort: tool === 'codex' && record.resolved_effort !== undefined ? record.resolved_effort : (record.resolved_effort || record.effort),
+    requested_model: record.model ?? null,
+    requested_effort: record.effort ?? null,
     reviewer_tier: record.tier === undefined ? null : record.tier,
     ...review,
-  });
+  };
+  if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
+  lib.appendJsonl(input, 'reviews.jsonl', row);
+  return true;
 }
 
 // The last delegations.jsonl record for which predicate(record) is true, or
@@ -151,5 +231,5 @@ function logMerges(input, tool = 'claude') {
 
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
-  findDelegation, prState, mergeOutcome, logMerges,
+  readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, prState, mergeOutcome, logMerges,
 };

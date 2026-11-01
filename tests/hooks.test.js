@@ -451,7 +451,7 @@ test('SubagentStop: first fire without a fence, second with one, is logged', () 
   eq(readLog(proj, 'reviews.jsonl').length, 1, 'second fire logged the review');
 });
 
-test('reviews: identical review JSON from a resumed agent is logged once, a different one is logged', () => {
+test('reviews: identical review JSON from distinct resumed attempts is logged for each attempt', () => {
   const proj = tmpProject();
   const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
   const tPath = writeSubagentTranscript(tdir, 'id1', 'TASK id=I-1 type=review difficulty=easy milestone=i attempt=1 pr=8', REVIEW('approve'), 'claude-sonnet-5-5', { handback: true });
@@ -464,9 +464,9 @@ test('reviews: identical review JSON from a resumed agent is logged once, a diff
   };
   resume(1, REVIEW('approve'));
   eq(readLog(proj, 'completions.jsonl').length, 2, 'precondition: the resumed finish was seen');
-  eq(readLog(proj, 'reviews.jsonl').length, 1, 'identical review logged once');
+  eq(readLog(proj, 'reviews.jsonl').length, 2, 'identical review preserved for both attempts');
   resume(2, REVIEW('changes_requested'));
-  eq(readLog(proj, 'reviews.jsonl').length, 2, 'different review logged');
+  eq(readLog(proj, 'reviews.jsonl').length, 3, 'different review logged');
 });
 
 // ---- From PR #52 (CF-1), adapted. The real SendMessage resume shape (Claude
