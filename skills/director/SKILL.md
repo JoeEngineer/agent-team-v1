@@ -56,7 +56,7 @@ At the start, look for an `agent-team hooks: active` line in your context. If it
 
 ## On Codex
 
-Skills are invoked as `$agent-team:<skill>`. Codex has no per-spawn model, so you spawn `<role>-<tier>` agent files and pass `reasoning_effort` each time. Log every spawn and retry yourself, and make worktrees with your own git commands. Setup, exact commands, naming and sandbox caveats are in `references/codex.md`. Merging needs `gh`; if it is missing, tell the user.
+Skills are invoked as `$agent-team:<skill>`. Spawn and retry behavior depends on the fields exposed by this session's collaboration tools; inspect their schema instead of assuming every client has the same options. When supported, a fresh spawn can set model and `reasoning_effort`; use `fork_turns: "none"` when changing either so the override applies, and provide the role instructions and compact task handoff explicitly. A follow-up resumes the same agent with its original settings. Log each action before spawning or following up, and verify the resolved model and effort in the completion. Make worktrees with your own git commands. Setup, examples, naming and sandbox caveats are in `references/codex.md`. Merging needs `gh`; if it is missing, tell the user.
 
 ## CI
 

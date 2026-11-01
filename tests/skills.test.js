@@ -55,3 +55,23 @@ test('no $ARGUMENTS or commands/ references in shipped files', () => {
     assert(!/commands[\/\\]/.test(text), `commands/ reference in ${f}`);
   }
 });
+
+test('Codex guidance distinguishes same-settings followups from changed-settings spawns', () => {
+  const skill = fs.readFileSync(path.join(skillsDir, 'director', 'SKILL.md'), 'utf8');
+  const codex = fs.readFileSync(path.join(skillsDir, 'director', 'references', 'codex.md'), 'utf8');
+  assert(!skill.includes('Codex has no per-spawn model'), 'stale claim that Codex lacks per-spawn model selection');
+  assert(codex.includes('only when retaining that agent\'s model and effort is intended'));
+  assert(codex.includes('fresh spawn with a unique task name'));
+  assert(codex.includes('fork_turns: "none"'));
+  assert(codex.includes('Log the new name as a new delegation before spawning'));
+  assert(codex.includes('resolved model and effort'));
+});
+
+test('Codex mapping and Coach guidance separate requested from observed settings', () => {
+  const mapping = fs.readFileSync(path.join(ROOT, 'docs', 'codex-mapping.md'), 'utf8');
+  const coach = fs.readFileSync(path.join(ROOT, 'agents', 'coach.md'), 'utf8');
+  assert(mapping.includes('full-history fork does not apply setting overrides'));
+  assert(mapping.includes('this session\'s runtime result'));
+  assert(coach.includes('not requested settings'));
+  assert(coach.includes('Don\'t count a requested escalation as an executed higher-setting trial'));
+});
