@@ -110,6 +110,13 @@ function onPostSubagent(input) {
     description: ti.description,
     task: lib.parseTaskCard(ti.prompt),
   };
+  // The card asked for one tier and a different one ran: record it and tell the Director.
+  let context;
+  const cardTier = record.task && record.task.tier;
+  if (cardTier && record.tier && cardTier !== record.tier) {
+    record.tier_mismatch = { card: cardTier, ran: record.tier };
+    context = `agent-team: task card says tier ${cardTier} but the spawn ran tier ${record.tier}`;
+  }
   if (background) {
     // Result, duration and tokens arrive later in completions.jsonl (same agent_id).
     record.launch_ms = elapsed;
@@ -124,6 +131,7 @@ function onPostSubagent(input) {
     }
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
+  return context;
 }
 
 function onPostSession(input) {
@@ -343,6 +351,10 @@ function onSubagentStop(input) {
   const record = completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report });
   lib.appendJsonl(input, 'completions.jsonl', record);
   if (record.review) logReview(input, record, record.review);
+  // A role agent that ended without its JSON block: tell the Director to ask for it.
+  if (agentType && agentType.startsWith('agent-team:') && !hasBlock(report)) {
+    return `agent-team: ${agentType} (${agentId || 'unknown id'}) ended without a result-json/review-json block; ask it for the block (SendMessage) before using its report`;
+  }
 }
 
 // Task card for a completion: the delegation's, with the attempt taken from
@@ -373,6 +385,10 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     effort: routing.effort,
     // The effort Claude Code actually ran the subagent at, when the hook says.
     resolved_effort: (input.effort && input.effort.level) || null,
+    // 1-based index of the turn within this agent's transcript (1 = the original
+    // delegation, 2 = its first SendMessage resume). An attempt can span several
+    // turns, so sum over all lines of an attempt.
+    turn: t.turn || null,
     // The attempt comes from the turn being logged (the TASK line that opened
     // it), not from the latest delegation, so a stale verdict is never stamped
     // with a newer attempt number.
@@ -391,6 +407,12 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
   };
 }
 
+// Hand a message to the Director as hook additionalContext. Nothing to say, no output.
+function emit(event, context) {
+  if (!context) return;
+  process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
+}
+
 function main() {
   const input = lib.readStdin();
   if (lib.detectTool(input) === 'codex') return require('./codex-log').handle(input);
@@ -398,9 +420,9 @@ function main() {
   const event = input.hook_event_name;
   const tool = input.tool_name || '';
   if (event === 'PreToolUse') return onPre(input);
-  if (event === 'SubagentStop') return onSubagentStop(input);
+  if (event === 'SubagentStop') return emit(event, onSubagentStop(input));
   if (event !== 'PostToolUse') return;
-  if (SUBAGENT_TOOLS.has(tool)) return onPostSubagent(input);
+  if (SUBAGENT_TOOLS.has(tool)) return emit(event, onPostSubagent(input));
   if (tool === SESSION_START) return onPostSession(input);
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
   if (isBridge(tool)) return onPostBridge(input);
