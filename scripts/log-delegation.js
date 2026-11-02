@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -117,6 +117,11 @@ function onPostSubagent(input) {
     record.tier_mismatch = { card: cardTier, ran: record.tier };
     context = `agent-team: task card says tier ${cardTier} but the spawn ran tier ${record.tier}`;
   }
+  const drift = cardDrift(input, record.task, record.kind);
+  if (drift) {
+    record.card_drift = drift;
+    context = [context, driftMessage(record.task.id, drift)].filter(Boolean).join('\n');
+  }
   if (background) {
     // Result, duration and tokens arrive later in completions.jsonl (same agent_id).
     record.launch_ms = elapsed;
@@ -194,9 +199,12 @@ function onPostSendMessage(input) {
   if (!task.id) return;
   const agentId = ti.to || ti.recipient || null;
   const prior = findDelegation(input, agentId) || {};
+  // kind=followup on the TASK line: scope added without a review verdict (keeps the attempt).
+  const kind = task.kind === 'followup' ? 'followup' : 'resume';
+  const drift = cardDrift(input, task, kind);
   lib.appendJsonl(input, 'delegations.jsonl', {
     ...base(input),
-    kind: 'resume',
+    kind,
     agent: prior.agent || null,
     agent_id: agentId,
     tool_use_id: input.tool_use_id || null,
@@ -209,7 +217,9 @@ function onPostSendMessage(input) {
     effort_source: prior.effort ? 'prior-delegation' : 'unknown',
     description: ti.summary,
     task,
+    ...(drift ? { card_drift: drift } : {}),
   });
+  return drift ? driftMessage(task.id, drift) : undefined;
 }
 
 // A real prompt: a string or a text part, not a tool result.
@@ -436,7 +446,7 @@ function main() {
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
   if (isBridge(tool)) return onPostBridge(input);
   if (isShell(tool)) return logMerges(input, 'claude');
-  if (tool === 'SendMessage') return onPostSendMessage(input);
+  if (tool === 'SendMessage') return emit(event, onPostSendMessage(input));
 }
 
 module.exports = { readSubagentTranscript, readMeta, completionRecord };

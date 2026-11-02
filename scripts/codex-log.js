@@ -179,8 +179,8 @@ function onFollowup(input) {
   const target = ti.target || ti.id || ti.agent_id;
   const prior = latestDelegation(input, target);
   if (!prior) return;
-  // A Director-written resume line for this task_name already covers it.
-  if (prior.kind === 'resume' && prior.source === 'director') return;
+  // A Director-written resume or followup line for this task_name already covers it.
+  if ((prior.kind === 'resume' || prior.kind === 'followup') && prior.source === 'director') return;
   if (input.tool_use_id && !records.claimOnce(input, `resume-${input.tool_use_id}`)) return;
   lib.appendJsonl(input, 'delegations.jsonl', {
     ...records.base(input, 'codex'),
@@ -202,10 +202,34 @@ function onFollowup(input) {
   });
 }
 
+// A turn that ended without task_complete: an abort, or an error such as a
+// usage limit. Returns 'usage_limit', 'aborted', 'error' or null.
+function interruption(p) {
+  if (p.type === 'turn_aborted') return 'aborted';
+  if (p.type !== 'error') return null;
+  const msg = String(p.message || (p.error && p.error.message) || '');
+  return /usage limit|rate limit|quota/i.test(msg) || /usage_limit|rate_limit/i.test(String(p.codex_error_info || '')) ? 'usage_limit' : 'error';
+}
+
+// The child's turn ids in transcript order (one per task_started).
+function turnIds(file) {
+  const ids = [];
+  try {
+    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      if (!line.includes('task_started')) continue;
+      try {
+        const e = JSON.parse(line);
+        if (e && e.type === 'event_msg' && e.payload && e.payload.type === 'task_started' && e.payload.turn_id) ids.push(e.payload.turn_id);
+      } catch { /* torn line */ }
+    }
+  } catch { /* no transcript */ }
+  return ids;
+}
+
 // Read exactly one child turn. Inherited context and later turns are not facts
 // about this stop. A stop hook can run before task_complete has been appended.
 function readTranscript(file, turnId) {
-  const out = { taskName: null, model: null, effort: null, tokens: null, detail: null, duration_ms: null, turnFound: false, complete: false };
+  const out = { taskName: null, model: null, effort: null, tokens: null, detail: null, duration_ms: null, turnFound: false, complete: false, interrupted: null, lastMessage: null };
   const events = [];
   try {
     for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
@@ -238,6 +262,8 @@ function readTranscript(file, turnId) {
     out.complete = true;
     const duration = events[completeIdx].payload.duration_ms;
     if (Number.isFinite(duration) && duration >= 0) out.duration_ms = duration;
+    const last = events[completeIdx].payload.last_agent_message;
+    if (typeof last === 'string' && last) out.lastMessage = last;
     // Terminal records have an exact id even if their append is delayed past
     // the next start. Unkeyed usage/context must still stop at that boundary.
     endIdx = Math.min(endIdx, completeIdx);
@@ -264,6 +290,8 @@ function readTranscript(file, turnId) {
     } else if (e.type === 'event_msg' && p) {
       if (p.type === 'token_count') {
         finalUsage = p.info && p.info.total_token_usage || null;
+      } else if (!out.complete && !out.interrupted) {
+        out.interrupted = interruption(p);
       }
     }
   }
@@ -318,10 +346,39 @@ function completionRecord(input, t) {
     duration_ms: null,
     tokens: null,
     tokens_detail: null,
-    report_source: report ? 'hook-input' : 'none',
+    // 'missing': the stop carried no report (for example a turn cut off by a usage limit).
+    report_source: report ? 'hook-input' : 'missing',
     result: lib.lastFencedJson(report, 'result-json'),
     review: lib.lastFencedJson(report, 'review-json'),
   };
+}
+
+// Fill a completion from its transcript turn. A turn the transcript does not
+// (yet) have stays a stub (`stub: true`), which reconcile backfills by turn_id
+// later. A turn that ended without task_complete gets `interrupted`. A record
+// with no report takes the turn's last agent message, if the transcript has it.
+function fillFromTranscript(original, t) {
+  const record = { ...original, resolved_model: t.model, resolved_effort: t.effort, duration_ms: t.duration_ms, tokens: t.tokens, tokens_detail: t.detail };
+  delete record.stub;
+  if (!t.turnFound && record.turn_id) record.stub = true;
+  if (t.interrupted) record.interrupted = t.interrupted;
+  if (record.report_source === 'missing' && t.lastMessage) {
+    record.result = lib.lastFencedJson(t.lastMessage, 'result-json');
+    record.review = lib.lastFencedJson(t.lastMessage, 'review-json');
+    record.report_source = 'transcript';
+  }
+  if (record.tier == null && record.resolved_model) {
+    record.tier = models.modelToTier(tierMap(), 'codex', record.resolved_model);
+    record.tier_source = record.tier ? 'resolved' : null;
+  }
+  return record;
+}
+
+// A completion for a turn found only in the transcript (its stop never
+// reached the hook). Same event_id as the hook would have written.
+function transcriptRecord(meta, turnId, t) {
+  const input = { session_id: meta.session_id || null, agent_id: meta.agent_id, agent_type: meta.agent_type || null, turn_id: turnId, last_assistant_message: '' };
+  return fillFromTranscript(completionRecord(input, t), t);
 }
 
 function finishPending(input, file, { dryRun = false } = {}) {
@@ -332,12 +389,8 @@ function finishPending(input, file, { dryRun = false } = {}) {
     const original = pending.record;
     const existing = records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).find((r) => r.event_id === original.event_id);
     const t = readTranscript(pending.transcript_path, original.turn_id);
-    if (!existing && pending.wait_for_complete && (!t.turnFound || !t.complete)) return { state: 'waiting' };
-    const record = existing || { ...original, resolved_model: t.model, resolved_effort: t.effort, duration_ms: t.duration_ms, tokens: t.tokens, tokens_detail: t.detail };
-    if (record.tier == null && record.resolved_model) {
-      record.tier = models.modelToTier(tierMap(), 'codex', record.resolved_model);
-      record.tier_source = record.tier ? 'resolved' : null;
-    }
+    if (!existing && pending.wait_for_complete && (!t.turnFound || (!t.complete && !t.interrupted))) return { state: 'waiting' };
+    const record = existing || fillFromTranscript(original, t);
     if (dryRun) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
     if (!existing) lib.appendJsonl(input, 'completions.jsonl', record);
     const sess = { ...input, session_id: record.session_id };
@@ -367,7 +420,7 @@ function onSubagentStop(input) {
     if (fs.existsSync(file) || records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).some((r) => r.event_id === record.event_id)) return;
     const temp = `${file}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(temp, JSON.stringify({ version: 1, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete, record }));
+      fs.writeFileSync(temp, JSON.stringify({ version: 1, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
       fs.renameSync(temp, file);
     } finally {
       try { fs.unlinkSync(temp); } catch { /* rename consumed it */ }
@@ -433,4 +486,4 @@ function handle(input) {
   } catch { /* hooks must never break a session */ }
 }
 
-module.exports = { handle, drainPending };
+module.exports = { handle, drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir };

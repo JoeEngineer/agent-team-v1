@@ -24,6 +24,9 @@ try {
         tool,
         guidance_version: version,
         session_id: (input && input.session_id) || null,
+        // The session's resolved model, when the tool passes it. log-event.js
+        // uses it to fill decision lines (see sessionSettings there).
+        model: (input && typeof input.model === 'string' && input.model) || null,
       }) + '\n', 'utf8');
     } catch { /* marker is best effort */ }
   }

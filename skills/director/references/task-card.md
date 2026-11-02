@@ -17,6 +17,12 @@ WHY medium tier (sonnet) / medium effort per routing table; clear spec, follows 
   - `difficulty`: `easy`, `medium`, `hard`.
 - `WHY` line: free text — why this agent/tier/effort. On escalations, say which ladder step.
 
+### Attempts and followups
+
+- A retry keeps the attempt-1 `type` and `difficulty`, even when the work is now a fix. The logger warns and records `card_drift` when they change.
+- Bump `attempt` only after a review verdict (a send-back or an escalation) or for a fold-in. A continuation sent before any review keeps the attempt.
+- Scope added to a task that is not a retry (a missed file, an extra small change) is a followup: keep the attempt and add `kind=followup` to the TASK line (Codex: `"kind":"followup"` in the `log-event.js delegation` line). Work big enough to review on its own gets a new task id instead.
+
 Then the brief:
 
 ```

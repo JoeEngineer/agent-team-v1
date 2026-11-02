@@ -52,7 +52,7 @@ When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegation
 
 ## Pauses
 
-Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user` or `runway`; `note` and `until` are optional.
+Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user`, `runway`, or `usage_limit` (a tool usage limit stopped you or an agent); `note` and `until` are optional.
 
 ```
 node "<plugin root>/scripts/log-event.js" pause - <<'EOF'
