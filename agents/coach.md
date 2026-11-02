@@ -23,7 +23,14 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 
 ### Fields added in 0.4.2 (Claude records)
 - `turn` (1-based within the agent; turn 1 is the first delegation) is on Claude completion lines. Sum over distinct `turn` values; for several lines with the same `agent_id` and `turn`, use the last. Lines reconciled by 0.4.2+ keep the run's `guidance_version` and add `reconciled_by`. Drop any line with `stale_of`: its content belongs to the attempt it names. Delegation lines with `tier_mismatch: {card, ran}` ran on a different tier than the card asked for; count them under the tier that ran. Reviews, notes, escalations and merges carry `milestone` when it could be found.
-- `pauses.jsonl` (0.4.2+) holds Director pauses (`reason`: `user` or `runway`). Subtract them from wall-clock time before judging speed.
+- `pauses.jsonl` (0.4.2+) holds Director pauses (`reason`: `user`, `runway`, or from 0.4.4 `usage_limit`). Subtract them from wall-clock time before judging speed.
+
+### Fields added in 0.4.4
+- Delegation `kind: "followup"` is a scope addition sent to an existing agent, not a retry: it keeps the attempt. Don't count it as a failed attempt or a send-back.
+- `card_drift: {type|difficulty: {from, to}}` on a delegation line: a retry changed the task's type or difficulty. Judge the task by its attempt-1 type and difficulty (the `from` values).
+- Codex completions: `stub: true` means the turn was not in the transcript yet when the stop hook ran (metrics are null until `reconcile-logs.js` fills it). `interrupted` (`usage_limit`, `aborted`, `error`, `no_task_complete`) means the turn ended without finishing; don't count it as a failed attempt on its own. `report_source: "missing"` means no report reached the logger; `"transcript"` means reconcile took it from the transcript's last agent message (trust it like a hook line).
+- Decision lines: `model_given` holds the free text the Director wrote when `model` was filled from the session (`model_source: "session"`).
+- Merge `command` fields have leading `cd` segments and local paths removed.
 
 ### Codex records
 - Codex lines sit in the same files as Claude's, with `tool: "codex"`. Compare results by observed resolved model and effort in completions, not requested settings, tier name, or tool arguments alone. Keep requested settings and observed settings distinct; call a change unknown when the resolved value is missing, and ineffective when it is observed to remain unchanged. Don't count a requested escalation as an executed higher-setting trial. See `docs/codex-mapping.md`, "Models and effort".

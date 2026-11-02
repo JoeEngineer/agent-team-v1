@@ -19,9 +19,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const lib = require('./lib');
-const { claimOnce, shortHash, logReview } = require('./records');
+const { claimOnce, shortHash, logReview, appendOnce } = require('./records');
 const { readSubagentTranscript, readMeta, completionRecord } = require('./log-delegation');
-const { drainPending } = require('./codex-log');
+const { drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir: codexPendingDir } = require('./codex-log');
+
+// A SendMessage turn on an existing agent: a retry (resume) or a scope addition (followup).
+const isResume = (d) => d.kind === 'resume' || d.kind === 'followup';
 
 const hasBlock = (v) => /```(result|review)-json/.test(v);
 
@@ -150,6 +153,100 @@ function markStale(rows, agentId, turnInfos) {
   return marked;
 }
 
+// Codex turns by turn_id. The child transcripts are known from the raw
+// SubagentStart/SubagentStop rows in codex-events.jsonl. Two jobs:
+//  1. fill stub completions (`stub: true`, the transcript lacked the turn when
+//     the stop hook ran) from their transcript turn;
+//  2. add a completion for each child turn that has none (its stop never
+//     reached the hook, e.g. a turn cut off by a usage limit). Only turns at or
+//     after the agent's first known turn count, so inherited (forked) parent
+//     turns are never logged. The last turn is left alone while it may still
+//     be running (no task_complete and no interruption).
+// Backfilled lines carry `reconciled_by`; a turn with no report keeps
+// `report_source: "missing"`.
+function backfillCodexTurns(input, { dryRun = false } = {}) {
+  const stats = { filled: 0, added: 0, running: 0, reviews: 0, errors: [] };
+  const logDir = lib.logDir(input);
+  const agents = new Map();
+  for (const e of readJsonl(path.join(logDir, 'codex-events.jsonl'))) {
+    if (!e.agent_id || (e.hook_event_name !== 'SubagentStop' && e.hook_event_name !== 'SubagentStart')) continue;
+    const a = agents.get(e.agent_id) || { agent_id: e.agent_id, agent_type: null, session_id: null, transcript: null, turns: new Set() };
+    a.agent_type = a.agent_type || e.agent_type || null;
+    a.session_id = a.session_id || e.session_id || null;
+    a.transcript = e.agent_transcript_path || a.transcript;
+    if (e.turn_id) a.turns.add(e.turn_id);
+    agents.set(e.agent_id, a);
+  }
+  if (!agents.size) return stats;
+  const pending = new Set();
+  try {
+    const dir = codexPendingDir(input);
+    for (const f of fs.readdirSync(dir)) {
+      try { const p = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); if (p.record && p.record.turn_id) pending.add(`${p.record.agent_id}|${p.record.turn_id}`); } catch { /* torn snapshot */ }
+    }
+  } catch { /* no snapshots */ }
+  const version = lib.guidanceVersion();
+  const file = path.join(logDir, 'completions.jsonl');
+  const read = readLines(file);
+  const has = new Set(read.lines.filter((l) => l.row && l.row.turn_id).map((l) => `${l.row.agent_id}|${l.row.turn_id}`));
+  const eventIds = new Set(read.lines.filter((l) => l.row && l.row.event_id).map((l) => l.row.event_id));
+  // An unfinished turn counts as cut off once a later turn has started.
+  const settle = (a, turnId, t) => {
+    if (t.complete || t.interrupted) return t;
+    const ids = turnIds(a.transcript);
+    const i = ids.indexOf(turnId);
+    return i >= 0 && i < ids.length - 1 ? { ...t, interrupted: 'no_task_complete' } : null;
+  };
+  const reviews = [];
+
+  // 1. Stubs.
+  for (const l of read.lines) {
+    const r = l.row;
+    if (!r || r.tool !== 'codex' || !r.stub || !r.turn_id) continue;
+    const a = agents.get(r.agent_id);
+    if (!a || !a.transcript) continue;
+    const t0 = readTranscript(a.transcript, r.turn_id);
+    const t = t0.turnFound ? settle(a, r.turn_id, t0) : null;
+    if (!t) continue;
+    const filled = fillFromTranscript(r, t);
+    filled.reconciled_by = version;
+    if (filled.review && !r.review) reviews.push(filled);
+    l.row = filled;
+    l.changed = true;
+    stats.filled++;
+  }
+  if (stats.filled && !dryRun) {
+    try { rewriteJsonl(file, read); } catch (err) {
+      stats.errors.push(`could not rewrite completions.jsonl: ${err && err.message || err}`);
+      reviews.length = 0;
+    }
+  }
+
+  // 2. Turns with no line.
+  for (const a of agents.values()) {
+    if (!a.transcript) continue;
+    const ids = turnIds(a.transcript);
+    const known = (id) => a.turns.has(id) || has.has(`${a.agent_id}|${id}`) || pending.has(`${a.agent_id}|${id}`);
+    const anchor = ids.findIndex(known);
+    if (anchor < 0) continue;
+    for (const id of ids.slice(anchor)) {
+      if (has.has(`${a.agent_id}|${id}`) || pending.has(`${a.agent_id}|${id}`)) continue;
+      const t = settle(a, id, readTranscript(a.transcript, id));
+      if (!t) { stats.running++; continue; }
+      const record = transcriptRecord(a, id, t);
+      if (eventIds.has(record.event_id)) continue;
+      record.reconciled_by = version;
+      stats.added++;
+      if (dryRun) continue;
+      if (appendOnce(input, 'completions.jsonl', 'event_id', record) && record.review) reviews.push(record);
+    }
+  }
+  if (!dryRun) {
+    for (const r of reviews) if (logReview({ ...input, session_id: r.session_id }, r, r.review, 'codex')) stats.reviews++;
+  }
+  return stats;
+}
+
 function reconcile({ dryRun = false } = {}) {
   const input = {};
   const logDir = lib.logDir(input);
@@ -157,6 +254,7 @@ function reconcile({ dryRun = false } = {}) {
   // Codex snapshots already identify their transcript and frozen delegation.
   // Process them even on Codex-only installs with no ~/.claude/projects.
   const codex = drainPending(input, { dryRun, cap: Infinity });
+  codex.turns = backfillCodexTurns(input, { dryRun });
   const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, stale: 0, rewritten: [], errors: [], codex };
   const delegations = readJsonl(path.join(logDir, 'delegations.jsonl'));
   const completions = readJsonl(path.join(logDir, 'completions.jsonl'));
@@ -169,7 +267,7 @@ function reconcile({ dryRun = false } = {}) {
     return agents.get(id);
   };
   for (const d of delegations) {
-    if (!d.agent_id || (d.kind !== 'subagent' && d.kind !== 'resume')) continue;
+    if (!d.agent_id || (d.kind !== 'subagent' && !isResume(d))) continue;
     const a = entry(d.agent_id);
     a.dels.push(d);
     if (d.kind === 'subagent' || !a.delegation) a.delegation = d;
@@ -189,7 +287,7 @@ function reconcile({ dryRun = false } = {}) {
     if (a.tool !== 'claude') { stats.skipped++; continue; }
     // Nothing to do when it has a result/review and was never resumed.
     const done = a.comps.some(hasContent) || a.dels.some((d) => d.kind === 'subagent' && hasContent(d));
-    const resumed = a.dels.some((d) => d.kind === 'resume');
+    const resumed = a.dels.some((d) => isResume(d));
     if (done && !resumed) { stats.checked++; stats.present++; continue; }
     stats.checked++;
     const tPath = findTranscript(root, a.session, a.id);
@@ -208,7 +306,7 @@ function reconcile({ dryRun = false } = {}) {
       const [, report] = source;
       const probe = { result: lib.lastFencedJson(report, 'result-json'), review: lib.lastFencedJson(report, 'review-json') };
       // Turn 1 is the original delegation, later turns are its SendMessage resumes.
-      const taskDel = [a.delegation, ...a.dels.filter((d) => d.kind === 'resume')][turn - 1] || a.delegation;
+      const taskDel = [a.delegation, ...a.dels.filter((d) => isResume(d))][turn - 1] || a.delegation;
       // A match counts only on the same attempt: a stale line (turn n's report under attempt n+1) must not hide turn n+1.
       const att = String(t.task.attempt || (taskDel && taskDel.task && taskDel.task.attempt) || '');
       turnInfos.push({ attempt: att, probe });
@@ -226,7 +324,7 @@ function reconcile({ dryRun = false } = {}) {
       lib.appendJsonl(input, 'completions.jsonl', record);
       if (record.review) { logReview(sess, record, record.review); stats.reviews++; }
     }
-    if (a.dels.some((d) => d.kind === 'resume')) {
+    if (a.dels.some((d) => isResume(d))) {
       for (const file of ['completions.jsonl', 'reviews.jsonl']) {
         const full = path.join(logDir, file);
         const read = readLines(full);
@@ -257,6 +355,11 @@ function main(argv) {
   if (s.codex.checked) {
     console.log(`${dryRun ? '[dry run] ' : ''}Codex: ${s.codex.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ${s.codex.present} already present, ${s.codex.pending} pending`);
   }
+  const ct = s.codex.turns;
+  if (ct.filled || ct.added || ct.running) {
+    console.log(`${dryRun ? '[dry run] ' : ''}Codex turns by turn_id: ${ct.filled} stub lines filled, ${ct.added} missing turns added, ${ct.running} still running`);
+  }
+  s.errors.push(...ct.errors);
   if (s.noRoot) {
     console.log(`No Claude Code projects folder found (${s.noRoot}); nothing to reconcile for Claude Code.`);
     return 0;

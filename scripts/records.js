@@ -197,6 +197,33 @@ function findDelegation(input, predicate) {
   return null;
 }
 
+// A retry keeps the task's attempt-1 `type` and `difficulty`. For a new
+// delegation line's task card, compare with the first earlier delegation of the
+// same task id (followup lines are scope additions and are not compared, nor
+// compared against). Returns { type: {from, to}, difficulty: {from, to} } with
+// only the fields that changed, or null.
+function cardDrift(input, task, kind) {
+  if (kind === 'followup' || !task || !task.id) return null;
+  let first = null;
+  try {
+    for (const line of fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      let rec;
+      try { rec = JSON.parse(line); } catch { continue; }
+      if (rec && rec.kind !== 'followup' && rec.task && rec.task.id === task.id && (rec.task.type || rec.task.difficulty)) { first = rec.task; break; }
+    }
+  } catch { /* no delegations yet */ }
+  if (!first) return null;
+  const drift = {};
+  for (const f of ['type', 'difficulty']) {
+    if (first[f] && task[f] && first[f] !== task[f]) drift[f] = { from: first[f], to: task[f] };
+  }
+  return Object.keys(drift).length ? drift : null;
+}
+
+const driftMessage = (id, drift) => `agent-team: task ${id} changed ${Object.entries(drift).map(([f, d]) => `${f} ${d.from} -> ${d.to}`).join(' and ')} since its first delegation. ` +
+  'A retry keeps the attempt-1 type and difficulty; record new scope as kind "followup" or a new task id.';
+
 // Ask GitHub what happened to the PR instead of guessing from command output:
 // the Director often chains a merge with other commands whose output mentions
 // "error" or "failed". Returns null if gh can't answer.
@@ -233,6 +260,20 @@ function milestoneOfBase(state) {
   return m ? m[1] : undefined;
 }
 
+// A shell command fit for a shared log: leading directory changes (`cd x;`,
+// `cd x &&`, Set-Location, pushd) are dropped, and any absolute local path
+// left (C:\..., /Users/..., /home/..., ~/...) becomes <path>. Archives can then
+// be shared without local paths or usernames.
+const LEADING_CD = /^\s*(?:cd|chdir|pushd|set-location|sl)\b(?:[^;&|\n"']|"[^"]*"|'[^']*')*(?:;|&&|\n)\s*/i;
+const PATH_START = String.raw`(?:[A-Za-z]:[\\/]|~[\\/]|/)`;
+const ABS_PATH = new RegExp(
+  String.raw`"${PATH_START}[^"]*"|'${PATH_START}[^']*'|(?<=^|[\s=])${PATH_START}[^\s"';&|]*`, 'g');
+function sanitizeCommand(cmd) {
+  let out = String(cmd || '');
+  for (let prev = null; prev !== out;) { prev = out; out = out.replace(LEADING_CD, ''); }
+  return out.replace(ABS_PATH, '<path>');
+}
+
 function logMerges(input, tool = 'claude') {
   const cmd = (input.tool_input && input.tool_input.command) || '';
   if (!/\bgh\s+pr\s+merge\b/.test(cmd)) return;
@@ -241,7 +282,7 @@ function logMerges(input, tool = 'claude') {
     const state = prState(input, m);
     lib.appendJsonl(input, 'merges.jsonl', {
       ...base(input, tool),
-      command: cmd.slice(0, 300),
+      command: sanitizeCommand(cmd).slice(0, 300),
       pr: state && state.number != null ? String(state.number) : m.target,
       ...milestoneField(milestoneOfBase(state)),
       outcome: mergeOutcome(state),
@@ -254,4 +295,5 @@ function logMerges(input, tool = 'claude') {
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
+  cardDrift, driftMessage, sanitizeCommand,
 };
