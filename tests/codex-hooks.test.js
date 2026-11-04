@@ -76,9 +76,20 @@ test('codex-hooks: writes the shim and a hooks.json with the same events and mat
   eq(r.status, 0, r.stderr);
   const shim = path.join(p, '.codex', 'agent-team-hook.js');
   eq(fs.readFileSync(shim, 'utf8'), fs.readFileSync(path.join(ROOT, 'templates', 'project', '.codex', 'agent-team-hook.js'), 'utf8'), 'shim is the template');
-  const plugin = readJson(path.join(ROOT, 'hooks', 'hooks.json')).hooks;
+  const { CLAUDE_ONLY, scriptOf } = require(path.join(ROOT, 'scripts', 'codex-hooks.js'));
+  const raw = readJson(path.join(ROOT, 'hooks', 'hooks.json')).hooks;
+  // Claude-only groups (tools Codex doesn't have) are left out on Codex.
+  let skipped = 0;
+  const plugin = {};
+  for (const [event, list] of Object.entries(raw)) {
+    const kept = list.filter((g) => !CLAUDE_ONLY.has(scriptOf(g.hooks[0].command)));
+    skipped += list.length - kept.length;
+    if (kept.length) plugin[event] = kept;
+  }
+  assert(skipped >= 1, 'precondition: the plugin has a Claude-only group to skip');
   const doc = readJson(hooksFile(p));
   eq(JSON.stringify(Object.keys(doc.hooks)), JSON.stringify(Object.keys(plugin)), 'same events');
+  assert(!JSON.stringify(doc).includes('handback-check'), 'no Claude-only script on Codex');
   let groups = 0;
   for (const [event, list] of Object.entries(plugin)) {
     eq(doc.hooks[event].length, list.length, `${event}: group count`);

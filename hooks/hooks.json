@@ -20,6 +20,12 @@
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/log-delegation.js\"", "timeout": 10 }
         ]
+      },
+      {
+        "matcher": "^SubagentHandback$",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/handback-check.js\"", "timeout": 10 }
+        ]
       }
     ],
     "PostToolUse": [

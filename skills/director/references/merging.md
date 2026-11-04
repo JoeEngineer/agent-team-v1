@@ -24,7 +24,21 @@ Then post a one-line PR comment: `Merged by Director after reviewer approval (ta
 gh pr merge <n> --squash --delete-branch
 ```
 
+Always use both flags: without `--delete-branch` the `task/<ID>` branch stays behind. If a merge went through without them, delete the branch (`git push origin --delete task/<ID>`).
+
 Do the bookkeeping (`git pull`, STATUS.md edits, the next PR's checks) in a separate call. The logging hook asks GitHub for the PR's state after the call; keeping the merge alone keeps the log line and any error easy to read.
+
+## The milestone PR
+
+Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue in the milestone, including follow-up tasks.
+
+```
+Closes #58
+Closes #59
+Closes #60
+```
+
+GitHub only closes issues for a PR merged into the default branch. A task PR's own `Closes #N` does nothing, because it merges into `milestone/<slug>`, so the milestone PR has to close them all. List the issues with `gh issue list --label agent-team --state open` and check them against `STATUS.md`. Don't list an issue for work that was dropped or moved to a later milestone.
 
 ## Minor findings
 

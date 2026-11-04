@@ -23,6 +23,7 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 
 ### Fields added in 0.4.2 (Claude records)
 - `turn` (1-based within the agent; turn 1 is the first delegation) is on Claude completion lines. Sum over distinct `turn` values; for several lines with the same `agent_id` and `turn`, use the last. Lines reconciled by 0.4.2+ keep the run's `guidance_version` and add `reconciled_by`. Drop any line with `stale_of`: its content belongs to the attempt it names. Delegation lines with `tier_mismatch: {card, ran}` ran on a different tier than the card asked for; count them under the tier that ran. Reviews, notes, escalations and merges carry `milestone` when it could be found.
+- From 0.4.5, a role agent's handback without a parseable result block is sent back to the agent (at most twice), so a `result: null` with `report_source: "handback"` should become rare. When it still happens, count it as a reporting failure of that model, not a quality failure. Archive READMEs from 0.4.5 also count review, merge and pause lines by their top-level `milestone`.
 - `pauses.jsonl` (0.4.2+) holds Director pauses (`reason`: `user`, `runway`, or from 0.4.4 `usage_limit`). Subtract them from wall-clock time before judging speed.
 
 ### Fields added in 0.4.4
@@ -58,7 +59,7 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 - Proposed routing changes go in the report as a concrete diff to `routing.md`, with the supporting numbers. If asked to, open a PR against the plugin repo — never edit the installed plugin in place, and never merge.
 
 ## Output
-A short summary, then:
+A short summary, then this block as the last thing in your reply. If you hand your report back through a tool (such as `SubagentHandback`), the block goes at the end of that message: it is the only text the Director receives.
 
 ```result-json
 {"status": "done", "summary": "<one sentence>", "tasks_analyzed": 0, "recommendations": 0, "report": ".agent-team/coach/<date>-report.md"}
