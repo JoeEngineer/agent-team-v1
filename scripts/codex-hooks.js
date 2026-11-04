@@ -39,6 +39,10 @@ function scriptOf(command) {
   return m ? m[1] : null;
 }
 
+// Scripts for Claude Code tools that Codex doesn't have. Leaving them out keeps
+// existing Codex projects' hooks.json (and its trust hash) unchanged.
+const CLAUDE_ONLY = new Set(['handback-check']);
+
 // The Codex hooks derived from the plugin's hooks.json: same events, matchers
 // and timeouts, each command replaced by the shim call for its script.
 function generate(pluginHooks) {
@@ -50,7 +54,7 @@ function generate(pluginHooks) {
       const hooks = [];
       for (const h of Array.isArray(group.hooks) ? group.hooks : []) {
         const script = scriptOf(h.command);
-        if (!script) continue; // not one of our scripts: nothing to point the shim at
+        if (!script || CLAUDE_ONLY.has(script)) continue; // not ours, or Claude-only: nothing to point the shim at
         const e = { type: 'command', command: shimCommand(script) };
         if (h.timeout !== undefined) e.timeout = h.timeout;
         hooks.push(e);
@@ -160,4 +164,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { shimCommand, generate, merge, plan, main, SHIM_NAME };
+module.exports = { shimCommand, generate, merge, plan, main, SHIM_NAME, CLAUDE_ONLY, scriptOf };

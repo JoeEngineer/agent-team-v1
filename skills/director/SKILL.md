@@ -29,13 +29,13 @@ Delegate everything else — including research. If you're about to read more th
 
 1. **Intake.** Turn the user's tasking into a milestone: goal, acceptance criteria, out of scope. Create `milestone/<slug>` from `main` and a GitHub issue for the milestone. For a non-trivial milestone, delegate the breakdown to `architect`.
 2. **Plan.** Each task gets an id (`<MILESTONE>-<n>`), type, difficulty, acceptance criteria, dependencies. Create an issue per task (label `agent-team`). Record the plan in `STATUS.md`.
-3. **Route.** Pick agent, tier, effort and vehicle (subagent vs. session) from `references/routing.md`. Start at the table's tier; don't start higher "to be safe".
+3. **Route.** Pick agent, tier, effort and vehicle (subagent vs. session) from `references/routing.md`. Start at the table's tier; don't start higher "to be safe". The architect's breakdown gives type and difficulty, not models. Where it flags `above-table: <reason>`, decide whether the reason justifies an override, and if it does, say so on the card's `WHY` line.
 4. **Delegate.** Every delegation prompt starts with a task card (`references/task-card.md`). The logging hook reads it — without it, the delegation is logged without task fields and the Coach can't use it.
 5. **Verify.** Read the agent's `result-json`. Check the claim (diff, PR, test run) — a result block is a report, not proof.
 6. **Review.** Every PR gets a `reviewer` pass before merge. Pass the task's acceptance criteria in the task card. The reviewer ends with its `review-json` block; don't ask it for anything else (`references/task-card.md`, "Review tasks").
 7. **Escalate, fold in, or merge.** On `changes_requested`, send it back with the reviewer's findings — escalating per `references/routing.md` when the rule says so. On `approve` with minor findings, fold the cheap ones into the same PR before merging (`references/merging.md`, "Minor findings"). On `approve` + green CI, merge into the milestone branch.
 8. **Record.** Update `STATUS.md` after every delegation and result. Write a decision record for every real decision (`references/decisions.md`).
-9. **Close.** When all tasks are merged, run a final `reviewer` pass over the milestone branch vs. `main`, archive the logs with `node "<plugin root>/scripts/archive-logs.js" <slug>` (`<slug>` is the milestone slug: letters, digits, `.`, `_`, `-`, no `/` or spaces; the script exits 1 if there are no logs, so tell the user and carry on, don't block the PR; run it before opening the PR; tell the user the destination it prints; add `--clear` only if the user says so), open the milestone → `main` PR, and hand it to the user. You don't merge it.
+9. **Close.** When all tasks are merged, run a final `reviewer` pass over the milestone branch vs. `main`, archive the logs with `node "<plugin root>/scripts/archive-logs.js" <slug>` (`<slug>` is the milestone slug: letters, digits, `.`, `_`, `-`, no `/` or spaces; the script exits 1 if there are no logs, so tell the user and carry on, don't block the PR; run it before opening the PR; tell the user the destination it prints; add `--clear` only if the user says so), open the milestone → `main` PR with a `Closes #N` line for the milestone issue and every task issue (`references/merging.md`, "The milestone PR"), and hand it to the user. You don't merge it.
 
 ## Status requests
 
@@ -44,19 +44,19 @@ When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegation
 ## Parallel work
 
 - Run independent tasks in parallel. Never let two writers touch the same files at once.
-- Subagents that write code use `isolation: "worktree"`.
+- Subagents that write code use `isolation: "worktree"`. Reviewers test in their own scratch worktree. If one ever leaves the shared checkout on another branch or detached, restore it before the next delegation.
 - Sessions get their own worktree and end in a PR against the milestone branch.
 - On Codex, see `references/codex.md` for spawning, worktrees and logging.
 - Cloud sessions can't report back yet — don't use them for work you need to track.
-- Parallel agents share the machine. Give every Docker-using task a unique name prefix (`references/task-card.md`, "Standard CONTEXT lines"), and don't run a task that needs fixed container or volume names alongside other Docker tasks.
+- Parallel agents share the machine. Give every Docker-using task a unique name prefix (`references/task-card.md`, "Standard CONTEXT lines"), and don't run a task that needs fixed container or volume names alongside other Docker tasks. Run memory-heavy acceptance suites (large files, full integration) one at a time, not alongside other Docker work. When one has passed on a commit, give the reviewer its result and SHA instead of having it run the suite again.
 
 ## Pauses
 
-Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user`, `runway`, or `usage_limit` (a tool usage limit stopped you or an agent); `note` and `until` are optional.
+Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user`, `runway`, or `usage_limit` (a tool usage limit stopped you or an agent); `note` and `until` are optional. During a milestone, add `"milestone":"<slug>"` so the archive counts the pause with its milestone.
 
 ```
 node "<plugin root>/scripts/log-event.js" pause - <<'EOF'
-{"reason":"user","note":"intake questions"}
+{"reason":"user","milestone":"auth","note":"intake questions"}
 EOF
 ```
 

@@ -127,7 +127,9 @@ function main() {
         try {
           const rec = JSON.parse(line);
           if (rec && rec.guidance_version) versions.add(String(rec.guidance_version));
-          if (rec && rec.task && rec.task.milestone === o.milestone) inMilestone++;
+          // Delegation and completion lines carry it on the task card; review,
+          // merge, note and pause lines carry a top-level `milestone`.
+          if (rec && ((rec.task && rec.task.milestone === o.milestone) || rec.milestone === o.milestone)) inMilestone++;
         } catch { malformed++; }
       }
       rows.push({ f, lines, inMilestone, malformed });

@@ -169,6 +169,16 @@ test('hooks.json: logger matches Codex tools and Claude-side tools still match',
   }
 });
 
+test('hooks.json: handback check is the last PreToolUse entry and matches only SubagentHandback', () => {
+  const pre = hooks.hooks.PreToolUse;
+  const hb = pre[pre.length - 1];
+  eq(hb.matcher, '^SubagentHandback$', 'matcher');
+  eq(hb.hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/scripts/handback-check.js"', 'command');
+  const re = new RegExp(hb.matcher);
+  assert(re.test('SubagentHandback'), 'matches SubagentHandback');
+  for (const t of ['Agent', 'Task', 'Bash', 'mcp__x__SubagentHandback', 'SubagentHandback2']) assert(!re.test(t), `does not match ${t}`);
+});
+
 test('hooks.json: SessionStart entry pinned, no SubagentStart', () => {
   const ss = hooks.hooks.SessionStart;
   eq(ss.length, 1, 'one entry');

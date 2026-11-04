@@ -27,6 +27,22 @@ const rec = (m, v = '0.3.0') => JSON.stringify({ guidance_version: v, task: { mi
 const destOf = (r) => r.stdout.trim().split('\n').pop();
 const logs = (p) => path.join(p, '.agent-team', 'logs');
 
+test('archive: README counts lines with a top-level milestone (reviews, merges, pauses), once each', () => {
+  const reviews = [
+    JSON.stringify({ guidance_version: '0.4.4', milestone: 'm1', task: { id: 'M1-1' } }),
+    JSON.stringify({ guidance_version: '0.4.4', milestone: 'm1', task: { milestone: 'm1' } }),
+    JSON.stringify({ guidance_version: '0.4.4', milestone: 'm2' }),
+    JSON.stringify({ guidance_version: '0.4.4' }),
+  ].join('\n');
+  const p = project({ 'reviews.jsonl': reviews, 'delegations.jsonl': [rec('m1'), rec('m2')].join('\n') });
+  const r = arch(p, ['m1', '--project', 'proj']);
+  eq(r.status, 0, r.stderr);
+  const md = fs.readFileSync(path.join(destOf(r), 'README.md'), 'utf8');
+  // Two m1 lines: one top-level only (the old counter missed it), one with both fields (counted once).
+  assert(md.includes('`reviews.jsonl`: 4 line(s), 2 for milestone `m1`'), md);
+  assert(md.includes('`delegations.jsonl`: 2 line(s), 1 for milestone `m1`'), md);
+});
+
 test('archive: copies, writes README, leaves originals', () => {
   const content = [rec('m1'), rec('m2', '0.2.1'), 'not json', ''].join('\n');
   const p = project({ 'a.jsonl': content, 'empty.jsonl': '' });
