@@ -58,7 +58,7 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 - Reviewer issue categories that keep recurring for one agent → a guidance fix in that agent's prompt may beat a bigger model.
 - Effects of the last guidance change: compare results before and after `guidance_version` changed.
 - Whether the reviewer itself looks inconsistent (e.g. same issue type approved sometimes, rejected others).
-- When the same milestone was run on both tools, compare first-review pass rates per model, but read the reviewer's severity mix first: a reviewer that reports no minors turns borderline issues into send-backs and skips ladder step 1.
+- When the same milestone was run on both tools, compare first-review pass rates per model, but read the reviewer's severity mix first: a reviewer that reports no minors turns borderline issues into send-backs and skips ladder step 1. Raw verdicts are not comparable across tools. Recount each tool's findings against the reviewer's Calibration rules, and compare the counts of blocking kinds (security, behaviour, a test that doesn't prove its claim, an unmet criterion) as well as verdicts. Report the minors-per-review rate for each reviewer. `docs/coach/2026-11-04-severity-calibration.md` (plugin repo) shows the method.
 - Codex completions can be missing for turns cut off by a usage limit or still running when the Director sent a follow-up. Count delegated turns as well as completions, and say how many have no line.
 
 ## Rules

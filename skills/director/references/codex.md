@@ -106,3 +106,5 @@ Get `<model>` from `node "<plugin root>/scripts/models.js" resolve <tier> --tool
 ## Reviews
 
 When hooks are active, the hook logs `review-json` from `SubagentStop`. When hooks are off, log each verdict yourself with `log-event.js review`. Never both, or the log gets duplicate review lines.
+
+End every review brief's DELIVER line with "List minor findings too, and apply the Calibration rules in your Severity section." Codex reviewers have mostly reported blocking findings only (4 minors in 45 reviews, against 52 in 32 on Claude). Without minors, fold-ins don't happen and the Coach can't compare reviewers.
