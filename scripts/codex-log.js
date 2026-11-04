@@ -202,13 +202,22 @@ function onFollowup(input) {
   });
 }
 
-// A turn that ended without task_complete: an abort, or an error such as a
-// usage limit. Returns 'usage_limit', 'aborted', 'error' or null.
+// Class of a Codex turn error: 'usage_limit', 'server_overloaded' (the model
+// is at capacity) or 'error'. Both are availability events, not quality ones.
+function errorClass(err) {
+  const msg = String((err && (err.message || (err.error && err.error.message))) || '');
+  const info = String((err && err.codex_error_info) || '');
+  if (/usage_limit|rate_limit/i.test(info) || /usage limit|rate limit|quota/i.test(msg)) return 'usage_limit';
+  if (/overload|capacity/i.test(info) || /at capacity|overloaded/i.test(msg)) return 'server_overloaded';
+  return 'error';
+}
+
+// A turn that ended without task_complete: an abort, or a standalone error
+// event. Returns 'aborted', an errorClass value, or null.
 function interruption(p) {
   if (p.type === 'turn_aborted') return 'aborted';
   if (p.type !== 'error') return null;
-  const msg = String(p.message || (p.error && p.error.message) || '');
-  return /usage limit|rate limit|quota/i.test(msg) || /usage_limit|rate_limit/i.test(String(p.codex_error_info || '')) ? 'usage_limit' : 'error';
+  return errorClass(p);
 }
 
 // The child's turn ids in transcript order (one per task_started).
@@ -264,6 +273,13 @@ function readTranscript(file, turnId) {
     if (Number.isFinite(duration) && duration >= 0) out.duration_ms = duration;
     const last = events[completeIdx].payload.last_agent_message;
     if (typeof last === 'string' && last) out.lastMessage = last;
+    // Codex ends a turn cut off by a usage limit or a model at capacity with a
+    // task_complete that carries `error` and no message.
+    const err = events[completeIdx].payload.error;
+    if (err && typeof err === 'object') {
+      out.interrupted = errorClass(err);
+      if (err.message) out.interruptionMessage = String(err.message).slice(0, 200);
+    }
     // Terminal records have an exact id even if their append is delayed past
     // the next start. Unkeyed usage/context must still stop at that boundary.
     endIdx = Math.min(endIdx, completeIdx);
@@ -362,6 +378,7 @@ function fillFromTranscript(original, t) {
   delete record.stub;
   if (!t.turnFound && record.turn_id) record.stub = true;
   if (t.interrupted) record.interrupted = t.interrupted;
+  if (t.interruptionMessage) record.interruption_message = t.interruptionMessage;
   if (record.report_source === 'missing' && t.lastMessage) {
     record.result = lib.lastFencedJson(t.lastMessage, 'result-json');
     record.review = lib.lastFencedJson(t.lastMessage, 'review-json');
@@ -458,6 +475,8 @@ function normalized(input) {
   const name = input.tool_name || '';
   if (name === 'Bash' || name === 'PowerShell') return records.logMerges(input, 'codex');
   const tool = bare(name);
+  // A delegation ends any open pause: the Director is working again.
+  if (tool === 'spawn_agent' || FOLLOWUP_TOOL.test(tool)) records.closeOpenPause(input, 'delegation');
   if (tool === 'spawn_agent') return onSpawn(input);
   if (FOLLOWUP_TOOL.test(tool)) return onFollowup(input);
 }

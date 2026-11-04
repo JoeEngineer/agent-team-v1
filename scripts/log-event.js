@@ -9,6 +9,10 @@
 //   delegation   e.g. '{"card":"TASK id=X-1 ... \nWHY ...","tool":"codex","task_name":"x_1_a1","agent":"implementer-medium","model":"gpt-6.1-terra","effort":"medium"}'
 //   pause        e.g. '{"reason":"user","note":"intake question"}' (reason: user | runway | usage_limit; optional note, until)
 //                Call it before asking the user a question or ending a turn on a user decision, and before a runway wait.
+//                Gets kind "pause", and milestone from the latest delegation when not given.
+//   resume       '{}' or '{"note":"..."}': closes the open pause with a kind "resume" line (paused_ts, duration_ms,
+//                closed_by). Usually not needed: the next delegation, a new pause, or (Claude) the user's next
+//                prompt closes it automatically.
 //   review       e.g. '{"card":"TASK id=X-2 reviewed_task=X-1 pr=5 ...","verdict":"approve","agent_id":"..."}'
 // `card` is parsed into `task` (task card fields, plus `why` from a WHY line or a `why` field).
 // `tool` defaults to AGENT_TEAM_TOOL, else "unknown". Director-written lines carry source "director".
@@ -29,7 +33,7 @@ const records = require('./records');
 
 const DELEGATION_KINDS = ['subagent', 'resume', 'followup'];
 const PAUSE_REASONS = ['user', 'runway', 'usage_limit'];
-const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review', 'pause']);
+const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review', 'pause', 'resume']);
 
 const USAGE = [
   `usage: log-event.js <${[...KINDS].join('|')}> <form>`,
@@ -188,13 +192,27 @@ function main(argv) {
       }
       const drift = records.cardDrift({}, task, dkind);
       if (drift) console.error(records.driftMessage(task.id, drift));
+      if (!task.id) console.error(records.UNCARDED_MESSAGE);
+      // Compare the card's tier=/effort= with what runs: this line's own
+      // settings for a spawn, the agent's earlier delegation for a resume.
+      let ran = { tier: rest.tier, effort: rest.effort };
+      if (dkind !== 'subagent') {
+        const prior = records.findDelegation({}, (r) => r.kind === 'subagent' &&
+          ((rest.task_name && r.task_name === rest.task_name) || (rest.agent_id && r.agent_id === rest.agent_id)));
+        if (prior) ran = { tier: prior.tier, effort: prior.effort };
+      }
+      const settings = records.cardSettings(task, ran, dkind);
+      for (const m of settings.messages) console.error(m);
+      records.closeOpenPause({}, 'delegation');
       lib.appendJsonl({}, 'delegations.jsonl', {
         ...records.base({}, tool),
         ...rest,
         kind: dkind,
         tool,
         task,
+        ...settings.fields,
         ...(drift ? { card_drift: drift } : {}),
+        ...(task.id ? {} : { uncarded: true }),
         source: 'director',
       });
     } else {
@@ -208,10 +226,22 @@ function main(argv) {
     return 0;
   }
 
+  if (kind === 'resume') {
+    const rec = records.closeOpenPause({}, 'director', { note: typeof data.note === 'string' ? data.note : undefined });
+    console.log(rec ? `logged resume to .agent-team/logs/pauses.jsonl (paused ${Math.round((rec.duration_ms || 0) / 1000)} s)` : 'no open pause; nothing logged');
+    return 0;
+  }
   if (kind === 'pause') {
     if (!PAUSE_REASONS.includes(data.reason)) {
       console.error(`invalid pause: "reason" must be one of ${PAUSE_REASONS.map((r) => `"${r}"`).join(', ')}`);
       return 1;
+    }
+    // A new pause ends one still open, so each pause line gets at most one resume.
+    records.closeOpenPause({}, 'next_pause');
+    data = { kind: 'pause', ...data };
+    if (!data.milestone) {
+      const d = records.findDelegation({}, (r) => r.task && r.task.milestone);
+      if (d) { data.milestone = d.task.milestone; data.milestone_source = 'latest-delegation'; }
     }
   }
   if (kind === 'merge' && typeof data.command === 'string') data.command = records.sanitizeCommand(data.command);

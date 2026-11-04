@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -66,6 +66,9 @@ function findDelegation(input, agentId) {
 }
 
 function onPre(input) {
+  // A delegation ends any open pause: the Director is working again.
+  const tool = input.tool_name || '';
+  if (SUBAGENT_TOOLS.has(tool) || tool === SESSION_START || isBridge(tool)) closeOpenPause(input, 'delegation');
   if (!input.tool_use_id) return;
   fs.writeFileSync(startFile(input), JSON.stringify({ started: Date.now() }));
 }
@@ -110,12 +113,14 @@ function onPostSubagent(input) {
     description: ti.description,
     task: lib.parseTaskCard(ti.prompt),
   };
-  // The card asked for one tier and a different one ran: record it and tell the Director.
-  let context;
-  const cardTier = record.task && record.task.tier;
-  if (cardTier && record.tier && cardTier !== record.tier) {
-    record.tier_mismatch = { card: cardTier, ran: record.tier };
-    context = `agent-team: task card says tier ${cardTier} but the spawn ran tier ${record.tier}`;
+  // The card asked for one tier or effort and a different one ran: record it
+  // and tell the Director. A role agent with no card at all gets a nudge too.
+  const settings = cardSettings(record.task, { tier: record.tier, effort: record.effort }, record.kind);
+  Object.assign(record, settings.fields);
+  let context = settings.messages.join('\n') || undefined;
+  if (!record.task.id && String(record.agent).startsWith('agent-team:')) {
+    record.uncarded = true;
+    context = [context, UNCARDED_MESSAGE].filter(Boolean).join('\n');
   }
   const drift = cardDrift(input, record.task, record.kind);
   if (drift) {
@@ -201,7 +206,10 @@ function onPostSendMessage(input) {
   const prior = findDelegation(input, agentId) || {};
   // kind=followup on the TASK line: scope added without a review verdict (keeps the attempt).
   const kind = task.kind === 'followup' ? 'followup' : 'resume';
+  closeOpenPause(input, 'delegation');
   const drift = cardDrift(input, task, kind);
+  // A resume keeps the original agent's settings; flag a card that asks for others.
+  const settings = cardSettings(task, { tier: prior.tier, effort: prior.effort }, kind);
   lib.appendJsonl(input, 'delegations.jsonl', {
     ...base(input),
     kind,
@@ -217,9 +225,11 @@ function onPostSendMessage(input) {
     effort_source: prior.effort ? 'prior-delegation' : 'unknown',
     description: ti.summary,
     task,
+    ...settings.fields,
     ...(drift ? { card_drift: drift } : {}),
   });
-  return drift ? driftMessage(task.id, drift) : undefined;
+  const messages = [...settings.messages, ...(drift ? [driftMessage(task.id, drift)] : [])];
+  return messages.length ? messages.join('\n') : undefined;
 }
 
 // A real prompt: a string or a text part, not a tool result.

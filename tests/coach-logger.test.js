@@ -131,8 +131,13 @@ test('log-event pause: stdin form writes pauses.jsonl with reason, note and unti
   eq(p.note, 'window 95%', 'note');
   eq(p.until, '2026-11-01T17:00:00Z', 'until');
   assert(p.ts && p.guidance_version, 'ts and guidance_version');
+  eq(p.kind, 'pause', 'kind');
   eq(logEvent(proj, 'pause', { reason: 'user' }).status, 0, 'reason user without note');
-  eq(readLog(proj, 'pauses.jsonl').length, 2, 'two lines');
+  // The second pause closes the first one before it is written.
+  const lines = readLog(proj, 'pauses.jsonl');
+  eq(lines.map((l) => l.kind).join(','), 'pause,resume,pause', 'pause, resume, pause');
+  eq(lines[1].closed_by, 'next_pause', 'closed by the next pause');
+  eq(lines[1].paused_ts, p.ts, 'resume names the pause it closes');
 });
 
 test('log-event pause: a missing or unknown reason is rejected and nothing is written', () => {
