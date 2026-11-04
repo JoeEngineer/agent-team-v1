@@ -41,7 +41,7 @@ function scriptOf(command) {
 
 // Scripts for Claude Code tools that Codex doesn't have. Leaving them out keeps
 // existing Codex projects' hooks.json (and its trust hash) unchanged.
-const CLAUDE_ONLY = new Set(['handback-check']);
+const CLAUDE_ONLY = new Set(['handback-check', 'user-prompt']);
 
 // The Codex hooks derived from the plugin's hooks.json: same events, matchers
 // and timeouts, each command replaced by the shim call for its script.

@@ -30,7 +30,7 @@ Delegate everything else — including research. If you're about to read more th
 1. **Intake.** Turn the user's tasking into a milestone: goal, acceptance criteria, out of scope. Create `milestone/<slug>` from `main` and a GitHub issue for the milestone. For a non-trivial milestone, delegate the breakdown to `architect`.
 2. **Plan.** Each task gets an id (`<MILESTONE>-<n>`), type, difficulty, acceptance criteria, dependencies. Create an issue per task (label `agent-team`). Record the plan in `STATUS.md`.
 3. **Route.** Pick agent, tier, effort and vehicle (subagent vs. session) from `references/routing.md`. Start at the table's tier; don't start higher "to be safe". The architect's breakdown gives type and difficulty, not models. Where it flags `above-table: <reason>`, decide whether the reason justifies an override, and if it does, say so on the card's `WHY` line.
-4. **Delegate.** Every delegation prompt starts with a task card (`references/task-card.md`). The logging hook reads it — without it, the delegation is logged without task fields and the Coach can't use it.
+4. **Delegate.** Every delegation prompt starts with a task card (`references/task-card.md`), side work included. The logging hook reads it: without it, the delegation is logged without task fields and the Coach can't use it. Put the tier and effort you chose on the card (`tier=`, `effort=`), and from attempt 2 the `reason=`.
 5. **Verify.** Read the agent's `result-json`. Check the claim (diff, PR, test run) — a result block is a report, not proof.
 6. **Review.** Every PR gets a `reviewer` pass before merge. Pass the task's acceptance criteria in the task card. The reviewer ends with its `review-json` block; don't ask it for anything else (`references/task-card.md`, "Review tasks").
 7. **Escalate, fold in, or merge.** On `changes_requested`, send it back with the reviewer's findings — escalating per `references/routing.md` when the rule says so. On `approve` with minor findings, fold the cheap ones into the same PR before merging (`references/merging.md`, "Minor findings"). On `approve` + green CI, merge into the milestone branch.
@@ -52,7 +52,9 @@ When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegation
 
 ## Pauses
 
-Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user`, `runway`, or `usage_limit` (a tool usage limit stopped you or an agent); `note` and `until` are optional. During a milestone, add `"milestone":"<slug>"` so the archive counts the pause with its milestone.
+Log every wait you can't do anything about, so the Coach can subtract it from wall time: before `AskUserQuestion`, before ending a turn that waits on the user, and before a runway wait. `reason` is `user`, `runway`, or `usage_limit` (a tool usage limit stopped you or an agent); `note` and `until` are optional. During a milestone, add `"milestone":"<slug>"` so the archive counts the pause with its milestone. If you leave it out, the logger takes it from the latest delegation.
+
+You don't need to log the end of a pause. Your next delegation closes it, and so does a new pause. On Claude Code, the user's next message also closes a `user` or `usage_limit` pause. Each of these writes a `kind: "resume"` line with `duration_ms`. To close one by hand (say, you resume work without delegating), run `log-event.js resume` with `{}` or `{"note":"..."}`.
 
 ```
 node "<plugin root>/scripts/log-event.js" pause - <<'EOF'

@@ -1,6 +1,6 @@
 # Task card
 
-Every delegation prompt — subagent, session, or bridge — starts with these two lines. The logging hook parses them; the agent reads them as its brief. This includes a retry sent to an existing agent with `SendMessage`: put a new TASK line (same `id`, `attempt` incremented) in the message so it's logged as an attempt.
+Every delegation prompt — subagent, session, or bridge — starts with these two lines. That includes side work during a milestone, such as a plugin fix: use `milestone=none` when it belongs to no milestone. A role agent spawned without a TASK line is logged with `uncarded: true`, and the Director is warned. The logging hook parses them; the agent reads them as its brief. This includes a retry sent to an existing agent with `SendMessage`: put a new TASK line (same `id`, `attempt` incremented) in the message so it's logged as an attempt.
 
 ```
 TASK id=AUTH-14 type=implement difficulty=medium milestone=auth attempt=1 branch=task/AUTH-14 base=milestone/auth
@@ -9,7 +9,8 @@ WHY medium tier (sonnet) / medium effort per routing table; clear spec, follows 
 
 - `TASK` line: space-separated `key=value`, no spaces inside values.
   - Required: `id`, `type`, `difficulty`, `milestone`, `attempt`.
-  - Optional: `tier` (`small|medium|large|xlarge`), the tier chosen from the routing table.
+  - Optional: `tier` (`small|medium|large|xlarge`) and `effort` (`low|medium|high|xhigh|max`), the settings chosen from the routing table. The logger compares them with what actually runs and warns on a difference (`tier_mismatch`, `effort_mismatch`).
+  - From attempt 2: `reason`, why this attempt exists. `sendback` (changes requested, same settings), `escalation` (new tier or effort, which needs a new spawn), `fold-in` (approved with minors), or `retry` (the last turn was cut off by a usage limit, a model at capacity or an abort; same settings, and the attempt number stays the same).
   - Also required for any task that runs in a worktree: `base` (the branch to start from, usually `milestone/<slug>`).
   - Optional: `branch`, `pr`, `issue`.
   - Optional: `worktree` (repo-relative path, no spaces), the folder the task runs in; set by the Codex Director.
@@ -20,7 +21,9 @@ WHY medium tier (sonnet) / medium effort per routing table; clear spec, follows 
 ### Attempts and followups
 
 - A retry keeps the attempt-1 `type` and `difficulty`, even when the work is now a fix. The logger warns and records `card_drift` when they change.
-- Bump `attempt` only after a review verdict (a send-back or an escalation) or for a fold-in. A continuation sent before any review keeps the attempt.
+- Bump `attempt` only after a review verdict (a send-back or an escalation) or for a fold-in, and say which with `reason=`. A continuation sent before any review keeps the attempt.
+- A `retry` after an interruption keeps the attempt and the settings. Send it to the same agent if it still has its context, and include the findings and test evidence it had already reported, so the retry doesn't redo them.
+- An escalation is always a new spawn: a resume (`SendMessage`, Codex followup) keeps the original model and effort. The logger warns when a resume's card asks for a different `tier` or `effort`, or says `reason=escalation`.
 - Scope added to a task that is not a retry (a missed file, an extra small change) is a followup: keep the attempt and add `kind=followup` to the TASK line (Codex: `"kind":"followup"` in the `log-event.js delegation` line). Work big enough to review on its own gets a new task id instead.
 
 Then the brief:

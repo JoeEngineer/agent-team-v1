@@ -23,7 +23,6 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 
 ### Fields added in 0.4.2 (Claude records)
 - `turn` (1-based within the agent; turn 1 is the first delegation) is on Claude completion lines. Sum over distinct `turn` values; for several lines with the same `agent_id` and `turn`, use the last. Lines reconciled by 0.4.2+ keep the run's `guidance_version` and add `reconciled_by`. Drop any line with `stale_of`: its content belongs to the attempt it names. Delegation lines with `tier_mismatch: {card, ran}` ran on a different tier than the card asked for; count them under the tier that ran. Reviews, notes, escalations and merges carry `milestone` when it could be found.
-- From 0.4.5, a role agent's handback without a parseable result block is sent back to the agent (at most twice), so a `result: null` with `report_source: "handback"` should become rare. When it still happens, count it as a reporting failure of that model, not a quality failure. Archive READMEs from 0.4.5 also count review, merge and pause lines by their top-level `milestone`.
 - `pauses.jsonl` (0.4.2+) holds Director pauses (`reason`: `user`, `runway`, or from 0.4.4 `usage_limit`). Subtract them from wall-clock time before judging speed.
 
 ### Fields added in 0.4.4
@@ -32,6 +31,17 @@ You are the **coach** for an agent team. You improve how the Director routes wor
 - Codex completions: `stub: true` means the turn was not in the transcript yet when the stop hook ran (metrics are null until `reconcile-logs.js` fills it). `interrupted` (`usage_limit`, `aborted`, `error`, `no_task_complete`) means the turn ended without finishing; don't count it as a failed attempt on its own. `report_source: "missing"` means no report reached the logger; `"transcript"` means reconcile took it from the transcript's last agent message (trust it like a hook line).
 - Decision lines: `model_given` holds the free text the Director wrote when `model` was filled from the session (`model_source: "session"`).
 - Merge `command` fields have leading `cd` segments and local paths removed.
+
+### Fields added in 0.4.6
+- **Attempt reasons.** Task cards carry `reason` from attempt 2: `sendback`, `escalation`, `fold-in` or `retry`. Only `sendback` and `escalation` follow a failed review. A `fold-in` follows an approval. A `retry` follows an interruption and keeps the attempt number. Lines without `reason` (older logs) need the review lines to tell these apart.
+- **Requested vs ran.** Cards may carry `effort` as well as `tier`. `effort_mismatch` / `tier_mismatch: {card, ran}` on a delegation line means the card asked for one setting and another ran. On a `resume` or `followup` line it means the Director asked for an escalation the resume could not deliver. Count those as requested, not executed, escalations, and count the attempt under what ran.
+- **Uncarded delegations.** `uncarded: true` marks a role-agent delegation with no TASK line. Report how many there were. Leave them out of quality denominators.
+- **Interrupted Codex turns.** Codex ends a turn cut off by a usage limit or a model at capacity with a `task_complete` that carries an error. From 0.4.6 these are logged with `interrupted` (`usage_limit`, `server_overloaded` or `error`), plus `interruption_message` and the turn's duration. Earlier logs show them as normal completions with no report. Count their tokens and time as cost of the attempt, never as a failed review, and don't charge them to the retry that follows.
+- **Pause ends.** Pause lines now have `kind: "pause"`, and their `milestone` comes from the latest delegation when the Director gave none (`milestone_source: "latest-delegation"`). A `kind: "resume"` line closes the pause before it, with `paused_ts`, `duration_ms` and `closed_by`: `delegation`, `user_prompt` (Claude: the user's next message), `next_pause` or `director`. Use `duration_ms` where present, and fall back to the gap to the next delegation where not. A `delegation` or `next_pause` close is an upper bound: the Director may have been working before it delegated.
+
+### Fields added in 0.4.5
+- **Handback check.** A role agent's handback without a parseable result block is sent back to the agent (at most twice). A `result: null` with `report_source: "handback"` should therefore be rare. When it still happens, count it as a reporting failure of that model, not a quality failure.
+- **Archive counts.** Archive READMEs count review, merge and pause lines by their top-level `milestone`.
 
 ### Codex records
 - Codex lines sit in the same files as Claude's, with `tool: "codex"`. Compare results by observed resolved model and effort in completions, not requested settings, tier name, or tool arguments alone. Keep requested settings and observed settings distinct; call a change unknown when the resolved value is missing, and ineffective when it is observed to remain unchanged. Don't count a requested escalation as an executed higher-setting trial. See `docs/codex-mapping.md`, "Models and effort".

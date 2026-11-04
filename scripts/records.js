@@ -292,8 +292,75 @@ function logMerges(input, tool = 'claude') {
   }
 }
 
+// Why an attempt after the first exists. A followup is not an attempt (kind=followup).
+const ATTEMPT_REASONS = ['sendback', 'escalation', 'fold-in', 'retry'];
+const known = (v) => v != null && v !== '' && !['inherited', 'unknown', 'default'].includes(String(v));
+
+// Compare a task card's requested tier= and effort= with the settings that run:
+// the spawn's own for a new agent, the original agent's for a resume (a resume
+// can't change them). Also checks reason=. Returns { fields, messages }: fields
+// (tier_mismatch / effort_mismatch: {card, ran}) go on the delegation line,
+// messages go to the Director.
+function cardSettings(task, ran, kind) {
+  const fields = {};
+  const messages = [];
+  if (!task || typeof task !== 'object') return { fields, messages };
+  const resumed = kind === 'resume' || kind === 'followup';
+  for (const f of ['tier', 'effort']) {
+    if (!task[f] || !known(ran[f]) || String(task[f]) === String(ran[f])) continue;
+    fields[`${f}_mismatch`] = { card: task[f], ran: ran[f] };
+    messages.push(resumed
+      ? `agent-team: task ${task.id || '?'} card says ${f} ${task[f]} but a resume keeps the agent's ${f} ${ran[f]}. To change tier or effort, spawn a new agent.`
+      : `agent-team: task card says ${f} ${task[f]} but the spawn ran ${f} ${ran[f]}`);
+  }
+  if (task.reason && !ATTEMPT_REASONS.includes(task.reason)) {
+    messages.push(`agent-team: task ${task.id || '?'} has reason=${task.reason}; use one of ${ATTEMPT_REASONS.join(', ')}.`);
+  }
+  if (task.reason === 'escalation' && kind === 'resume' && !fields.tier_mismatch && !fields.effort_mismatch) {
+    messages.push(`agent-team: task ${task.id || '?'} is an escalation sent as a resume, which keeps the original model and effort. Spawn a new agent with the new settings, and put them on the card (tier=, effort=).`);
+  }
+  return { fields, messages };
+}
+
+// A role-agent delegation without a TASK line is logged without task fields,
+// and the Coach can't use it.
+const UNCARDED_MESSAGE = 'agent-team: this delegation has no TASK line, so it is logged without task fields and the Coach can\'t count it. ' +
+  'Start every delegation prompt with a task card, including side work such as plugin fixes (use milestone=none outside a milestone).';
+
+// Close the latest open pause in pauses.jsonl: append a `resume` line with the
+// pause's start, duration and what ended it. `reasons` limits which pauses this
+// caller may close (null: any). Returns the resume line, or null when there is
+// no open pause (or another hook is closing it).
+function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
+  const file = path.join(lib.logDir(input), 'pauses.jsonl');
+  if (!fs.existsSync(file)) return null;
+  const done = withRecordLock(input, 'pause-close', () => {
+    const rows = readJsonl(file);
+    const last = rows[rows.length - 1];
+    if (!last || last.kind === 'resume' || !last.reason) return null;
+    if (reasons && !reasons.includes(last.reason)) return null;
+    const now = new Date();
+    const started = Date.parse(last.ts);
+    const rec = {
+      ts: now.toISOString(),
+      guidance_version: lib.guidanceVersion(),
+      kind: 'resume',
+      reason: last.reason,
+      paused_ts: last.ts || null,
+      duration_ms: Number.isFinite(started) ? Math.max(0, now.getTime() - started) : null,
+      closed_by: closedBy,
+      ...milestoneField(last.milestone),
+      ...(note ? { note } : {}),
+    };
+    lib.appendJsonl(input, 'pauses.jsonl', rec);
+    return rec;
+  });
+  return done || null;
+}
+
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand,
+  ATTEMPT_REASONS, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

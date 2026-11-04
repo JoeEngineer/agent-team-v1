@@ -179,6 +179,13 @@ test('hooks.json: handback check is the last PreToolUse entry and matches only S
   for (const t of ['Agent', 'Task', 'Bash', 'mcp__x__SubagentHandback', 'SubagentHandback2']) assert(!re.test(t), `does not match ${t}`);
 });
 
+test('hooks.json: UserPromptSubmit runs only the pause closer', () => {
+  const ups = hooks.hooks.UserPromptSubmit;
+  eq(ups.length, 1, 'one entry');
+  eq(ups[0].matcher, undefined, 'no matcher');
+  eq(ups[0].hooks[0].command, 'node "${CLAUDE_PLUGIN_ROOT}/scripts/user-prompt.js"', 'command');
+});
+
 test('hooks.json: SessionStart entry pinned, no SubagentStart', () => {
   const ss = hooks.hooks.SessionStart;
   eq(ss.length, 1, 'one entry');
