@@ -55,7 +55,7 @@ function claimOnce(input, key) {
 const PRUNABLE = /^(stop-|resume-|review-|toolu_.*\.json$)/;
 function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
   try {
-    const dir = path.join(lib.logDir(input), '.pending');
+    const dir = path.join(lib.logPath(input), '.pending');
     const now = Date.now();
     let seen = 0;
     for (const name of fs.readdirSync(dir)) {
@@ -152,6 +152,23 @@ function reviewIdentity(input, record, review, tool = 'claude') {
 
 const milestoneField = (m) => (m ? { milestone: m } : {});
 
+// A reviews.jsonl row: the hook's own fields plus the review block's. A field
+// the hook has a value for always wins; the block's different value for it is
+// kept under `review_shadowed` instead. The block may fill a field the hook has
+// no value for (a Director-written line passes `pr` or `milestone` this way),
+// but never the row's identity (`review_id`, `ts`, `tool`, `guidance_version`).
+const HOOK_ONLY = ['review_id', 'ts', 'tool', 'guidance_version', 'reconciled_by', 'review_shadowed'];
+function withReview(known, review) {
+  const row = { ...known };
+  const shadowed = {};
+  for (const [key, value] of Object.entries(review && typeof review === 'object' ? review : {})) {
+    if (known[key] == null && !HOOK_ONLY.includes(key)) row[key] = value;
+    else if (JSON.stringify(known[key]) !== JSON.stringify(value)) shadowed[key] = value;
+  }
+  if (Object.keys(shadowed).length) row.review_shadowed = shadowed;
+  return row;
+}
+
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
 function logReview(input, record, review, tool = 'claude') {
@@ -159,7 +176,9 @@ function logReview(input, record, review, tool = 'claude') {
   const identity = task.id || record.turn_id;
   const reviewId = reviewIdentity(input, record, review, tool);
   if (record.agent_id && !identity && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return false;
-  const row = {
+  // The review block is written by a model. Its fields are the review's content;
+  // the fields below are what the hook knows, and the block must not replace them.
+  const known = {
     ...base(input, tool),
     // A backfilled line keeps the run's version and says which version wrote it.
     ...(record.reconciled_by ? { guidance_version: record.guidance_version, reconciled_by: record.reconciled_by } : {}),
@@ -177,8 +196,8 @@ function logReview(input, record, review, tool = 'claude') {
     requested_model: record.model ?? null,
     requested_effort: record.effort ?? null,
     reviewer_tier: record.tier === undefined ? null : record.tier,
-    ...review,
   };
+  const row = withReview(known, review);
   if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
   lib.appendJsonl(input, 'reviews.jsonl', row);
   return true;
@@ -187,13 +206,12 @@ function logReview(input, record, review, tool = 'claude') {
 // The last delegations.jsonl record for which predicate(record) is true, or
 // null (missing file, corrupt line, no match).
 function findDelegation(input, predicate) {
-  try {
-    const lines = fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').trim().split(/\r?\n/);
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const rec = JSON.parse(lines[i]);
-      if (predicate(rec)) return rec;
-    }
-  } catch { /* none yet */ }
+  // readJsonl skips a torn or corrupt line, so one bad line can't hide the
+  // records written before it.
+  const rows = readJsonl(path.join(lib.logPath(input), 'delegations.jsonl'));
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (predicate(rows[i])) return rows[i];
+  }
   return null;
 }
 
@@ -332,7 +350,9 @@ const UNCARDED_MESSAGE = 'agent-team: this delegation has no TASK line, so it is
 // caller may close (null: any). Returns the resume line, or null when there is
 // no open pause (or another hook is closing it).
 function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
-  const file = path.join(lib.logDir(input), 'pauses.jsonl');
+  // logPath, not logDir: checking for a pause must not create the logs folder
+  // (the prompt hook runs this in every project the plugin is enabled for).
+  const file = path.join(lib.logPath(input), 'pauses.jsonl');
   if (!fs.existsSync(file)) return null;
   const done = withRecordLock(input, 'pause-close', () => {
     const rows = readJsonl(file);

@@ -107,7 +107,8 @@ function modelToTier(map, tool, model) {
   for (const t of TIERS) {
     const e = entry(map, tool, t);
     if (!e) continue;
-    const alias = e.model.toLowerCase().replace(/[.\-]/g, '\\$&');
+    // Escape every regex character: a model name can be "opus[1m]".
+    const alias = e.model.toLowerCase().replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
     if (new RegExp(`(^|-)${alias}(-|$)`).test(m)) return t;
   }
   return null;

@@ -5,7 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
-const { SCRIPTS, tmpProject, test, assert, eq } = require('./helpers');
+const { SCRIPTS, tmpProject, bareProject, test, assert, eq } = require('./helpers');
 
 const SCRIPT = path.join(SCRIPTS, 'archive-logs.js');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-arch-'));
@@ -220,7 +220,7 @@ test('archive: --dry-run writes nothing and deletes nothing', () => {
 });
 
 test('archive: no logs folder, or no jsonl, exits 1 with a message', () => {
-  const p = tmpProject();
+  const p = bareProject();
   let r = arch(p, ['m', '--project', 'x']);
   eq(r.status, 1, 'no folder');
   assert(/no \.agent-team\/logs/.test(r.stderr), r.stderr);

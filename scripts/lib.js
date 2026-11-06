@@ -38,10 +38,32 @@ function projectDir(input) {
   return found;
 }
 
+// The logs folder path, without creating it. Use this for reads and checks, so
+// looking for a log never leaves a folder behind.
+function logPath(input) {
+  return path.join(projectDir(input), '.agent-team', 'logs');
+}
+
 function logDir(input) {
-  const dir = path.join(projectDir(input), '.agent-team', 'logs');
+  const dir = logPath(input);
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+// Does this project use agent-team? True when it has an .agent-team folder
+// (team-init, or an earlier log line), or its own settings turn the plugin on
+// (.claude/settings*.json), or its Codex hooks call the shim. The plugin can be
+// installed for every project of a user; the logger uses this to stay out of
+// the ones that never set it up.
+function inUse(input) {
+  const root = projectDir(input);
+  if (fs.existsSync(path.join(root, '.agent-team'))) return true;
+  const mentions = (rel, needle) => {
+    try { return fs.readFileSync(path.join(root, ...rel), 'utf8').includes(needle); } catch { return false; }
+  };
+  return mentions(['.claude', 'settings.json'], 'agent-team@') ||
+    mentions(['.claude', 'settings.local.json'], 'agent-team@') ||
+    mentions(['.codex', 'hooks.json'], 'agent-team-hook.js');
 }
 
 function appendJsonl(input, file, record) {
@@ -183,6 +205,11 @@ function inArithmetic(cmd, i) {
 // each segment with basic single/double quote handling. Newlines inside quotes
 // stay in the token, and heredoc bodies (after `<<WORD`, `<<'WORD'`, `<<-WORD`)
 // are skipped, so text in a commit message isn't read as a command.
+// Outside quotes: `(` `)` and a backtick also end a segment (subshells, `$(…)`,
+// command substitution), a backslash or backtick before a newline joins the two
+// lines, `>` ends a token (`main>out.txt`), and the braces of a block
+// (`{git push}`) are dropped while `HEAD@{1}` and `${x}` keep theirs.
+// Not read: `$(…)` inside a double-quoted string.
 function segments(cmd) {
   const out = [];
   let cur = [], tok = '', quote = null, hasTok = false;
@@ -196,6 +223,16 @@ function segments(cmd) {
       continue;
     }
     if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
+    if (c === '\\' || c === '`') {
+      // Line continuation (sh: backslash, PowerShell: backtick).
+      const nl = cmd[i + 1] === '\n' ? 1 : (cmd[i + 1] === '\r' && cmd[i + 2] === '\n' ? 2 : 0);
+      if (nl) { i += nl; continue; }
+      if (c === '`') { pushSeg(); continue; }
+    }
+    if (c === '(' || c === ')') { pushSeg(); continue; }
+    if (c === '>') { pushTok(); continue; }
+    if (c === '{' && !hasTok) continue;
+    if (c === '}' && !tok.includes('{')) continue;
     if (c === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<' && !inArithmetic(cmd, i)) {
       pushTok();
       let j = i + 2;
@@ -233,6 +270,39 @@ function segments(cmd) {
   return out;
 }
 
+// Command strings a segment hands to another shell: the script after `sh -c`
+// (bash, zsh, …), everything after `powershell -Command` / `cmd /c`, and the
+// arguments of `eval` / `Invoke-Expression`.
+const SH_BIN = /^(?:.*[\\/])?(?:sh|bash|zsh|dash|ksh)(?:\.exe)?$/i;
+const PS_BIN = /^(?:.*[\\/])?(?:pwsh|powershell|cmd)(?:\.exe)?$/i;
+const EVAL = /^(?:eval|iex|invoke-expression)$/i;
+function nestedCommands(tokens) {
+  const out = [];
+  tokens.forEach((t, i) => {
+    if (SH_BIN.test(t)) {
+      const j = tokens.findIndex((x, k) => k > i && /^-[A-Za-z]*c$/.test(x));
+      if (j > 0 && tokens[j + 1]) out.push(tokens[j + 1]);
+    } else if (PS_BIN.test(t)) {
+      const j = tokens.findIndex((x, k) => k > i && /^(?:-c|-com[a-z]*|\/c|\/k)$/i.test(x));
+      if (j > 0 && j + 1 < tokens.length) out.push(tokens.slice(j + 1).join(' '));
+    } else if (EVAL.test(t) && i + 1 < tokens.length) {
+      out.push(tokens.slice(i + 1).join(' '));
+    }
+  });
+  return out;
+}
+
+// segments(cmd), plus the segments of any command string passed to another
+// shell (see nestedCommands), a few levels deep.
+function allSegments(cmd, depth = 0) {
+  const out = [];
+  for (const seg of segments(cmd || '')) {
+    out.push(seg);
+    if (depth < 3) for (const inner of nestedCommands(seg)) out.push(...allSegments(inner, depth + 1));
+  }
+  return out;
+}
+
 // Arguments after `gh` in a token list, or null if the segment isn't a gh call.
 function ghParts(tokens) {
   const gi = tokens.findIndex((t) => t === 'gh' || t === 'gh.exe' || /[\\/]gh(\.exe)?$/.test(t));
@@ -263,7 +333,7 @@ function prMergeTarget(args) {
 // Every `gh pr merge` in a command line, as { target, repo, args }.
 function findPrMerges(cmd) {
   const out = [];
-  for (const seg of segments(cmd || '')) {
+  for (const seg of allSegments(cmd)) {
     const gh = ghParts(seg);
     if (gh && gh[0] === 'pr' && gh[1] === 'merge') out.push({ ...prMergeTarget(gh.slice(2)), args: gh.slice(2) });
   }
@@ -283,7 +353,7 @@ function detectTool(input, env = process.env) {
 }
 
 module.exports = {
-  detectTool, PLUGIN_ROOT, readStdin, projectDir, logDir, appendJsonl, guidanceVersion,
+  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
-  segments, ghParts, prMergeTarget, findPrMerges,
+  segments, allSegments, ghParts, prMergeTarget, findPrMerges,
 };

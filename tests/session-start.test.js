@@ -4,7 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { ROOT, tmpProject, run, test, assert, eq } = require('./helpers');
+const { ROOT, bareProject: tmpProject, run, test, assert, eq } = require('./helpers');
 const lib = require('../scripts/lib');
 
 console.log('session-start');

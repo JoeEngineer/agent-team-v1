@@ -4,7 +4,11 @@
 //   - merging a PR whose base is a protected branch (default: main, master)
 //   - `gh pr merge --admin`
 //   - force-pushes, pushes to protected branches, deleting protected/milestone branches
+//     (also `--mirror`, `--prune`, and `--all` while a protected branch exists locally)
 //   - changing branch protection / rulesets; deleting, archiving or editing the repo
+//   - the same merges, branch moves and rule changes done through `gh api` (REST or GraphQL)
+// Commands inside a subshell, `$(…)`, `sh -c`, `powershell -Command`, `cmd /c` and
+// `eval` are checked too. `$(…)` inside a double-quoted string is not.
 //   - creating or deleting releases
 //   - `git add -A` / `git add .` while unignored agent worktrees exist
 // This is a guardrail against mistakes, not a sandbox: a determined command can evade
@@ -61,11 +65,26 @@ function currentBranch(cwd) {
   }
 }
 
+function hasLocalBranch(name, cwd) {
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${name}`], { cwd, stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function checkGitPush(args, cwd) {
   const flags = args.filter((a) => a.startsWith('-'));
   const positional = args.filter((a) => !a.startsWith('-'));
   if (flags.some((f) => /^(-f|--force|--force-with-lease|--force-if-includes)(=|$)/.test(f) || /^-[a-zA-Z]*f/.test(f))) {
     block('force-push');
+  }
+  if (flags.includes('--mirror')) block('`git push --mirror` overwrites and deletes branches on the remote');
+  if (flags.includes('--prune')) block('`git push --prune` deletes branches on the remote');
+  if (flags.includes('--all') || flags.includes('--branches')) {
+    const local = PROTECTED.find((b) => hasLocalBranch(b, cwd));
+    if (local) block(`\`git push --all\` would push protected branch "${local}"`);
   }
   const deleting = flags.some((f) => f === '-d' || f === '--delete');
   const refspecs = positional.slice(1); // first positional is the remote
@@ -106,6 +125,11 @@ function checkGitAdd(args, cwd) {
 function checkGhPrMerge(args, cwd) {
   if (args.includes('--admin')) block('`gh pr merge --admin` bypasses branch protection');
   const { target, repo } = lib.prMergeTarget(args);
+  requireUnprotectedBase(target, repo, cwd);
+}
+
+// Ask GitHub for the PR's base branch; block when it is protected or unknown.
+function requireUnprotectedBase(target, repo, cwd) {
   const viewArgs = ['pr', 'view'];
   if (target) viewArgs.push(target);
   if (repo) viewArgs.push('--repo', repo);
@@ -120,14 +144,53 @@ function checkGhPrMerge(args, cwd) {
   if (isProtected(base)) block(`PR ${target || '(current branch)'} targets protected branch "${base}"; only the user merges into it`);
 }
 
-function checkGhApi(args) {
+// The HTTP method of a `gh api` call: `-X PUT`, `-XPUT`, `--method PUT`,
+// `--method=PUT`. Null when none is given.
+function apiMethod(args) {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '-X' || a === '--method') return (args[i + 1] || '').toUpperCase();
+    if (a.startsWith('--method=')) return a.slice('--method='.length).toUpperCase();
+    if (/^-X./.test(a)) return a.slice(2).replace(/^=/, '').toUpperCase();
+  }
+  return null;
+}
+
+// GraphQL mutations that do what the REST checks below block.
+const GRAPHQL_MUTATIONS = /\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch|updateRef|deleteRef|(?:create|update|delete)BranchProtectionRule|(?:create|update|delete)RepositoryRuleset)\b/;
+
+// `gh api` calls that write: the same actions as the git/gh checks, done
+// through the REST or GraphQL API.
+function checkGhApi(args, cwd) {
+  const method = apiMethod(args);
+  const hasBody = args.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF][^-]/.test(a));
+  if (method ? method === 'GET' : !hasBody) return;
   const joined = args.join(' ');
-  if (!/protection|rulesets/.test(joined)) return;
-  const mIdx = args.findIndex((a) => a === '-X' || a === '--method');
-  const method = mIdx >= 0 ? (args[mIdx + 1] || '').toUpperCase()
-    : (args.find((a) => a.startsWith('--method=')) || '').split('=')[1]?.toUpperCase();
-  const hasBody = args.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a));
-  if ((method && method !== 'GET') || (!method && hasBody)) block('changing branch protection or rulesets');
+  if (/protection|rulesets/.test(joined)) block('changing branch protection or rulesets');
+
+  const graphql = args.includes('graphql') && joined.match(GRAPHQL_MUTATIONS);
+  if (graphql) block(`GraphQL mutation \`${graphql[1]}\` (merge with \`gh pr merge\` so the base branch can be checked)`);
+
+  const merge = joined.match(/(?:^|[\s/])repos\/([^/\s]+)\/([^/\s]+)\/pulls\/(\d+)\/merge(?=[\s?]|$)/);
+  if (merge) {
+    const placeholder = /[{:]/.test(merge[1] + merge[2]); // {owner}/{repo}: the current repo
+    requireUnprotectedBase(merge[3], placeholder ? null : `${merge[1]}/${merge[2]}`, cwd);
+  }
+
+  const ref = joined.match(/git\/refs\/heads\/(\S+)/);
+  if (ref) {
+    const name = ref[1];
+    if (method === 'DELETE' && (isProtected(name) || name.startsWith('milestone/'))) block(`deleting branch "${name}" through the API`);
+    if (isProtected(name)) block(`moving protected branch "${name}" through the API`);
+  }
+
+  const rename = joined.match(/branches\/([^/\s]+)\/rename/);
+  if (rename && isProtected(rename[1])) block(`renaming protected branch "${rename[1]}"`);
+
+  if (/(?:^|[\s/])repos\/[^/\s]+\/[^/\s]+\/merges(?=[\s?]|$)/.test(joined)) {
+    const base = args.map((a) => /(?:^|[=fF])base=(.+)$/.exec(a)).find(Boolean);
+    if (base && isProtected(base[1])) block(`merging into protected branch "${base[1]}" through the API`);
+  }
 }
 
 function checkSegment(tokens, cwd) {
@@ -139,7 +202,7 @@ function checkSegment(tokens, cwd) {
   if (!gh) return;
   const [g0, g1] = gh;
   if (g0 === 'pr' && g1 === 'merge') checkGhPrMerge(gh.slice(2), cwd);
-  if (g0 === 'api') checkGhApi(gh.slice(1));
+  if (g0 === 'api') checkGhApi(gh.slice(1), cwd);
   if (g0 === 'repo' && ['delete', 'archive', 'edit', 'rename'].includes(g1)) block(`\`gh repo ${g1}\``);
   if (g0 === 'release' && ['create', 'delete', 'edit'].includes(g1)) block(`\`gh release ${g1}\` (publishing)`);
 }
@@ -150,7 +213,7 @@ function main() {
   const cmd = input.tool_input && input.tool_input.command;
   if (typeof cmd !== 'string' || !/\b(git|gh)(\.exe)?\b/.test(cmd)) return;
   const cwd = input.cwd || lib.projectDir(input);
-  for (const seg of lib.segments(cmd)) checkSegment(seg, cwd);
+  for (const seg of lib.allSegments(cmd)) checkSegment(seg, cwd);
 }
 
 main();

@@ -72,8 +72,12 @@ const attemptOf = (k) => String((k.task && k.task.attempt) || k.attempt || '');
 // A reviews.jsonl row spreads the review's fields (it has `verdict`, no `review`
 // key), so it matches a review when every field of the review is equal on the row.
 const isReviewRow = (row) => row.verdict !== undefined && row.review === undefined;
+// A review field the hook's own value replaced sits under `review_shadowed`.
 const rowHasReview = (row, review) =>
-  !!review && Object.keys(review).every((key) => JSON.stringify(row[key]) === JSON.stringify(review[key]));
+  !!review && Object.keys(review).every((key) => {
+    const shadowed = row.review_shadowed && key in row.review_shadowed;
+    return JSON.stringify(shadowed ? row.review_shadowed[key] : row[key]) === JSON.stringify(review[key]);
+  });
 const rowMatches = (row, probe) => (isReviewRow(row) ? rowHasReview(row, probe.review) : hasContent(row) && sameContent(row, probe));
 
 // Test seams: runs just before each pre-rename check, and the rename itself.
