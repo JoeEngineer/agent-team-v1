@@ -442,8 +442,21 @@ function emit(event, context) {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: context } }));
 }
 
+// An event that is agent-team's own even in a project that hasn't set it up:
+// a role agent (agent-team:*), or a delegation that carries a task card.
+function teamEvent(input) {
+  const ti = input.tool_input && typeof input.tool_input === 'object' ? input.tool_input : {};
+  if (String(ti.subagent_type || input.agent_type || '').startsWith('agent-team:')) return true;
+  const text = [ti.prompt, ti.brief, ti.task, ti.instructions, ti.message].find((v) => typeof v === 'string');
+  return !!lib.parseTaskCard(text).id;
+}
+
 function main() {
   const input = lib.readStdin();
+  // The plugin may be enabled for every project of a user. Write nothing in a
+  // project that doesn't use agent-team, unless the event itself is the team's.
+  // The Codex shim only runs from a project's own hooks, so it always counts.
+  if (process.env.AGENT_TEAM_HOOK_SOURCE !== 'project' && !lib.inUse(input) && !teamEvent(input)) return;
   if (lib.detectTool(input) === 'codex') return require('./codex-log').handle(input);
   prunePending(input);
   const event = input.hook_event_name;

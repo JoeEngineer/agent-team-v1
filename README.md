@@ -14,7 +14,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
 | `scripts/handback-check.js` | Claude Code only. Denies a role agent's `SubagentHandback` (up to twice per agent) when the message has no parseable `result-json`/`review-json` block, so the agent sends it again with the block. The handback ends the agent's run, so the stop-hook re-ask can't reach it. Not written to Codex projects |
 | `scripts/user-prompt.js` | Claude Code only. `UserPromptSubmit` hook that closes an open `user` or `usage_limit` pause when the user replies, so the pause gets an end time. Not written to Codex projects |
-| `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist |
+| `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist. Also checks the same actions done through `gh api`, and commands inside a subshell, `$(…)`, `sh -c`, `powershell -Command`, `cmd /c` or `eval` |
 | `scripts/log-event.js` | Manual logging: decisions, escalations, notes, pauses, and the Director's own delegation and review lines (used for Codex) |
 | `scripts/models.js` | `show` prints the effective tier → model map; `resolve <tier> [--tool t]` prints the model for a tier; `up <tier>` and `down <tier>` move to the next auto-eligible tier for a tool |
 | `scripts/codex-log.js` | Codex hook handler. Writes full records (delegation, completion, review, merge) into the shared log files with `tool: "codex"`, and selected raw fields of Codex events into `codex-events.jsonl` |
@@ -222,7 +222,7 @@ claude plugin validate .
 node tests/run.js
 ```
 
-`node tests/run.js` runs every `tests/*.test.js`. The opt-in live test against a local Codex CLI is `node tests/live/codex-live.js`; it is not part of `tests/run.js`.
+`node tests/run.js` runs every `tests/*.test.js`. CI (`.github/workflows/ci.yml`) runs the same command on every pull request and on pushes to `main`, on Windows and Linux with Node 18 and 26. The opt-in live test against a local Codex CLI is `node tests/live/codex-live.js`; it is not part of `tests/run.js`.
 
 Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever routing or agent prompts change; the manifest test enforces that they match. The logs record it as `guidance_version`.
 
@@ -236,7 +236,8 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 
 ## Limits and known gaps
 
-- **The guard is a guardrail, not a sandbox.** It parses commands simply. GitHub's branch rules are the real enforcement; see [Protect your branches](#protect-your-branches).
+- **The guard is a guardrail, not a sandbox.** It parses commands simply. It does not read `$(…)` inside a double-quoted string, a script file, an encoded PowerShell command, or a GraphQL body passed with `--input`. GitHub's branch rules are the real enforcement; see [Protect your branches](#protect-your-branches).
+- **Where the logger writes:** only in a project that uses agent-team: it has an `.agent-team/` folder (from `team-init`), or its `.claude/settings.json` enables the plugin, or its Codex hooks call the shim. In any other project the hooks write nothing, except for a role agent (`agent-team:*`) or a delegation with a task card, which start the logs there.
 - **How the guard blocks:** it prints a `PreToolUse` JSON `deny` decision and exits 0. Claude Code and Codex both honour that. Codex ignores the older exit-code-2 signal, so guards before 0.2.1 didn't block anything in Codex.
 - **Hooks-active check:** the SessionStart line `agent-team hooks: active` is how the Director knows the hooks run. Without it, nothing is guarded or logged, whatever the install says.
 - **The Codex shim isn't covered by the trust hash.** Codex hashes only the `hooks.json` command strings, not the committed `.codex/agent-team-hook.js`. An agent with workspace write access could edit it and turn off the guard and logging without a re-trust prompt. GitHub rulesets still apply, and the shim is reviewed in PRs like any other file.

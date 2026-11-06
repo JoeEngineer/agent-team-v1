@@ -18,9 +18,18 @@ const counts = { passed: 0, failed: 0 };
 // user-level ~/.agent-team/models.json. Callers can still override via `env`.
 const NO_MODELS_FILE = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-no-models-')), 'models.json');
 
-function tmpProject() {
+// A git repo that has never seen agent-team (no .agent-team folder).
+function bareProject() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-test-'));
   execFileSync('git', ['init', '-q', '-b', 'task/T-1'], { cwd: dir });
+  return dir;
+}
+
+// A project set up for agent-team, as team-init leaves it: the logger only
+// writes where .agent-team exists (or the event is the team's own).
+function tmpProject() {
+  const dir = bareProject();
+  fs.mkdirSync(path.join(dir, '.agent-team', 'logs'), { recursive: true });
   return dir;
 }
 
@@ -64,5 +73,5 @@ function eq(a, b, msg) { if (a !== b) throw new Error(`${msg}: expected ${JSON.s
 
 module.exports = {
   ROOT, SCRIPTS, NO_MODELS_FILE, counts,
-  tmpProject, run, FAKE_GH, fakeGh, readLog, test, assert, eq,
+  bareProject, tmpProject, run, FAKE_GH, fakeGh, readLog, test, assert, eq,
 };

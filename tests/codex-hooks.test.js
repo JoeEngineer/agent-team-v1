@@ -61,8 +61,10 @@ function cachePlugin(home, market, version) {
 
 function samePath(a, b, msg) {
   const norm = (p) => path.resolve(p).replace(/\\/g, '/').toLowerCase();
+  // realpathSync.native asks the OS, so a Windows 8.3 short name (RUNNER~1, as
+  // os.tmpdir() gives on a CI runner) and the long name git prints compare equal.
   try {
-    eq(norm(fs.realpathSync(a)), norm(fs.realpathSync(b)), msg);
+    eq(norm(fs.realpathSync.native(a)), norm(fs.realpathSync.native(b)), msg);
   } catch (err) {
     if (err.code) eq(norm(a), norm(b), msg); else throw err;
   }

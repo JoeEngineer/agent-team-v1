@@ -1,0 +1,46 @@
+name: CI
+
+# Runs the dependency-free test suite. Pull requests into any branch are covered,
+# so task PRs into milestone/* get a check as well as PRs into main.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows and Linux: the guard's command parsing and the path handling
+        # differ by platform. Node 18 is the floor the scripts state (lib.js).
+        os: [ubuntu-latest, windows-latest]
+        node: [18, 26]
+    steps:
+      # Keep LF on Windows: tests compare generated files with the templates.
+      - name: Keep line endings as committed
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step: the scripts and tests use Node built-ins only.
+      # No GH_TOKEN on purpose: the guard tests expect `gh pr view` to fail for
+      # a PR that can't be confirmed, and the logger tests use a fake gh.
+      - name: Run tests
+        run: node tests/run.js
