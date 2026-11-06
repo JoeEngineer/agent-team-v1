@@ -222,7 +222,7 @@ claude plugin validate .
 node tests/run.js
 ```
 
-`node tests/run.js` runs every `tests/*.test.js`. The opt-in live test against a local Codex CLI is `node tests/live/codex-live.js`; it is not part of `tests/run.js`.
+`node tests/run.js` runs every `tests/*.test.js`. CI (`.github/workflows/ci.yml`) runs the same command on every pull request and on pushes to `main`, on Windows and Linux with Node 18 and 26. The opt-in live test against a local Codex CLI is `node tests/live/codex-live.js`; it is not part of `tests/run.js`.
 
 Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever routing or agent prompts change; the manifest test enforces that they match. The logs record it as `guidance_version`.
 
