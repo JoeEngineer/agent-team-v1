@@ -9,7 +9,10 @@ Set up this project for the `agent-team` plugin. The shared steps apply to both 
 
 ## Shared steps (both tools)
 
-1. Confirm the current folder is a git repo with a GitHub remote (`git remote -v`). If not, stop and tell me.
+1. Confirm the current folder is a git repo with a GitHub or GitLab remote (`git remote -v`). If not, stop and tell me. Then settle the forge:
+   - Host is `github.com` or contains `github` → GitHub. Host contains `gitlab` (gitlab.com or self-hosted) → GitLab. Either way, nothing to set.
+   - Any other host (a self-hosted server such as `git.example.com`): ask me whether it's GitHub Enterprise or GitLab. For GitLab, run `git config agent-team.forge gitlab` so the hooks and the Director know. This lives in `.git/config`, so it isn't committed; tell me each clone needs it (or `AGENT_TEAM_FORGE=gitlab` in the environment).
+   - On GitLab, check `glab auth status`. If `glab` is missing or not logged in to this host, tell me (`glab auth login --hostname <host>`) and carry on with the file steps.
 2. Copy, without overwriting anything that already exists:
    - `STATUS.md` → project root
    - `docs/decisions/0000-template.md` → `docs/decisions/`
@@ -20,7 +23,9 @@ Set up this project for the `agent-team` plugin. The shared steps apply to both 
    - `.codex/agents/*-small.toml`, `.codex/agents/*-medium.toml`, `.codex/agents/*-large.toml`, `.codex/agents/*-xlarge.toml` (generated per machine by `codex-agents.js`; harmless in a project that never uses Codex)
 
    Do not ignore `.codex/hooks.json` or `.codex/agent-team-hook.js`. Those are committed.
-5. Check branch protection with `gh api repos/{owner}/{repo}/rulesets` (read-only). If `gh` is not installed or not logged in, say so, skip this check, and tell me to look at the rulesets by hand. If `main` or `milestone/*` is not covered, show me the two rulesets from the plugin README's "Protect your branches" section (`<plugin root>/README.md`) with the repo filled in, and explain why the bypass list stays empty and approvals stay at 0. Don't apply them. Changing repo rules is mine to do, and the guard hook blocks it anyway.
+5. Check branch protection (read-only). Don't apply anything: changing repo rules is mine to do, and the guard hook blocks it anyway.
+   - **GitHub:** `gh api repos/{owner}/{repo}/rulesets`. If `gh` is not installed or not logged in, say so, skip this check, and tell me to look at the rulesets by hand. If `main` or `milestone/*` is not covered, show me the two rulesets from the plugin README's "Protect your branches" section (`<plugin root>/README.md`) with the repo filled in, and explain why the bypass list stays empty and approvals stay at 0.
+   - **GitLab:** `glab api projects/:id/protected_branches`. If `glab` can't answer, say so and tell me to look under Settings → Repository → Protected branches. If `main` isn't protected with push set to No one, or `milestone/*` isn't protected with force push off, show me the settings from the README's "On GitLab" section.
 
 ## Claude Code steps
 

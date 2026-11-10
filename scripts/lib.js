@@ -340,6 +340,50 @@ function findPrMerges(cmd) {
   return out;
 }
 
+// Arguments after `glab` in a token list, or null if the segment isn't a glab call.
+function glabParts(tokens) {
+  const gi = tokens.findIndex((t) => t === 'glab' || t === 'glab.exe' || /[\\/]glab(\.exe)?$/.test(t));
+  if (gi < 0) return null;
+  return tokens.slice(gi + 1);
+}
+
+// glab's subcommand aliases: `glab merge-request` = `glab mr`; `mr accept` = `mr merge`.
+const isGlabMr = (t) => t === 'mr' || t === 'merge-request';
+const isGlabMerge = (t) => t === 'merge' || t === 'accept';
+
+// For the args after `glab mr merge`: the MR (IID, URL or branch; null means
+// the current branch's MR) and the --repo value, if any.
+function mrMergeTarget(args) {
+  const valueFlags = new Set(['-R', '--repo', '-m', '--message', '--squash-message', '--sha']);
+  let target = null;
+  let repo = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (valueFlags.has(a)) {
+      if (a === '-R' || a === '--repo') repo = args[i + 1];
+      i++;
+      continue;
+    }
+    if (a.startsWith('--repo=')) { repo = a.slice(7); continue; }
+    if (a.startsWith('-')) continue;
+    if (!target) target = a;
+  }
+  return { target, repo };
+}
+
+// Every merge of a pull or merge request in a command line, either forge:
+// { forge: 'github' | 'gitlab', target, repo, args }.
+function findMerges(cmd) {
+  const out = [];
+  for (const seg of allSegments(cmd)) {
+    const gh = ghParts(seg);
+    if (gh && gh[0] === 'pr' && gh[1] === 'merge') out.push({ forge: 'github', ...prMergeTarget(gh.slice(2)), args: gh.slice(2) });
+    const gl = glabParts(seg);
+    if (gl && isGlabMr(gl[0]) && isGlabMerge(gl[1])) out.push({ forge: 'gitlab', ...mrMergeTarget(gl.slice(2)), args: gl.slice(2) });
+  }
+  return out;
+}
+
 // Which tool sent this hook event: 'claude' (default) or 'codex'.
 const CODEX_ONLY_TOOLS = new Set(['send_input', 'resume_agent', 'followup_task', 'wait_agent', 'close_agent', 'list_agents', 'apply_patch']);
 function detectTool(input, env = process.env) {
@@ -356,4 +400,5 @@ module.exports = {
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
+  glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges,
 };

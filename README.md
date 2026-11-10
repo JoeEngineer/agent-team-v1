@@ -14,13 +14,14 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
 | `scripts/handback-check.js` | Claude Code only. Denies a role agent's `SubagentHandback` (up to twice per agent) when the message has no parseable `result-json`/`review-json` block, so the agent sends it again with the block. The handback ends the agent's run, so the stop-hook re-ask can't reach it. Not written to Codex projects |
 | `scripts/user-prompt.js` | Claude Code only. `UserPromptSubmit` hook that closes an open `user` or `usage_limit` pause when the user replies, so the pause gets an end time. Not written to Codex projects |
-| `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist. Also checks the same actions done through `gh api`, and commands inside a subshell, `$(…)`, `sh -c`, `powershell -Command`, `cmd /c` or `eval` |
+| `scripts/guard.js` | Blocks merges into `main`/`master`, force-pushes, pushes to protected branches, branch-protection and repo changes, releases, and `git add -A`/`.` while unignored agent worktrees exist. Also checks the same actions done through `gh api`, the GitLab equivalents (`glab mr merge`, `glab api`, `glab repo`/`glab release`), and commands inside a subshell, `$(…)`, `sh -c`, `powershell -Command`, `cmd /c` or `eval` |
+| `scripts/forge.js` | Forge layer: detects GitHub or GitLab (env `AGENT_TEAM_FORGE`, then `git config agent-team.forge`, then the `origin` host) and asks `gh pr view` or `glab mr view` for a request's base branch and state, normalized for the guard and the merge log |
 | `scripts/log-event.js` | Manual logging: decisions, escalations, notes, pauses, and the Director's own delegation and review lines (used for Codex) |
 | `scripts/models.js` | `show` prints the effective tier → model map; `resolve <tier> [--tool t]` prints the model for a tier; `up <tier>` and `down <tier>` move to the next auto-eligible tier for a tool |
 | `scripts/codex-log.js` | Codex hook handler. Writes full records (delegation, completion, review, merge) into the shared log files with `tool: "codex"`, and selected raw fields of Codex events into `codex-events.jsonl` |
 | `scripts/codex-agents.js` | Writes `.codex/agents/<role>-<tier>.toml` for each role and enabled Codex tier, from the model map. Per machine, gitignored. `--check` reports drift |
 | `scripts/codex-hooks.js` | Writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Both are committed |
-| `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run |
+| `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run, plus `agent-team forge: gitlab` on a GitLab project |
 | `scripts/archive-logs.js` | Milestone close: copies the project's logs to an archive folder outside the repo, and with `--clear` removes the live copies once the archive is verified |
 | `scripts/reconcile-logs.js` | Drains snapshots from observed Codex stops and backfills Claude completion/review records from transcripts. May rewrite `completions.jsonl`/`reviews.jsonl` to add `stale_of` to lines holding another attempt's report; all other lines are kept as they were |
 | `plugin.json` (root) | Portable Agent Plugins manifest that Codex reads; `.claude-plugin/` stays for Claude Code |
@@ -42,6 +43,7 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Routing:** `skills/director/references/routing.md`: task type × difficulty → agent, tier, effort, vehicle, plus an escalation ladder (feedback → more effort → bigger tier → architect).
 - **Codex logging:** Codex records go into the same log files as Claude's, with `tool: "codex"`. The spawn message is encrypted on Codex, so the Director logs each Codex delegation itself before spawning it (`log-event.js delegation` with the task card and a `task_name`). The hooks then link the subagent's completion and review to that line by `task_name`, and only add a fallback line if the Director didn't log one. `codex-events.jsonl` is a raw debug log, not used by the Coach.
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
+- **GitHub or GitLab:** works with GitHub and with GitLab, including self-hosted GitLab. On GitLab the Director uses `glab` and merge requests; see [GitLab](#gitlab) and `skills/director/references/gitlab.md`.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
 - **Script commands:** run them from the project root with the plugin path, `node "<plugin root>/scripts/…"`, as `team-init` does. The commands below are written relative to the plugin root.
 - **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
@@ -199,10 +201,40 @@ EOF
 
 Rulesets are free on public repos. Private repos need a paid GitHub plan for them.
 
+### On GitLab
+
+GitLab's equivalent of rulesets is **protected branches** (Settings → Repository → Protected branches). They're enforced on the server, so they're the hard stop here too.
+
+| Branch | Allowed to merge | Allowed to push and merge | Allowed to force push | Why |
+|---|---|---|---|---|
+| `main` (protected by default) | Maintainers | **No one** | Off | Every change reaches `main` through an MR. GitLab protects the default branch already; change "Allowed to push and merge" to No one. |
+| `milestone/*` (wildcard) | Developers + Maintainers | Developers + Maintainers | **Off** | The Director pushes and merges here on its own; force pushes would rewrite reviewed work. |
+
+The Director acts through *your* `glab` login. If you're a maintainer, so is it, so server rules can't tell you apart: the guard hook is what stops it merging into `main`, as on GitHub. In Settings → Merge requests, turn on **Pipelines must succeed** once you have CI.
+
+Or from a terminal, for `milestone/*` (for `main`, change the existing protection in the UI):
+
+```bash
+glab api -X POST projects/:id/protected_branches \
+  -f name='milestone/*' -F push_access_level=30 -F merge_access_level=30 -F allow_force_push=false
+```
+
+GitLab lets an MR's author approve it unless "Prevent approval by author" is on (a paid-tier setting), so leave required approvals at 0, for the same reason as on GitHub.
+
 ### What this means day to day
 
 - You and the Director can't push to `main` directly. Every change, yours included, goes through a branch and a PR.
 - The Director opens and merges task PRs into `milestone/<slug>`. When the milestone is done, it opens `milestone/<slug>` → `main` and hands that PR to you to merge.
+
+## GitLab
+
+The plugin works with gitlab.com and self-hosted GitLab through the `glab` CLI.
+
+1. Install a current `glab` (one whose `glab mr view --help` lists `--output`; Ubuntu 24.04's packaged 1.36 is too old, and the guard then blocks every merge) and log in to your host: `glab auth login --hostname git.example.com` (or set `GITLAB_HOST` and a `GITLAB_TOKEN` with the `api` scope).
+2. If the host name doesn't contain `gitlab`, tell the plugin once per clone: `git config agent-team.forge gitlab` (or `AGENT_TEAM_FORGE=gitlab` in the environment). `team-init` asks and does this for you.
+3. Protect `main` and `milestone/*` ([On GitLab](#on-gitlab)).
+
+The next session shows `agent-team forge: gitlab`, and the Director follows `skills/director/references/gitlab.md`: `glab mr create/merge/diff/note`, pipeline status from `glab mr view --output json`, and `glab issue` for milestone issues. The guard checks `glab mr merge` and `glab api` writes the way it checks `gh`, and merge lines get `"forge": "gitlab"` with the outcome from `glab mr view`.
 
 ## Developing the plugin
 
@@ -231,12 +263,12 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 ## Requirements
 
 - Node 18+ on PATH (hooks are dependency-free Node scripts).
-- `git` and `gh` (authenticated) for the guard and merges.
+- `git`, plus `gh` (GitHub) or `glab` (GitLab), authenticated, for the guard and merges.
 - Local Director session. Cloud sessions can't report back to it yet, and the Codex/Antigravity bridges only run locally.
 
 ## Limits and known gaps
 
-- **The guard is a guardrail, not a sandbox.** It parses commands simply. It does not read `$(…)` inside a double-quoted string, a script file, an encoded PowerShell command, or a GraphQL body passed with `--input`. GitHub's branch rules are the real enforcement; see [Protect your branches](#protect-your-branches).
+- **The guard is a guardrail, not a sandbox.** It parses commands simply. It does not read `$(…)` inside a double-quoted string, a script file, an encoded PowerShell command, or a GraphQL body passed with `--input`. The forge's branch rules (GitHub rulesets, GitLab protected branches) are the real enforcement; see [Protect your branches](#protect-your-branches).
 - **Where the logger writes:** only in a project that uses agent-team: it has an `.agent-team/` folder (from `team-init`), or its `.claude/settings.json` enables the plugin, or its Codex hooks call the shim. In any other project the hooks write nothing, except for a role agent (`agent-team:*`) or a delegation with a task card, which start the logs there.
 - **How the guard blocks:** it prints a `PreToolUse` JSON `deny` decision and exits 0. Claude Code and Codex both honour that. Codex ignores the older exit-code-2 signal, so guards before 0.2.1 didn't block anything in Codex.
 - **Hooks-active check:** the SessionStart line `agent-team hooks: active` is how the Director knows the hooks run. Without it, nothing is guarded or logged, whatever the install says.
@@ -249,7 +281,7 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 - **Missing-block nudge:** when a role agent (`agent-team:*`) stops without its `result-json`/`review-json` block, the SubagentStop hook returns `additionalContext` asking it to end its reply with the block. Claude Code delivers that text to the subagent, which continues so it can act on it; it does not reach the Director. It needs a Claude Code version whose SubagentStop accepts `additionalContext` (seen in 2.1.314), and older versions may ignore it. It is sent at most once per turn (not when `stop_hook_active` is set). A second stop in the same turn writes its own completion line, so for several lines with the same `agent_id` and `turn`, use the last.
 - **Hook input formats aren't a published contract.** The logger relies on fields seen in recent Claude Code releases (`agentId`, `isAsync`, `resolvedModel`, `agent_transcript_path`, SubagentStop's `last_assistant_message` and `effort`, the transcript JSONL shape, the `SubagentHandback` tool's `message`, `SendMessage`'s `to`/`message`). It never fails a tool call if they change, but log fields may come out empty. Errors go to `.agent-team/logs/hook-errors.jsonl`.
 - **Two token numbers:** `tokens` on a delegation line is Claude Code's own total for the subagent, and it doesn't include cached input. `tokens_with_cache` on a completion line is summed from the transcript, cache included. Compare like with like.
-- **Merge outcomes** come from `gh pr view` right after the `gh pr merge` call (7 s timeout). If GitHub can't be asked, the line says `outcome: "unknown"` rather than guessing.
+- **Merge outcomes** come from `gh pr view` (or `glab mr view`) right after the `gh pr merge` (or `glab mr merge`) call (7 s timeout). If the forge can't be asked, the line says `outcome: "unknown"` rather than guessing.
 - **Retries by `SendMessage`** are logged as `kind: "resume"` delegations only when the message carries a TASK line. A TASK line with `kind=followup` (or `"kind":"followup"` in a `log-event.js delegation` line) marks a scope addition that is not a retry: it keeps the attempt number.
 - **Card settings and reasons (0.4.6):** a card may say `effort=` as well as `tier=`, and from attempt 2 `reason=` (`sendback`, `escalation`, `fold-in`, `retry`). A delegation line where the card asks for a tier or effort other than what runs gets `tier_mismatch`/`effort_mismatch: {card, ran}`. On a resume, "what runs" is the original agent's settings, so a card that asks a resume to escalate is flagged. A role agent spawned without a TASK line gets `uncarded: true`. The Director is warned in each case.
 - **Pause ends (0.4.6):** the next delegation, a new pause, `log-event.js resume`, or (Claude Code, via a `UserPromptSubmit` hook) the user's next message closes an open pause. Each writes a `kind: "resume"` line with `paused_ts`, `duration_ms` and `closed_by`. The user-prompt hook only closes `user` and `usage_limit` pauses, and it isn't written to Codex projects.
@@ -261,6 +293,7 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 - **Sessions:** token usage of separate sessions isn't captured automatically yet.
 - **Effort of the Director itself** isn't visible to Claude Code hooks. On Claude, a decision line's `effort` is `null` unless the Director gives it; on Codex it comes from the session transcript.
 - **Codex gaps:** admins can disable hooks, which turns off the guard and logging. The worktree and agent-file limits above also apply. See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
+- **GitLab support is newer.** It's covered by unit tests against a stand-in `glab` that prints GitLab's MR JSON, and by `tests/live/gitlab-live.sh` against a real instance. Forge detection reads the `origin` remote; a project whose merges go to another remote needs `AGENT_TEAM_FORGE` or `git config agent-team.forge`. The Codex hook shim's "GitHub rulesets still apply" warning means your forge's branch rules either way.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.
 
 ## License

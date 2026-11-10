@@ -50,6 +50,9 @@ fs.writeFileSync(FAKE_GH,
   "process.stdout.write(process.env.FAKE_GH_OUT || '');\n" +
   "process.exit(Number(process.env.FAKE_GH_EXIT || 0));\n");
 const fakeGh = (out, exit = 0, extra = {}) => ({ AGENT_TEAM_FAKE_GH: FAKE_GH, FAKE_GH_OUT: out, FAKE_GH_EXIT: String(exit), ...extra });
+// The same script stands in for `glab` (AGENT_TEAM_FAKE_GLAB). It reads the
+// same FAKE_GH_* variables, so a test fakes one CLI at a time.
+const fakeGlab = (out, exit = 0, extra = {}) => ({ AGENT_TEAM_FAKE_GLAB: FAKE_GH, FAKE_GH_OUT: out, FAKE_GH_EXIT: String(exit), ...extra });
 
 function readLog(projectDir, file) {
   const p = path.join(projectDir, '.agent-team', 'logs', file);
@@ -73,5 +76,5 @@ function eq(a, b, msg) { if (a !== b) throw new Error(`${msg}: expected ${JSON.s
 
 module.exports = {
   ROOT, SCRIPTS, NO_MODELS_FILE, counts,
-  bareProject, tmpProject, run, FAKE_GH, fakeGh, readLog, test, assert, eq,
+  bareProject, tmpProject, run, FAKE_GH, fakeGh, fakeGlab, readLog, test, assert, eq,
 };

@@ -1,0 +1,41 @@
+# GitLab (gitlab.com or self-hosted)
+
+Read this when the session context says `agent-team forge: gitlab`. Everything else in the Director's instructions applies; only the CLI and a few names change. A GitLab **merge request (MR)** is what the rest of these instructions call a PR, and its **target branch** is the PR's base.
+
+## Prerequisites
+
+- `glab` is installed and logged in to the project's host: `glab auth status`. For a self-hosted instance the user logs in once with `glab auth login --hostname <host>` (or sets `GITLAB_HOST` and `GITLAB_TOKEN`, a token with the `api` scope). If `glab` is missing or not logged in, tell the user. Don't fall back to `gh`.
+- `glab` must support `glab mr view --output json`. Old packaged builds (Ubuntu 24.04 ships 1.36) don't, and then the guard can't read an MR's target branch, so it blocks every merge. Check with `glab mr view --help`; if `--output` is missing, ask the user to update `glab`.
+- Inside the repo, `glab` picks the host and project from the `origin` remote, so commands need no `--repo`.
+
+## Command map
+
+| Step | GitHub | GitLab |
+|---|---|---|
+| Open a task request | `gh pr create --base milestone/<slug> --head task/<ID> --title … --body …` | `glab mr create --target-branch milestone/<slug> --source-branch task/<ID> --title … --description … --remove-source-branch --yes` |
+| List open requests | `gh pr list --state open` | `glab mr list` (open is the default) |
+| Read the diff | `gh pr diff <n>` | `glab mr diff <n>` |
+| View one | `gh pr view <n>` | `glab mr view <n>` (`--output json` for fields) |
+| CI status | `gh pr checks <n>` | `glab mr view <n> --output json`, field `head_pipeline.status` (`success`, `failed`, `running`, `pending`, `canceled`, `skipped`); `glab ci status --branch <source branch>` for a readable view |
+| Comment | `gh pr comment <n> -b "…"` | `glab mr note <n> -m "…"` |
+| Merge a task request | `gh pr merge <n> --squash --delete-branch` | `glab mr merge <n> --squash --remove-source-branch --yes` |
+| Create an issue | `gh issue create --title … --body … --label agent-team` | `glab issue create --title … --description … --label agent-team` |
+| List issues | `gh issue list --label agent-team --state open` | `glab issue list --label agent-team` (open is the default) |
+
+Always pass `--yes` to `glab mr create` and `glab mr merge`: without it glab asks for confirmation, and an agent's shell can't answer.
+
+## Merging
+
+The merge rules in `merging.md` are unchanged: reviewer `approve` plus a green pipeline, a one-line note, and the merge **in a Bash call of its own**. CI is green when `head_pipeline.status` is `success`. No pipeline (`head_pipeline` is null) counts as "no CI configured", so the reviewer must have run the tests.
+
+If the pipeline is still running when you merge, GitLab may queue the merge to happen when the pipeline succeeds. The merge log records that as `auto-merge-queued`. Check back with `glab mr view <n>` before treating the task as merged.
+
+The guard checks `glab mr merge` the same way it checks `gh pr merge`: it asks `glab mr view` for the target branch and blocks the merge when that's `main`/`master` or when it can't tell. It also blocks the same actions done through `glab api` (MR merges, protected branches, push rules, approval rules, branch deletes, commits to protected branches, project edits, releases).
+
+## Issues
+
+`Closes #N` works as on GitHub: GitLab closes the issues when the MR merges into the default branch. Put every task issue in the milestone MR's description, as `merging.md` says.
+
+## Approvals
+
+On GitLab the author of an MR can approve it unless the project turns on "Prevent approval by author" (a paid-tier setting). The Director still doesn't approve MRs: the reviewer's verdict lives in the logs and an MR note, as on GitHub.
