@@ -43,7 +43,7 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Routing:** `skills/director/references/routing.md`: task type × difficulty → agent, tier, effort, vehicle, plus an escalation ladder (feedback → more effort → bigger tier → architect).
 - **Codex logging:** Codex records go into the same log files as Claude's, with `tool: "codex"`. The spawn message is encrypted on Codex, so the Director logs each Codex delegation itself before spawning it (`log-event.js delegation` with the task card and a `task_name`). The hooks then link the subagent's completion and review to that line by `task_name`, and only add a fallback line if the Director didn't log one. `codex-events.jsonl` is a raw debug log, not used by the Coach.
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
-- **GitHub or GitLab:** works with GitHub and with GitLab, including self-hosted GitLab. On GitLab the Director uses `glab` and merge requests; see [GitLab](#gitlab) and `skills/director/references/gitlab.md`.
+- **GitHub or GitLab:** works with GitHub and with GitLab, including self-hosted GitLab. On GitLab the Director uses `glab` and merge requests; see [GitLab](#gitlab), `skills/director/references/gitlab.md`, and [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md) for the full mapping and what's verified.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
 - **Script commands:** run them from the project root with the plugin path, `node "<plugin root>/scripts/…"`, as `team-init` does. The commands below are written relative to the plugin root.
 - **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
@@ -233,6 +233,8 @@ The plugin works with gitlab.com and self-hosted GitLab through the `glab` CLI.
 1. Install a current `glab` (one whose `glab mr view --help` lists `--output`; Ubuntu 24.04's packaged 1.36 is too old, and the guard then blocks every merge) and log in to your host: `glab auth login --hostname git.example.com` (or set `GITLAB_HOST` and a `GITLAB_TOKEN` with the `api` scope).
 2. If the host name doesn't contain `gitlab`, tell the plugin once per clone: `git config agent-team.forge gitlab` (or `AGENT_TEAM_FORGE=gitlab` in the environment). `team-init` asks and does this for you.
 3. Protect `main` and `milestone/*` ([On GitLab](#on-gitlab)).
+
+For how each GitHub piece maps to GitLab, what the guard covers, and what still needs a live check, see [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md).
 
 The next session shows `agent-team forge: gitlab`, and the Director follows `skills/director/references/gitlab.md`: `glab mr create/merge/diff/note`, pipeline status from `glab mr view --output json`, and `glab issue` for milestone issues. The guard checks `glab mr merge` and `glab api` writes the way it checks `gh`, and merge lines get `"forge": "gitlab"` with the outcome from `glab mr view`.
 

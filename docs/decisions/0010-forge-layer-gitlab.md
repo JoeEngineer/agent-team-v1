@@ -3,6 +3,9 @@
 Status: proposed
 
 ## Context
+The full GitHub-to-GitLab mapping, guard coverage and open checks are in
+`docs/gitlab-mapping.md`.
+
 Everything that talks to the code host went through `gh`: the guard asked
 `gh pr view` for a PR's base, the merge logger asked it for the outcome, and the
 skills told the Director to use `gh pr …` and `gh issue …`. On a GitLab project
