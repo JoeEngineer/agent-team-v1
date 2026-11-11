@@ -155,12 +155,15 @@ const API_LONG_VALUE = new Set(['--method', '--field', '--raw-field', '--header'
 // wins, short flags may be grouped (`-iX PUT`, `-XPUT`, `-X=PUT`), and -f/-F
 // values are collected as fields. method is null when none is given, and ''
 // when -X has no value (treated as a write). Query parameters in the endpoint
-// (`?branch=main`) are returned as fields too.
+// (`?branch=main`) are returned as fields too. `endpoint` is the positional
+// arguments only (the path, or `graphql`), so a field's text, such as a
+// comment body that mentions protected_branches, isn't read as a path.
 function apiArgs(args) {
   let method = null;
   let input = false;
   const fields = [];
   const query = [];
+  const positionals = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     let flag = null;
@@ -179,6 +182,7 @@ function apiArgs(args) {
       }
       if (!flag) continue;
     } else {
+      positionals.push(a);
       const q = a.indexOf('?');
       if (q >= 0) {
         try { for (const [k, v] of new URLSearchParams(a.slice(q + 1))) query.push(`${k}=${v}`); } catch { /* not a URL */ }
@@ -190,7 +194,7 @@ function apiArgs(args) {
     else if (flag === '-f' || flag === '-F' || flag === '--field' || flag === '--raw-field') fields.push(value);
     else if (flag === '--input') input = true;
   }
-  return { method, hasBody: fields.length > 0 || input, fields: [...fields, ...query] };
+  return { method, hasBody: fields.length > 0 || input, fields: [...fields, ...query], positionals, endpoint: positionals.join(' ') };
 }
 
 // The value of a named field (`branch`, `base`) in a parsed api call.
@@ -212,10 +216,10 @@ function checkGhApi(args, cwd) {
   const api = apiArgs(args);
   if (apiReads(api)) return;
   const { method } = api;
-  const joined = args.join(' ');
+  const joined = api.endpoint; // path checks read the endpoint, not field text
   if (/protection|rulesets/.test(joined)) block('changing branch protection or rulesets');
 
-  const graphql = args.includes('graphql') && joined.match(GRAPHQL_MUTATIONS);
+  const graphql = api.positionals.includes('graphql') && args.join(' ').match(GRAPHQL_MUTATIONS);
   if (graphql) block(`GraphQL mutation \`${graphql[1]}\` (merge with \`gh pr merge\` so the base branch can be checked)`);
 
   const merge = joined.match(/(?:^|[\s/])repos\/([^/\s]+)\/([^/\s]+)\/pulls\/(\d+)\/merge(?=[\s?]|$)/);
@@ -255,12 +259,12 @@ function checkGlabApi(args, cwd) {
   const api = apiArgs(args);
   if (apiReads(api)) return;
   const { method } = api;
-  const joined = args.join(' ');
+  const joined = api.endpoint; // path checks read the endpoint, not field text
   if (/protected_branches|protected_tags|push_rule|approval_rules|approval_settings|merge_request_approval_setting/.test(joined)) {
     block('changing protected branches, push rules or approval rules');
   }
 
-  const graphql = args.includes('graphql') && joined.match(GITLAB_MUTATIONS);
+  const graphql = api.positionals.includes('graphql') && args.join(' ').match(GITLAB_MUTATIONS);
   if (graphql) block(`GraphQL mutation \`${graphql[1]}\` (merge with \`glab mr merge\` so the target branch can be checked)`);
 
   const P = String.raw`(?:^|[\s/])projects\/([^/\s?]+)`;

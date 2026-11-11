@@ -99,8 +99,8 @@ A self-hosted server with a neutral name (`git.example.com`) needs step 1 or 2.
 
 | Branch | GitHub ruleset | GitLab protected branch |
 |---|---|---|
-| `main` | Require a PR (0 approvals), block force pushes, no bypass | Push and merge: **No one**; merge: Maintainers; force push off. GitLab protects the default branch already; change its push setting in the UI. |
-| `milestone/*` | Block force pushes | Wildcard `milestone/*`; push and merge: Developers + Maintainers; force push **off** |
+| `main` | Require a PR (0 approvals), block force pushes, no bypass | Allowed to merge: Maintainers; Allowed to push and merge: **No one**; Allowed to force push: off. GitLab protects the default branch already; change "Allowed to push and merge" to No one in the UI. |
+| `milestone/*` | Block force pushes | Wildcard `milestone/*`. Allowed to merge: Developers + Maintainers; Allowed to push and merge: Developers + Maintainers; Allowed to force push: **off** |
 
 On both forges the Director acts as the user, so server rules can't tell them apart. The guard is what keeps the Director from merging into `main`; the server rules catch anything that gets past it.
 

@@ -107,6 +107,11 @@ const allowed = [
   ['commit to a task branch, branch in query', 'glab api -X POST "projects/:id/repository/commits?branch=task%2FT-1&commit_message=x"', fakeGlab('', 1)],
   ['grouped GET with a field', 'glab api -iX GET projects/:id/merge_requests -f state=opened', fakeGlab('', 1)],
   ['gh api grouped GET', 'gh api -iX GET repos/o/r/rulesets', fakeGh('', 1)],
+  // Field text that mentions a guarded path is not a path.
+  ['glab MR note mentioning protected_branches', 'glab api projects/:id/merge_requests/12/notes -f body="see the protected_branches docs"', fakeGlab('', 1)],
+  ['glab MR note mentioning push_rule and releases', 'glab api -X POST projects/:id/merge_requests/12/notes -f "body=push_rule and projects/:id/releases are next"', fakeGlab('', 1)],
+  ['glab issue note mentioning approval_rules', 'glab api projects/:id/issues/3/notes --raw-field body=approval_rules', fakeGlab('', 1)],
+  ['gh PR comment mentioning branch protection', 'gh api repos/o/r/issues/5/comments -f body="branch protection is on for main"', fakeGh('', 1)],
 ];
 for (const [name, cmd, env] of allowed) {
   test(`guard allows: ${name}`, () => {
