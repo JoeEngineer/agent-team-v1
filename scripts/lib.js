@@ -303,31 +303,73 @@ function allSegments(cmd, depth = 0) {
   return out;
 }
 
+// A parent command's flags may come before the subcommand: `gh pr -R o/r merge 5`
+// and `glab mr -R g/p merge 5` are valid. Move flags that sit before the command
+// words to just after them, so [0] and [1] are always the command words and the
+// subcommand's parser still sees the flags. `api` takes no subcommand.
+function commandWords(args) {
+  const words = [];
+  const flags = [];
+  let i = 0;
+  while (i < args.length && words.length < 2) {
+    const a = args[i];
+    if (a.length > 1 && a.startsWith('-')) {
+      flags.push(a);
+      // -R/--repo (alone or ending a short cluster such as -hR) takes the next token.
+      if ((a === '--repo' || /^-[A-Za-z]*R$/.test(a)) && i + 1 < args.length) flags.push(args[++i]);
+      i++;
+      continue;
+    }
+    words.push(a);
+    i++;
+    if (a === 'api') break;
+  }
+  return [...words, ...flags, ...args.slice(i)];
+}
+
 // Arguments after `gh` in a token list, or null if the segment isn't a gh call.
 function ghParts(tokens) {
   const gi = tokens.findIndex((t) => t === 'gh' || t === 'gh.exe' || /[\\/]gh(\.exe)?$/.test(t));
   if (gi < 0) return null;
-  return tokens.slice(gi + 1);
+  return commandWords(tokens.slice(gi + 1));
 }
 
-// For the args after `gh pr merge`: the PR (number, URL or branch; null means
-// the current branch's PR) and the --repo value, if any.
-function prMergeTarget(args) {
-  const valueFlags = new Set(['-R', '--repo', '-b', '--body', '-F', '--body-file', '-t', '--subject', '--match-head-commit', '-A', '--author-email']);
+// For the args of a merge command: the first positional is the target (null
+// means the current branch's request) and -R/--repo is the repo. Handles
+// `-R x`, `-Rx`, `-R=x`, `--repo x`, `--repo=x` and short clusters (`-sR x`).
+// shortValue / longValue name the flags that take a value, so their values
+// aren't mistaken for the target.
+function mergeTarget(args, shortValue, longValue) {
   let target = null;
   let repo = null;
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (valueFlags.has(a)) {
-      if (a === '-R' || a === '--repo') repo = args[i + 1];
-      i++;
+    if (a.startsWith('--') && a.length > 2) {
+      const eq = a.indexOf('=');
+      const name = eq < 0 ? a : a.slice(0, eq);
+      if (!longValue.has(name)) continue;
+      const value = eq < 0 ? args[++i] : a.slice(eq + 1);
+      if (name === '--repo') repo = value;
       continue;
     }
-    if (a.startsWith('--repo=')) { repo = a.slice(7); continue; }
-    if (a.startsWith('-')) continue;
+    if (a.length > 1 && a.startsWith('-')) {
+      for (let j = 1; j < a.length; j++) {
+        if (!shortValue.has(a[j])) continue;
+        const value = a.slice(j + 1).replace(/^=/, '') || args[++i];
+        if (a[j] === 'R') repo = value;
+        break;
+      }
+      continue;
+    }
     if (!target) target = a;
   }
   return { target, repo };
+}
+
+// For the args after `gh pr merge`: the PR (number, URL or branch) and --repo.
+function prMergeTarget(args) {
+  return mergeTarget(args, new Set(['R', 'b', 'F', 't', 'A']),
+    new Set(['--repo', '--body', '--body-file', '--subject', '--match-head-commit', '--author-email']));
 }
 
 // Every `gh pr merge` in a command line, as { target, repo, args }.
@@ -344,31 +386,16 @@ function findPrMerges(cmd) {
 function glabParts(tokens) {
   const gi = tokens.findIndex((t) => t === 'glab' || t === 'glab.exe' || /[\\/]glab(\.exe)?$/.test(t));
   if (gi < 0) return null;
-  return tokens.slice(gi + 1);
+  return commandWords(tokens.slice(gi + 1));
 }
 
 // glab's subcommand aliases: `glab merge-request` = `glab mr`; `mr accept` = `mr merge`.
 const isGlabMr = (t) => t === 'mr' || t === 'merge-request';
 const isGlabMerge = (t) => t === 'merge' || t === 'accept';
 
-// For the args after `glab mr merge`: the MR (IID, URL or branch; null means
-// the current branch's MR) and the --repo value, if any.
+// For the args after `glab mr merge`: the MR (IID, URL or branch) and --repo.
 function mrMergeTarget(args) {
-  const valueFlags = new Set(['-R', '--repo', '-m', '--message', '--squash-message', '--sha']);
-  let target = null;
-  let repo = null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (valueFlags.has(a)) {
-      if (a === '-R' || a === '--repo') repo = args[i + 1];
-      i++;
-      continue;
-    }
-    if (a.startsWith('--repo=')) { repo = a.slice(7); continue; }
-    if (a.startsWith('-')) continue;
-    if (!target) target = a;
-  }
-  return { target, repo };
+  return mergeTarget(args, new Set(['R', 'm']), new Set(['--repo', '--message', '--squash-message', '--sha']));
 }
 
 // Every merge of a pull or merge request in a command line, either forge:

@@ -147,17 +147,61 @@ function requireUnprotectedBase(which, target, repo, cwd) {
   if (isProtected(info.base)) block(`${what} targets protected branch "${info.base}"; only the user merges into it`);
 }
 
-// The HTTP method of a `gh api` call: `-X PUT`, `-XPUT`, `--method PUT`,
-// `--method=PUT`. Null when none is given.
-function apiMethod(args) {
+// Flags of `gh api` / `glab api` that take a value.
+const API_SHORT_VALUE = new Set(['X', 'f', 'F', 'H', 'p', 'q', 't']);
+const API_LONG_VALUE = new Set(['--method', '--field', '--raw-field', '--header', '--input', '--preview', '--jq', '--template', '--hostname', '--cache']);
+
+// Parse a `gh api` / `glab api` call the way the CLI does: the last -X/--method
+// wins, short flags may be grouped (`-iX PUT`, `-XPUT`, `-X=PUT`), and -f/-F
+// values are collected as fields. method is null when none is given, and ''
+// when -X has no value (treated as a write). Query parameters in the endpoint
+// (`?branch=main`) are returned as fields too.
+function apiArgs(args) {
+  let method = null;
+  let input = false;
+  const fields = [];
+  const query = [];
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
-    if (a === '-X' || a === '--method') return (args[i + 1] || '').toUpperCase();
-    if (a.startsWith('--method=')) return a.slice('--method='.length).toUpperCase();
-    if (/^-X./.test(a)) return a.slice(2).replace(/^=/, '').toUpperCase();
+    let flag = null;
+    let value;
+    if (a.startsWith('--') && a.length > 2) {
+      const eq = a.indexOf('=');
+      flag = eq < 0 ? a : a.slice(0, eq);
+      if (!API_LONG_VALUE.has(flag)) continue;
+      value = eq < 0 ? args[++i] : a.slice(eq + 1);
+    } else if (a.length > 1 && a.startsWith('-')) {
+      for (let j = 1; j < a.length; j++) {
+        if (!API_SHORT_VALUE.has(a[j])) continue;
+        flag = '-' + a[j];
+        value = a.slice(j + 1).replace(/^=/, '') || args[++i];
+        break;
+      }
+      if (!flag) continue;
+    } else {
+      const q = a.indexOf('?');
+      if (q >= 0) {
+        try { for (const [k, v] of new URLSearchParams(a.slice(q + 1))) query.push(`${k}=${v}`); } catch { /* not a URL */ }
+      }
+      continue;
+    }
+    value = value === undefined ? '' : value;
+    if (flag === '-X' || flag === '--method') method = value.toUpperCase();
+    else if (flag === '-f' || flag === '-F' || flag === '--field' || flag === '--raw-field') fields.push(value);
+    else if (flag === '--input') input = true;
   }
-  return null;
+  return { method, hasBody: fields.length > 0 || input, fields: [...fields, ...query] };
 }
+
+// The value of a named field (`branch`, `base`) in a parsed api call.
+function apiField(api, name) {
+  const prefix = name + '=';
+  const f = api.fields.find((v) => v.startsWith(prefix));
+  return f === undefined ? null : f.slice(prefix.length);
+}
+
+// True when an api call only reads: GET, or no method and no body.
+const apiReads = (api) => (api.method === null ? !api.hasBody : api.method === 'GET');
 
 // GraphQL mutations that do what the REST checks below block.
 const GRAPHQL_MUTATIONS = /\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch|updateRef|deleteRef|(?:create|update|delete)BranchProtectionRule|(?:create|update|delete)RepositoryRuleset)\b/;
@@ -165,9 +209,9 @@ const GRAPHQL_MUTATIONS = /\b(mergePullRequest|enablePullRequestAutoMerge|mergeB
 // `gh api` calls that write: the same actions as the git/gh checks, done
 // through the REST or GraphQL API.
 function checkGhApi(args, cwd) {
-  const method = apiMethod(args);
-  const hasBody = args.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF][^-]/.test(a));
-  if (method ? method === 'GET' : !hasBody) return;
+  const api = apiArgs(args);
+  if (apiReads(api)) return;
+  const { method } = api;
   const joined = args.join(' ');
   if (/protection|rulesets/.test(joined)) block('changing branch protection or rulesets');
 
@@ -191,8 +235,8 @@ function checkGhApi(args, cwd) {
   if (rename && isProtected(rename[1])) block(`renaming protected branch "${rename[1]}"`);
 
   if (/(?:^|[\s/])repos\/[^/\s]+\/[^/\s]+\/merges(?=[\s?]|$)/.test(joined)) {
-    const base = args.map((a) => /(?:^|[=fF])base=(.+)$/.exec(a)).find(Boolean);
-    if (base && isProtected(base[1])) block(`merging into protected branch "${base[1]}" through the API`);
+    const base = apiField(api, 'base');
+    if (base !== null && isProtected(base)) block(`merging into protected branch "${base}" through the API`);
   }
 }
 
@@ -208,9 +252,9 @@ function glabRepoOf(id) {
 
 // `glab api` calls that write. Same idea as checkGhApi, with GitLab's endpoints.
 function checkGlabApi(args, cwd) {
-  const method = apiMethod(args);
-  const hasBody = args.some((a) => /^(-f|-F|--field|--raw-field|--input)(=|$)/.test(a) || /^-[fF][^-]/.test(a));
-  if (method ? method === 'GET' : !hasBody) return;
+  const api = apiArgs(args);
+  if (apiReads(api)) return;
+  const { method } = api;
   const joined = args.join(' ');
   if (/protected_branches|protected_tags|push_rule|approval_rules|approval_settings|merge_request_approval_setting/.test(joined)) {
     block('changing protected branches, push rules or approval rules');
@@ -231,9 +275,10 @@ function checkGlabApi(args, cwd) {
   }
   if (method === 'DELETE' && new RegExp(P + String.raw`\/repository\/merged_branches`).test(joined)) block('deleting merged branches through the API');
 
-  // Commits and file edits through the API name their branch in a field.
-  const field = args.map((a) => /(?:^|[=fF])branch=(.+)$/.exec(a)).find(Boolean);
-  if (field && isProtected(field[1])) block(`writing to protected branch "${field[1]}" through the API`);
+  // Commits and file edits through the API name their branch in a field or
+  // in the endpoint's query string.
+  const target = apiField(api, 'branch');
+  if (target !== null && isProtected(target)) block(`writing to protected branch "${target}" through the API`);
 
   if (new RegExp(P + String.raw`\/releases(?=[\s/?]|$)`).test(joined)) block('creating or changing a release through the API');
   if (new RegExp(P + String.raw`\/(?:transfer|archive|unarchive)(?=[\s?]|$)`).test(joined)) block('transferring or archiving the project');

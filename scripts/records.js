@@ -279,7 +279,8 @@ function sanitizeCommand(cmd) {
 
 function logMerges(input, tool = 'claude') {
   const cmd = (input.tool_input && input.tool_input.command) || '';
-  if (!/\b(?:gh\s+pr|glab\s+(?:mr|merge-request))\s+(?:merge|accept)\b/.test(cmd)) return;
+  // Cheap pre-check only; flags may sit between the words (`glab mr -R g/p merge`).
+  if (!/\b(?:gh|glab)(?:\.exe)?\b[\s\S]*\b(?:merge|accept)\b/.test(cmd)) return;
   // Only real `gh pr merge` / `glab mr merge` segments count, not the words
   // inside a quoted string.
   for (const m of lib.findMerges(cmd)) {
