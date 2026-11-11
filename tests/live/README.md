@@ -26,3 +26,17 @@ Row (a) (`git worktree add` inside the exec sandbox) is expected to fail on the 
 If the run is interrupted (Ctrl-C or SIGTERM), the handler deletes the temp folder, including the copied `auth.json`, and exits 130.
 
 `node tests/live/helpers-check.js` unit-checks the exit-code, cleanup-scoping and cache-version logic without Codex.
+
+# Live GitLab test
+
+`GITLAB_TEST_PROJECT=group/scratch bash tests/live/gitlab-live.sh` checks the GitLab path against a real instance (gitlab.com or self-hosted) through the real `glab`. It is opt-in like the Codex test.
+
+Needs `git`, Node 18+, and a current `glab` logged in to the project's host (`glab auth login --hostname <host>`); it fails early if `glab mr view` has no `--output json`. Point it at a throwaway project you can push to and merge in.
+
+## What it does
+1. Clones the project into a temp folder and pushes three branches: `live-main-<ts>` (stands in for `main`, so your real `main` is never touched), `milestone/live-<ts>` and `task/live-<ts>`.
+2. Opens two MRs with `glab mr create`: task → milestone, and milestone → the stand-in main.
+3. Checks the `glab mr view --output json` fields the forge layer reads, forge detection from the remote (setting `git config agent-team.forge gitlab` in the temp clone if the host name is neutral), and the session-start note.
+4. Runs `scripts/guard.js` on merge, `glab api` and push commands, with the stand-in main marked protected: merges into the milestone are allowed; merges into the stand-in main, an unknown MR, unprotecting a branch and pushing to it are blocked.
+5. Merges the task MR for real, feeds that command to `scripts/log-delegation.js`, and checks the `merges.jsonl` line (`merged`, or `auto-merge-queued` if a pipeline is running; `forge`, `milestone`, `outcome_source`).
+6. Prints a PASS/FAIL table, closes the open MR and deletes the three branches and the temp folder, also on failure or Ctrl-C.

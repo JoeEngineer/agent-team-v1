@@ -21,13 +21,13 @@ This does **not** cover: merging into `main`/`master`, force-pushing, changing b
 
 ## What you do yourself vs. delegate
 
-Do yourself (cheap, needs your full picture): reading the status file and logs, writing task cards, choosing routing, reading result blocks, short `git`/`gh` status checks, writing decision records for your own decisions, updating `STATUS.md`, merging.
+Do yourself (cheap, needs your full picture): reading the status file and logs, writing task cards, choosing routing, reading result blocks, short `git`/`gh` (or `glab`) status checks, writing decision records for your own decisions, updating `STATUS.md`, merging.
 
 Delegate everything else — including research. If you're about to read more than a few files to understand something, send a `scout`.
 
 ## The loop
 
-1. **Intake.** Turn the user's tasking into a milestone: goal, acceptance criteria, out of scope. Create `milestone/<slug>` from `main` and a GitHub issue for the milestone. For a non-trivial milestone, delegate the breakdown to `architect`.
+1. **Intake.** Turn the user's tasking into a milestone: goal, acceptance criteria, out of scope. Create `milestone/<slug>` from `main` and an issue for the milestone (GitHub or GitLab). For a non-trivial milestone, delegate the breakdown to `architect`.
 2. **Plan.** Each task gets an id (`<MILESTONE>-<n>`), type, difficulty, acceptance criteria, dependencies. Create an issue per task (label `agent-team`). Record the plan in `STATUS.md`.
 3. **Route.** Pick agent, tier, effort and vehicle (subagent vs. session) from `references/routing.md`. Start at the table's tier; don't start higher "to be safe". The architect's breakdown gives type and difficulty, not models. Where it flags `above-table: <reason>`, decide whether the reason justifies an override, and if it does, say so on the card's `WHY` line.
 4. **Delegate.** Every delegation prompt starts with a task card (`references/task-card.md`), side work included. The logging hook reads it: without it, the delegation is logged without task fields and the Coach can't use it. Put the tier and effort you chose on the card (`tier=`, `effort=`), and from attempt 2 the `reason=`.
@@ -39,7 +39,7 @@ Delegate everything else — including research. If you're about to read more th
 
 ## Status requests
 
-When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegations.jsonl` (recent lines), check open PRs (`gh pr list`), and answer in a few lines: done / in progress / blocked / needs the user. Don't delegate a status check.
+When the user asks for status, read `STATUS.md` and `.agent-team/logs/delegations.jsonl` (recent lines), check open PRs (`gh pr list`, or `glab mr list` on GitLab), and answer in a few lines: done / in progress / blocked / needs the user. Don't delegate a status check.
 
 ## Parallel work
 
@@ -72,11 +72,15 @@ In PowerShell (Windows PowerShell 5.1):
 
 ## Hooks check
 
-At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running: warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on GitHub rulesets.
+At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running: warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on the forge's branch rules (GitHub rulesets or GitLab protected branches).
+
+## On GitLab
+
+When your context has an `agent-team forge: gitlab` line, the project lives on GitLab (gitlab.com or self-hosted). Use `glab`, not `gh`: merge requests (MRs) stand in for PRs and their target branch for the base. The command map and the few differences are in `references/gitlab.md`.
 
 ## On Codex
 
-Skills are invoked as `$agent-team:<skill>`. Spawn and retry behavior depends on the fields exposed by this session's collaboration tools; inspect their schema instead of assuming every client has the same options. When supported, a fresh spawn can set model and `reasoning_effort`; use `fork_turns: "none"` when changing either so the override applies, and provide the role instructions and compact task handoff explicitly. A follow-up resumes the same agent with its original settings. Log each action before spawning or following up, and verify the resolved model and effort in the completion. Make worktrees with your own git commands. Setup, examples, naming and sandbox caveats are in `references/codex.md`. Merging needs `gh`; if it is missing, tell the user.
+Skills are invoked as `$agent-team:<skill>`. Spawn and retry behavior depends on the fields exposed by this session's collaboration tools; inspect their schema instead of assuming every client has the same options. When supported, a fresh spawn can set model and `reasoning_effort`; use `fork_turns: "none"` when changing either so the override applies, and provide the role instructions and compact task handoff explicitly. A follow-up resumes the same agent with its original settings. Log each action before spawning or following up, and verify the resolved model and effort in the completion. Make worktrees with your own git commands. Setup, examples, naming and sandbox caveats are in `references/codex.md`. Merging needs `gh` (`glab` on GitLab); if it is missing, tell the user.
 
 ## CI
 

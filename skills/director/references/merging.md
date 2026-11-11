@@ -1,5 +1,7 @@
 # Merging
 
+On GitLab, read this with `gitlab.md`: an MR stands in for a PR, its target branch for the base, and `glab` for `gh` (the command map is there).
+
 ## Branch model
 
 ```
@@ -8,7 +10,7 @@ main  ←── (user merges) ──  milestone/<slug>  ←── (Director merg
 
 - Task PRs target `milestone/<slug>`. The Director merges them.
 - The milestone PR targets `main`. **Only the user merges it.**
-- A guard hook blocks `gh pr merge` when the PR's base is `main`/`master`, force-pushes, and direct pushes to `main`/`master`. Don't try to work around it — ask the user.
+- A guard hook blocks `gh pr merge` / `glab mr merge` when the request's base is `main`/`master`, force-pushes, and direct pushes to `main`/`master`. Don't try to work around it — ask the user.
 
 ## Before merging a task PR
 

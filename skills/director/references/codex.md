@@ -6,7 +6,7 @@ Read this when the session is Codex. Everything else in `SKILL.md` still applies
 
 - Skills are invoked as `$agent-team:<skill>`.
 - `<plugin root>` on Codex is the plugin cache folder: `<CODEX_HOME or ~/.codex>/plugins/cache/<marketplace>/agent-team/<version>/`. Find it with `ls "${CODEX_HOME:-$HOME/.codex}"/plugins/cache/*/agent-team/`, and use the newest version folder.
-- Merging needs `gh`. If it is not installed or not logged in, tell the user.
+- Merging needs `gh`, or `glab` on GitLab (`references/gitlab.md`). If it is not installed or not logged in, tell the user.
 
 Commands here are written for sh/bash. Codex's shell tool is named `Bash` even when the command runs in PowerShell, and on Windows the shell inside Codex is Windows PowerShell 5.1 (verified live; see the Hooks table and "Live test results" in `docs/codex-mapping.md`). In PowerShell use `$env:CODEX_HOME` instead of `${CODEX_HOME:-$HOME/.codex}`.
 

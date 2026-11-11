@@ -31,10 +31,18 @@ try {
     } catch { /* marker is best effort */ }
   }
 
+  // On GitLab, tell the Director which CLI to use. GitHub stays the silent default.
+  let forgeNote = '';
+  try {
+    if (require('./forge').detect(lib.projectDir(input)) === 'gitlab') {
+      forgeNote = '\nagent-team forge: gitlab (use `glab`, not `gh`; see the Director\'s references/gitlab.md)';
+    }
+  } catch { /* detection is best effort */ }
+
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: `agent-team hooks: active (${tool}, ${version})`,
+      additionalContext: `agent-team hooks: active (${tool}, ${version})${forgeNote}`,
     },
   }));
 } catch { /* never fail a session start */ }

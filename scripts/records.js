@@ -6,8 +6,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { execFileSync } = require('child_process');
 const lib = require('./lib');
+const forge = require('./forge');
 
 function base(input, tool = 'claude') {
   return {
@@ -242,39 +242,24 @@ function cardDrift(input, task, kind) {
 const driftMessage = (id, drift) => `agent-team: task ${id} changed ${Object.entries(drift).map(([f, d]) => `${f} ${d.from} -> ${d.to}`).join(' and ')} since its first delegation. ` +
   'A retry keeps the attempt-1 type and difficulty; record new scope as kind "followup" or a new task id.';
 
-// Ask GitHub what happened to the PR instead of guessing from command output:
-// the Director often chains a merge with other commands whose output mentions
-// "error" or "failed". Returns null if gh can't answer.
-function prState(input, { target, repo }) {
-  const args = ['pr', 'view'];
-  if (target) args.push(target);
-  if (repo) args.push('--repo', repo);
-  args.push('--json', 'number,state,autoMergeRequest,baseRefName');
-  // Tests point AGENT_TEAM_FAKE_GH at a Node script: on Windows, execFileSync
-  // only finds gh.exe on PATH, so a fake `gh` script there would be skipped.
-  const fake = process.env.AGENT_TEAM_FAKE_GH;
-  const [bin, binArgs] = fake ? [process.execPath, [fake, ...args]] : ['gh', args];
-  try {
-    const out = execFileSync(bin, binArgs, {
-      cwd: input.cwd || lib.projectDir(input),
-      encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 7000,
-    });
-    return JSON.parse(out);
-  } catch {
-    return null;
-  }
+// Ask the forge what happened to the request instead of guessing from command
+// output: the Director often chains a merge with other commands whose output
+// mentions "error" or "failed". Returns forge.requestInfo's normalized shape,
+// or null if gh/glab can't answer.
+function prState(input, { forge: which = 'github', target, repo }) {
+  return forge.requestInfo(which, { target, repo }, input.cwd || lib.projectDir(input), 7000);
 }
 
 function mergeOutcome(state) {
   if (!state) return 'unknown';
   if (state.state === 'MERGED') return 'merged';
-  if (state.state === 'OPEN' && state.autoMergeRequest) return 'auto-merge-queued';
+  if (state.state === 'OPEN' && state.autoMerge) return 'auto-merge-queued';
   return 'not-merged';
 }
 
 // "milestone/<name>" base branch -> "<name>"; any other base has no milestone.
 function milestoneOfBase(state) {
-  const m = state && typeof state.baseRefName === 'string' && state.baseRefName.match(/^milestone\/(.+)$/);
+  const m = state && typeof state.base === 'string' && state.base.match(/^milestone\/(.+)$/);
   return m ? m[1] : undefined;
 }
 
@@ -294,9 +279,11 @@ function sanitizeCommand(cmd) {
 
 function logMerges(input, tool = 'claude') {
   const cmd = (input.tool_input && input.tool_input.command) || '';
-  if (!/\bgh\s+pr\s+merge\b/.test(cmd)) return;
-  // Only real `gh pr merge` segments count, not the words inside a quoted string.
-  for (const m of lib.findPrMerges(cmd)) {
+  // Cheap pre-check only; flags may sit between the words (`glab mr -R g/p merge`).
+  if (!/\b(?:gh|glab)(?:\.exe)?\b[\s\S]*\b(?:merge|accept)\b/.test(cmd)) return;
+  // Only real `gh pr merge` / `glab mr merge` segments count, not the words
+  // inside a quoted string.
+  for (const m of lib.findMerges(cmd)) {
     const state = prState(input, m);
     lib.appendJsonl(input, 'merges.jsonl', {
       ...base(input, tool),
@@ -304,7 +291,8 @@ function logMerges(input, tool = 'claude') {
       pr: state && state.number != null ? String(state.number) : m.target,
       ...milestoneField(milestoneOfBase(state)),
       outcome: mergeOutcome(state),
-      outcome_source: state ? 'gh pr view' : 'none',
+      outcome_source: state ? forge.viewCommand(m.forge) : 'none',
+      ...(m.forge === 'gitlab' ? { forge: 'gitlab' } : {}),
       chained: lib.segments(cmd).length > 1,
     });
   }
