@@ -22,7 +22,7 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 4 | merged | #88 | #97 |
 | CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | merged | #98 | #99 |
 | CW-final | Final milestone review | reviewer | Fable (user-chosen) / high | 1 | done: 1 critical, 3 major, 15 minor | #81 | |
-| CW-10 | Final-review script fixes: guard `--admin=`, `--queue-check`, reconcile | implementer | large (opus) / high | 1 | in progress | #100 | |
+| CW-10 | Final-review script fixes: guard `--admin=`, `--queue-check`, reconcile | implementer | large (opus) / high | 1 | in review | #100 | #103 |
 | CW-11 | Final-review doc fixes, 0017 items, carried items | implementer | medium (sonnet) / medium | 2 | fold-in | #101 | #102 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
