@@ -46,7 +46,7 @@ How each GitHub-facing piece of the `agent-team` plugin maps to GitLab (gitlab.c
 | View as JSON | `gh pr view <n> --json number,state,autoMergeRequest,baseRefName` | `glab mr view <n> --output json` | 🧪 (current `glab` 📄) |
 | CI gate (first in the merge call) | `node scripts/ci-wait.js <n> --once --sha <sha>` | the same command | 🧪 |
 | Merge | `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` | `glab mr merge <n> --squash --remove-source-branch --yes --sha <sha>` (`--sha` refuses if the head moved: 📄) | 🧪 |
-| Queue merge after CI | `gh pr merge <n> --auto --squash --delete-branch --match-head-commit <sha>` | `glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <sha>` | 📄 |
+| Queue merge after CI (gated) | `node scripts/ci-wait.js <n> --queue-check --sha <sha> && gh pr merge <n> --auto --squash --delete-branch --match-head-commit <sha>` | `node scripts/ci-wait.js <n> --queue-check --sha <sha> && glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <sha>` | 📄 |
 | Cancel queued merge | `gh pr merge <n> --disable-auto` | `glab api -X POST projects/:id/merge_requests/<n>/cancel_merge_when_pipeline_succeeds` (untested against a live instance; the MR page's "Cancel auto-merge" button if it fails) | 📄 |
 | Wait for CI (reviewer) | `node scripts/ci-wait.js <n> --sha <sha>` (reads `statusCheckRollup` from `gh pr view --json`) | `node scripts/ci-wait.js <n> --sha <sha>` polls `head_pipeline.status` from `glab mr view <n> --output json`; `--once` checks once; `--names` lists the job names | 🧪 |
 | Merge aliases | — | `glab mr accept`, `glab merge-request merge` | 🧪 guarded |

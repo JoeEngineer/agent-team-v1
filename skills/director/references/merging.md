@@ -16,7 +16,7 @@ main  ←── (user merges) ──  milestone/<slug>  ←── (Director merg
 
 All must be true:
 1. A `reviewer` delegation for this PR returned a `review-json` block with `"verdict": "approve"` (logged in `.agent-team/logs/reviews.jsonl`).
-2. The review block's `head_sha` equals the PR's current head (`gh pr view <n> --json headRefOid`). Commits pushed after the review need a new review first (see "Commits pushed after the review"). Only a reviewed head is ever merged or queued.
+2. The review block's `head_sha` equals the PR's current head (`gh pr view <n> --json headRefOid`). Commits pushed after the review need a new review first (see "Commits pushed after the review"). Only a reviewed head is ever merged or queued. If the review block has no `head_sha`, ask the reviewer for it; never substitute the PR's current head.
 3. The reviewer reported `"ci": "green"`, or `"ci": "none"` with `"tests_passed": true` (no CI configured, so the reviewer must have run the tests). Don't re-check what the reviewer reported; the gate in the merge call (below) re-reads it. `pending`, `unknown` and `red` never go to the merge call: each has its own section below.
 4. The PR's base is `milestone/<slug>`.
 
@@ -76,14 +76,30 @@ The reviewer's CI wait timed out. Don't wait in the foreground. The head to queu
 If auto-merge is usable, queue the pending PR:
 
 ```bash
-gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>
+node "<plugin root>/scripts/ci-wait.js" <n> --queue-check --sha <head_sha> && gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>
 ```
 
-(GitLab: `glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <head_sha>`.) Set the state to `queued` in `STATUS.md` and move on. The checkpoints below follow it up.
+In PowerShell (Windows PowerShell 5.1):
 
-Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on (GitLab: "Pipelines must succeed" on; it covers the whole pipeline, so no names are needed). Fill the block after the first CI run on the milestone, with names read from the `--names` prefix described under "First task PR: the names" below (never a call of its own). `--auto` waits only for required checks, so without named ones it could merge before CI ran.
+```
+node "<plugin root>\scripts\ci-wait.js" <n> --queue-check --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha> }
+```
 
-When auto-merge is not usable, say why in `STATUS.md` and set the state to `waiting CI` (this fallback costs two Director turns for that PR):
+On GitLab:
+
+```bash
+node "<plugin root>/scripts/ci-wait.js" <n> --queue-check --sha <head_sha> && glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <head_sha>
+```
+
+The queue-check reads the base's required checks live and exits 0 only when the head matches, nothing is red and the PR is queueable (GitHub: a non-empty required list, every one of which the head runs; GitLab: "Pipelines must succeed" on). On exit 0 set the state to `queued` in `STATUS.md` and move on. The checkpoints below follow it up. Any other exit queues nothing:
+- Exit 5 (not queueable: no required checks, a required check the head doesn't run, or on GitLab "Pipelines must succeed" off): don't queue. Use the fallback below (background wait on Claude, reviewer followup on Codex) and say why in `STATUS.md`.
+- Exit 1 (red): "Red CI" below.
+- Exit 4 (head moved): "Commits pushed after the review" above.
+- Exit 2 (the helper can't tell): ask the user.
+
+Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on (GitLab: "Pipelines must succeed" on; it covers the whole pipeline, so no names are needed). That note only says when to try: the queue-check decides, and a wrong note costs a failed queue call, never an ungated merge. Fill the block after the first CI run on the milestone, with names read from the `--names` prefix described under "First task PR: the names" above (never a call of its own). `--auto` waits only for required checks, so without named ones it could merge before CI ran.
+
+When auto-merge is not usable (or the queue-check exited 5), say why in `STATUS.md` and set the state to `waiting CI` (this fallback costs two Director turns for that PR):
 - Claude: run `node "<plugin root>/scripts/ci-wait.js" <n> --sha <head_sha> --timeout 1800` as a background command (Bash `run_in_background`).
 - Codex has no background shell that wakes the Director. Send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt).
 
@@ -99,8 +115,8 @@ Red CI, whether from the reviewer, the merge-call gate (exit 1), a checkpoint or
 
 ### Queued PRs: checkpoints
 
-Run `node "<plugin root>/scripts/reconcile-logs.js" --merges` before the next merge when something is queued, at the end of a wave, and before opening the milestone PR. One call covers every queued PR. It prints one line per PR: merged, auto-merge-cancelled, closed, still queued (with its CI state), or head moved.
-- Merged: set the state to `merged` in `STATUS.md`.
+Run `node "<plugin root>/scripts/reconcile-logs.js" --merges` only when `STATUS.md` has a `queued` row: before the next merge, at the end of a wave, and before opening the milestone PR. With nothing queued, skip it (decision 0017). One call covers every queued PR. It prints one line per PR: merged, auto-merge-cancelled, closed, still queued (with its CI state), or head moved.
+- Merged: set the state to `merged` in `STATUS.md`. `--delete-branch` may do nothing with `--auto` (unconfirmed), so if the PR's `task/*` branch still exists, delete it (`git push origin --delete task/<ID>`; merged task branches are allowed), and post the comment "Merged by the Director after reviewer approval (task <ID>, attempt <a>)." on the PR.
 - Still queued: nothing to do until the next checkpoint.
 - Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: the cancel row in `gitlab.md`), then send it back to the implementer with the failing check names ("Red CI").
 - Head moved: disable auto-merge at once, then follow "Commits pushed after the review".
@@ -110,7 +126,7 @@ Before any push to a queued PR (a send-back or a fold-in), disable auto-merge fi
 
 ## The milestone PR
 
-Order at close: (1) `reconcile-logs.js --merges` shows nothing queued; (2) open the milestone PR; (3) the final reviewer runs on that PR and waits for its CI; (4) archive the logs; (5) `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once` (it may share the archive call); (6) report "complete" only on green. Otherwise tell the user "PR open, CI <red, pending or unknown> at <sha>". If it is pending: on Claude, wait in the background (`ci-wait.js <milestone PR> --timeout 1800` with `run_in_background`) and report again when it finishes; on Codex, report it as pending.
+Order at close: (1) nothing is queued (if `STATUS.md` has a `queued` row, `reconcile-logs.js --merges` shows it resolved; with no `queued` row, skip it); (2) open the milestone PR; (3) the final reviewer runs on that PR and waits for its CI; (4) archive the logs; (5) `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once` (it may share the archive call); (6) report "complete" only on green. Otherwise tell the user "PR open, CI <red, pending or unknown> at <sha>". No CI on the project: `--once` exits 3 ("none"). If the final reviewer reported `ci: none` with `tests_passed: true`, the PR can be reported complete with "no CI" stated: run `ci-wait.js <milestone PR> --once --sha <head_sha> --allow-none` (`--allow-none` passes only with a matching `--sha`). If it is pending: on Claude, wait in the background (`ci-wait.js <milestone PR> --timeout 1800` with `run_in_background`) and report again when it finishes; on Codex, report it as pending.
 
 Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue in the milestone, including follow-up tasks.
 
