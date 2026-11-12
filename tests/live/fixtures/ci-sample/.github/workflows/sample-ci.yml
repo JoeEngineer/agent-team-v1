@@ -1,0 +1,40 @@
+name: Sample CI
+
+# Live-harness fixture (tests/live/ci-wait-live.js). The job is named sample-ci
+# and takes about two minutes, so a check that is still pending is a normal
+# thing for an agent to meet. It runs on pull requests into any branch and on
+# pushes to milestone branches.
+on:
+  pull_request:
+  push:
+    branches: ['milestone/**']
+
+permissions:
+  contents: read
+
+# A newer push to a pull request cancels the older run. Push runs are never
+# cancelled, so a merge into a milestone branch can't cancel a run in flight.
+concurrency:
+  group: sample-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  sample-ci:
+    name: sample-ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Run tests
+        run: npm test
+
+      # Keeps the check at about two minutes (setup, tests and this wait).
+      - name: Hold so the check takes about two minutes
+        run: sleep 100
