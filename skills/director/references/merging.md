@@ -16,11 +16,11 @@ main  ←── (user merges) ──  milestone/<slug>  ←── (Director merg
 
 All must be true:
 1. A `reviewer` delegation for this PR returned a `review-json` block with `"verdict": "approve"` (logged in `.agent-team/logs/reviews.jsonl`).
-2. The review block's `head_sha` equals the PR's current head (`gh pr view <n> --json headRefOid`). Commits pushed after the review need a new review first (for a fold-in commit, the incremental diff only; see below). Only a reviewed head is ever merged or queued.
-3. CI is green: the reviewer waited for it and reported `"ci": "green"`. (Reviewer `"ci": "unknown"`, for example the required checks can't be read: don't queue, don't wait; ask the user.) Don't re-check what the reviewer reported; the gate in the merge call (below) re-reads it. (No CI configured, `"ci": "none"` → the reviewer must have run the tests: `"tests_passed": true`.)
+2. The review block's `head_sha` equals the PR's current head (`gh pr view <n> --json headRefOid`). Commits pushed after the review need a new review first (see "Commits pushed after the review"). Only a reviewed head is ever merged or queued.
+3. The reviewer reported `"ci": "green"`, or `"ci": "none"` with `"tests_passed": true` (no CI configured, so the reviewer must have run the tests). Don't re-check what the reviewer reported; the gate in the merge call (below) re-reads it. `pending`, `unknown` and `red` never go to the merge call: each has its own section below.
 4. The PR's base is `milestone/<slug>`.
 
-You never wait on CI in the foreground: no watch or polling loop. A task PR costs at most one short Director turn on CI.
+You never wait on CI in the foreground: no watch or polling loop. A task PR costs one short Director turn on CI, or two when the auto-merge fallback below applies.
 
 ## The merge call
 
@@ -42,45 +42,63 @@ node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEX
 - The log stays correct: the logging hook finds the one merge segment in the chained command and asks the forge for the PR's state afterwards, so the merge line records the real outcome.
 - Do the bookkeeping (`git pull`, STATUS.md edits, the next PR's checks) in a separate call.
 
-Gate results: green merges. Exit 1 (red), 8 (pending), 4 (head moved) or 3 (none) stops the call and nothing is merged. Exit 2 (`unknown`, for example the required checks can't be read, decision 0014): don't merge; ask the user.
+Gate results. Exit 0 (green): the merge and the comment run. Any other exit stops the call and nothing is merged; then act on it as on the same reviewer result:
+- 1 (red): "Red CI" below.
+- 8 (pending): "Reviewer reported `ci: pending`" below.
+- 4 (head moved): "Commits pushed after the review" below.
+- 2 (`unknown`, or an error): "Reviewer reported `ci: unknown`" below.
+- 3 (none) after the reviewer reported `green`: the checks the reviewer saw are gone. Don't merge; ask the user.
 
 ### Reviewer reported `ci: none`
 
-If the reviewer ran the tests and they passed, use the same call with `--allow-none` after `--sha <head_sha>` (`--allow-none` only passes with a matching `--sha`).
+If the reviewer ran the tests and they passed (`"tests_passed": true`), use the same call with `--allow-none` after `--sha <head_sha>` (`--allow-none` only passes with a matching `--sha`). If `tests_passed` is not `true`, don't merge: send the reviewer a followup to run the tests.
 
-### Reviewer reported `ci: pending`, or commits were pushed after the review
+### Commits pushed after the review
 
-A reviewer timeout leaves CI `pending`; a fold-in adds commits after the review. Once the incremental review has approved the new head, its `head_sha` is the one to queue or wait for. Only a reviewed head is ever merged or queued. Don't wait in the foreground.
+A fold-in (see "Minor findings") or anyone else may add commits after an approving review. Send the reviewer the new commits only (`git diff <reviewed-sha>..<new head>`) and wait for its report. That incremental review then decides like any review: its verdict, its `ci` and its `head_sha`. Never merge or queue a head no review approved.
 
-Reviewer `ci: unknown` is different: the helper couldn't tell (decision 0014). Don't queue and don't wait; ask the user. If auto-merge is usable, queue it:
+### Reviewer reported `ci: pending`
+
+The reviewer's CI wait timed out. Don't wait in the foreground. The head to queue or wait for is the review's `head_sha`, and only if it still equals the PR's current head (if not, follow "Commits pushed after the review").
+
+If auto-merge is usable, queue the pending PR:
 
 ```bash
 gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>
 ```
 
-(GitLab: `glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <head_sha>`.) Set the state to `queued` in `STATUS.md` and move on.
+(GitLab: `glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <head_sha>`.) Set the state to `queued` in `STATUS.md` and move on. The checkpoints below follow it up.
 
-Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on. Fill the block after the first CI run on the milestone: `node "<plugin root>/scripts/ci-wait.js" --names <n>` lists the required checks. `--auto` waits only for required checks, so without named ones it could merge before CI ran.
+Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on (GitLab: "Pipelines must succeed" on; it covers the whole pipeline, so no names are needed). Fill the block after the first CI run on the milestone: `node "<plugin root>/scripts/ci-wait.js" --names <n>` lists the required checks. `--auto` waits only for required checks, so without named ones it could merge before CI ran.
 
 When auto-merge is not usable, say why in `STATUS.md` and set the state to `waiting CI` (this fallback costs two Director turns for that PR):
-- Claude: run `node "<plugin root>/scripts/ci-wait.js" <n> --sha <head_sha> --timeout 1800` as a background command (Bash `run_in_background`), and merge with the gate call above when its completion arrives.
-- Codex has no background shell that wakes the Director. Send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt) and merge on its report.
+- Claude: run `node "<plugin root>/scripts/ci-wait.js" <n> --sha <head_sha> --timeout 1800` as a background command (Bash `run_in_background`).
+- Codex has no background shell that wakes the Director. Send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt).
+
+When the background wait finishes or the reviewer reports, act on the result as in "Gate results": green runs the merge call above, and every other result goes to its section. Still pending after this one extra wait: tell the user, keep the state `waiting CI`, and don't start another wait.
+
+### Reviewer reported `ci: unknown`
+
+The helper couldn't tell (decision 0014), for example because the required checks can't be read. Don't merge, don't queue and don't wait: ask the user.
 
 ### Red CI
 
-Red in review: send it back to the implementer with the failing check names, unless the reviewer explained why it isn't this PR's fault.
+Red in review: send it back to the implementer with the failing check names. If the reviewer approved anyway and explained why the failure isn't this PR's fault, still don't merge (the gate stops on red): ask the user.
 
 ### Queued PRs: checkpoints
 
 Run `node "<plugin root>/scripts/reconcile-logs.js" --merges` before the next merge when something is queued, at the end of a wave, and before opening the milestone PR. One call covers every queued PR. It prints one line per PR: merged, auto-merge-cancelled, closed, still queued (with its CI state), or head moved.
+- Merged: set the state to `merged` in `STATUS.md`.
+- Still queued: nothing to do until the next checkpoint.
 - Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: the cancel row in `gitlab.md`), then send it back to the implementer with the failing check names. It counts as red CI.
-- Head moved: disable auto-merge at once.
+- Head moved: disable auto-merge at once, then follow "Commits pushed after the review".
+- Closed: ask the user.
 
 Before any push to a queued PR (a send-back or a fold-in), disable auto-merge first (`gh pr merge <n> --disable-auto`; GitLab: the cancel row in `gitlab.md`). GitHub keeps auto-merge on when someone with write access pushes.
 
 ## The milestone PR
 
-Order at close: (1) `reconcile-logs.js --merges` shows nothing queued; (2) open the milestone PR; (3) the final reviewer runs on that PR and waits for its CI; (4) archive the logs; (5) `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once` (it may share the archive call); (6) report "complete" only on green. Otherwise report "PR open, CI red/pending at <sha>" to the user, waiting in the background (Claude) if needed.
+Order at close: (1) `reconcile-logs.js --merges` shows nothing queued; (2) open the milestone PR; (3) the final reviewer runs on that PR and waits for its CI; (4) archive the logs; (5) `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once` (it may share the archive call); (6) report "complete" only on green. Otherwise tell the user "PR open, CI <red, pending or unknown> at <sha>". If it is pending: on Claude, wait in the background (`ci-wait.js <milestone PR> --timeout 1800` with `run_in_background`) and report again when it finishes; on Codex, report it as pending.
 
 Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue in the milestone, including follow-up tasks.
 
@@ -96,7 +114,7 @@ GitHub only closes issues for a PR merged into the default branch. A task PR's o
 
 When a reviewer approves with minor findings, decide before merging:
 
-- **Fold in** when a finding has exact replacement text, or touches only this PR's own files and needs no design choice. Send it to the same implementer with `SendMessage` (warm context), with a TASK line for the same `id`, `attempt` incremented. Then send the reviewer the incremental diff only (`git diff <reviewed-sha>..HEAD`) and merge on its approval.
+- **Fold in** when a finding has exact replacement text, or touches only this PR's own files and needs no design choice. Send it to the same implementer with `SendMessage` (warm context), with a TASK line for the same `id`, `attempt` incremented. Then send the reviewer the incremental diff only (`git diff <reviewed-sha>..HEAD`) and act on its review as "Commits pushed after the review" says.
 - **Batch** docs-wording findings into the next docs task in the milestone, if there is one, instead of a new issue and PR.
 - Missing tests for this PR's own code, in its own test files, count as **fold in**.
 - **Follow-up task** only for findings that need real work: behaviour changes, or another area of the code.

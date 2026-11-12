@@ -20,7 +20,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` (a
 Fill after the first CI run on the milestone (`ci-wait.js --names <n>`).
 
 - Required checks on `milestone/*`: <names, or none>
-- Auto-merge ("Allow auto-merge"): on / off
+- Auto-merge ("Allow auto-merge"; GitLab: "Pipelines must succeed"): on / off
 - If auto-merge isn't used, why: <reason>
 
 ## Blocked
