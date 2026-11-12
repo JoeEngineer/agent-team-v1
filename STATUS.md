@@ -12,11 +12,11 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | Issue | PR |
 |---|---|---|---|---|---|---|---|
 | CW-0 | Breakdown | architect | large (opus) / high | 1 | done | #81 | |
-| CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | changes requested | #82 | #90 |
-| CW-2 | Guard tests for auto-merge; fix `2>&1` | implementer | large (opus) / high | 2 | changes requested | #83 | #89 |
-| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | | planned | #84 | |
-| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / medium | | planned | #85 | |
-| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | | planned | #86 | |
+| CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | merged | #82 | #90 |
+| CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | changes requested | #83 | #89 |
+| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 1 | in progress | #84 | |
+| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / medium | 1 | in progress | #85 | |
+| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 1 | in progress | #86 | |
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 1 | in progress | #87 | |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | | planned | #88 | |
 
