@@ -2,7 +2,7 @@
 id: 0015
 title: The guard refuses redirections the shells read differently
 date: 2026-11-11
-status: proposed
+status: accepted
 milestone: ci-wait
 task: CW-2
 decided_by: architect
