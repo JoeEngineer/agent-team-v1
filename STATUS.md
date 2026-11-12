@@ -15,7 +15,7 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | merged | #82 | #90 |
 | CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | merged | #83 | #89 |
 | CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 2 | merged | #84 | #94 |
-| CW-4 | Reviewer and Director prompts | implementer | large (opus) / high | 3 | changes requested | #85 | #91 |
+| CW-4 | Reviewer and Director prompts | implementer | large (opus) / high | 4 | merged | #85 | #91 |
 | CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
 | CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 1 | in progress | #95 | |
@@ -40,6 +40,7 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - GitLab: unit tests only; no live GitLab run.
 - CW-1: `ci-wait.js --once` makes N+2 calls for N PRs on one base (adds the classic-protection lookup) instead of 2 per PR; accepted, since skipping it would change the gate.
 - Scratch repo is private (user has Pro/Team). Headless live runs skip permissions inside the temp clone only; the guard hooks still run.
+- CW-4: after the one fallback CI wait (Claude background, Codex reviewer re-wait), still pending means tell the user; no further waits.
 - User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
 
 ## Blocked
