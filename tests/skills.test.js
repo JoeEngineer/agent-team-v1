@@ -154,9 +154,9 @@ function sections(text) {
 test('merging.md: the --auto block sits in the pending case under its own lead-in; unknown has its own section with no queue step', () => {
   const merging = fs.readFileSync(path.join(skillsDir, 'director', 'references', 'merging.md'), 'utf8');
   const lines = merging.split('\n');
-  // Precondition: the queue command appears in exactly one code line
-  const autoIdx = lines.map((l, i) => (l.startsWith('gh pr merge <n> --auto ') ? i : -1)).filter((i) => i >= 0);
-  eq(autoIdx.length, 1, 'expected exactly one gh pr merge --auto code line');
+  // Precondition: the gated sh queue command appears in exactly one code line (decision 0018)
+  const autoIdx = lines.map((l, i) => (l.startsWith('node "<plugin root>/scripts/ci-wait.js" <n> --queue-check --sha <head_sha> && gh pr merge <n> --auto ') ? i : -1)).filter((i) => i >= 0);
+  eq(autoIdx.length, 1, 'expected exactly one gated gh pr merge --auto code line');
   const fence = autoIdx[0] - 1;
   eq(lines[fence], '```bash', 'the --auto line must open its own code block');
   // The non-empty line before the block is the pending lead-in, alone in its paragraph
@@ -169,7 +169,11 @@ test('merging.md: the --auto block sits in the pending case under its own lead-i
   const pendingIdx = secs.findIndex((x) => x.heading === '### Reviewer reported `ci: pending`');
   assert(pendingIdx >= 0, 'no "Reviewer reported `ci: pending`" section');
   const pending = secs[pendingIdx].body;
-  assert(pending.includes('gh pr merge <n> --auto '), 'the --auto block must be in the pending section');
+  assert(pending.includes('&& gh pr merge <n> --auto '), 'the --auto block must be in the pending section');
+  assert(pending.includes('--queue-check --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --auto '), 'PowerShell 5.1 gated queue shape');
+  assert(pending.includes('--queue-check --sha <head_sha> && glab mr merge <n> --auto-merge '), 'GitLab gated queue shape');
+  for (const exit of ['Exit 5 (not queueable', 'Exit 1 (red)', 'Exit 4 (head moved)', 'Exit 2 (the helper can\'t tell)']) eq(lines.filter((l) => l.startsWith(`- ${exit}`)).length, 1, `queue-check ${exit}`);
+  assert(pending.includes('the queue-check decides, and a wrong note costs a failed queue call, never an ungated merge'), 'note is not the gate');
   assert(!/unknown/.test(pending), 'the pending section must not mention unknown');
   // unknown: its own section, after the pending one, with no queue, merge or wait step
   const unknownIdx = secs.findIndex((x) => x.heading === '### Reviewer reported `ci: unknown`');
@@ -222,7 +226,7 @@ test('Reviewer CI wait: review work first, 900 s budget, unknown vs pending, blo
   assert(reviewer.includes('A Director followup asking you to "wait again and report ci" (the Codex fallback for pending CI) gets one more wait on the same head'));
   // Blocking finding: one --once check, not the full wait
   assert(reviewer.includes('ci-wait.js" <n> --once --sha <head_sha>`'));
-  assert(reviewer.includes('"not waited: changes requested"'));
+  assert(reviewer.includes('`summary` must start with exactly `not waited: changes requested`'));
   // unknown is its own value; pending is a timeout (plus the one marked case)
   assert(reviewer.includes('"ci": "green | red | pending | none | unknown"'));
   assert(reviewer.includes('- `unknown`: the helper could not tell'));

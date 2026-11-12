@@ -205,6 +205,34 @@ test('ci-wait-live reviews: ci values counted; a pending review is a timeout onl
   nodeAssert.deepStrictEqual(L.reviewStats(null), { total: 0, byCi: {}, pending: [] });
 });
 
+test('ci-wait-live reviews (decision 0017): a blocking verdict with the not-waited marker may be pending; an approve may not', () => {
+  const rs = L.reviewStats([
+    { ci: 'pending', task_id: 'B-1', verdict: 'changes_requested', summary: 'Not waited: changes requested. Missing test.' },
+    { ci: 'pending', task_id: 'B-2', verdict: 'reject', summary: 'not waited: rejected' },
+    { ci: 'pending', task_id: 'B-3', verdict: 'changes_requested', summary: 'The suite passes; CI was not waited: changes requested.' },
+    { ci: 'pending', task_id: 'B-4', verdict: 'changes_requested', summary: 'Missing test; ci pending' },
+    { ci: 'pending', task_id: 'A-1', verdict: 'approve', summary: 'not waited: changes requested' },
+    { ci: 'pending', task_id: 'A-2', verdict: 'approve', summary: 'looks fine' },
+    { ci: 'pending', task_id: 'N-1', summary: 'not waited: changes requested' },
+    { ci: 'pending', task_id: 'B-5', verdict: 'changes_requested', summary: 'Marker later: not waited: rejected' },
+  ]);
+  eq(rs.pending.length, 8, 'precondition: all eight pending reviews were recorded');
+  eq(rs.pending[0].verdict, 'changes_requested', 'the verdict is recorded');
+  nodeAssert.deepStrictEqual(rs.pending.map((p) => [p.task, p.blockingNotWaited]),
+    [['B-1', true], ['B-2', true], ['B-3', true], ['B-4', false], ['A-1', false], ['A-2', false], ['N-1', false], ['B-5', false]]);
+  const targets = (pending) => L.evaluateTargets({ summary: { ci: { byPr: {}, unattributed: { turns: 0 }, noPr: { reconcile: { turns: 0 }, reads: { turns: 0 } } }, watch: { foreground: 0, background: 0 } },
+    taskPrs: [], reviews: { total: pending.length, byCi: { pending: pending.length }, pending }, milestone: { reported: null, completeBeforeChecksFinished: false, detail: 'none' } })
+    .find((t) => t.id === 'pending-only-on-timeout');
+  eq(targets(rs.pending.slice(0, 3)).result, 'PASS', 'marked blocking reviews pass');
+  assert(/marked not waited/.test(targets(rs.pending.slice(0, 1)).detail), targets(rs.pending.slice(0, 1)).detail);
+  eq(targets(rs.pending.slice(4, 5)).result, 'FAIL', 'an approve with pending and no wait stays FAIL, even with the phrase');
+  eq(targets(rs.pending.slice(3, 4)).result, 'FAIL', 'a blocking review without the marker fails');
+  eq(targets(rs.pending.slice(0, 1).concat(rs.pending.slice(5, 6))).result, 'FAIL', 'one unmarked approve among marked ones fails');
+  // a stated wait still counts for an approve
+  const waited = L.reviewStats([{ ci: 'pending', verdict: 'approve', summary: 'waited 9 min, timed out' }]);
+  eq(targets(waited.pending).result, 'PASS', 'rule (a): a stated 8+ minute wait');
+});
+
 test('ci-wait-live merges: a queued line is resolved only by a later line for the same PR', () => {
   const q = (pr) => ({ pr, outcome: 'auto-merge-queued' });
   const st = L.mergesStats([q('5'), { pr: '6', outcome: 'merged' }, q('7'), { pr: '5', outcome: 'merged' }, { pr: '8', outcome: 'merged' }, q('8')]);
