@@ -14,7 +14,7 @@ const USAGE = `usage: node tests/live/ci-wait-live.js --tool claude|codex --repo
          [--probe-auto-head] [--keep] [--seed-only] [--smoke] [--timeout-min N] [--model M] [--out-dir DIR]
        node tests/live/ci-wait-live.js --repo OWNER/REPO --preflight-only       (read-only check that the repo is ready; starts nothing)
        node tests/live/ci-wait-live.js --repo OWNER/REPO --seed-only            (push the fixture once so the check name exists)
-       node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <live-...-claude-xxxx> [--dry-run]
+       node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <live-...-claude-xxxx> [--dry-run] [--force]
 
 Exit codes: 0 the run finished and the report was written (target misses do NOT change this);
             1 harness error (setup, Director crashed or timed out, wrong plugin loaded, cleanup failed);
@@ -22,10 +22,10 @@ Exit codes: 0 the run finished and the report was written (target misses do NOT 
 
 // ---- arguments ----
 function parseArgs(argv) {
-  const o = { probeAutoHead: false, keep: false, seedOnly: false, smoke: false, preflightOnly: false, dryRun: false, timeoutMin: 75 };
+  const o = { probeAutoHead: false, keep: false, seedOnly: false, smoke: false, preflightOnly: false, dryRun: false, force: false, timeoutMin: 75 };
   const valued = { '--tool': 'tool', '--repo': 'repo', '--plugin': 'plugin', '--label': 'label', '--model': 'model',
     '--out-dir': 'outDir', '--cleanup-run': 'cleanupRun', '--timeout-min': 'timeoutMin' };
-  const flags = { '--probe-auto-head': 'probeAutoHead', '--keep': 'keep', '--seed-only': 'seedOnly', '--smoke': 'smoke', '--preflight-only': 'preflightOnly', '--dry-run': 'dryRun' };
+  const flags = { '--probe-auto-head': 'probeAutoHead', '--keep': 'keep', '--seed-only': 'seedOnly', '--smoke': 'smoke', '--preflight-only': 'preflightOnly', '--dry-run': 'dryRun', '--force': 'force' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (flags[a]) { o[flags[a]] = true; continue; }
@@ -48,6 +48,7 @@ function parseArgs(argv) {
     return { opts: o };
   }
   if (o.dryRun) return { error: '--dry-run only goes with --cleanup-run' };
+  if (o.force) return { error: '--force only goes with --cleanup-run' };
   if (o.seedOnly && o.smoke) return { error: '--seed-only and --smoke cannot be combined' };
   // Only the read-only preflight: needs no tool, plugin or label, and starts nothing.
   if (o.preflightOnly) return { opts: o };
@@ -235,7 +236,7 @@ function milestoneTiming(reported, reportedAtMs, rollup) {
 // ---- the four targets ----
 // input: { summary (ci-turns summarize), taskPrs: ['12',..], reviews: reviewStats, milestone: milestoneTiming }
 function evaluateTargets(input) {
-  const { summary, taskPrs, reviews, milestone } = input;
+  const { summary, taskPrs, reviews, milestone, breakdown } = input;
   const t = [];
   const fg = summary.watch.foreground;
   t.push({ id: 'no-foreground-watch', name: 'no foreground --watch', result: fg === 0 ? 'PASS' : 'FAIL',
@@ -245,7 +246,8 @@ function evaluateTargets(input) {
   const un = summary.ci.unattributed.turns;
   // A CI turn that names no PR (a bare `gh pr list --json statusCheckRollup`, a reconcile run) cannot
   // be pinned on one PR, so it counts against the total: task-PR turns plus these must not exceed
-  // the number of task PRs. Turns that only name another PR (the milestone PR) are not counted.
+  // the number of task PRs. Turns that only name another PR (the milestone PR) are not counted
+  // here; ciBreakdown reports them.
   const total = per.reduce((a, p) => a + p.turns, 0) + un;
   const ok2 = worst <= 1 && total <= per.length;
   t.push({ id: 'ci-turns-per-task-pr', name: '<= 1 CI-related Director turn per task PR',
@@ -257,7 +259,49 @@ function evaluateTargets(input) {
     detail: pend.length ? `${pend.length} pending review(s): ${pend.map((p) => (p.waitedMinutes == null ? 'no wait time stated' : `waited ${p.waitedMinutes.toFixed(1)} min`)).join(', ')}` : `no pending reviews (${reviews.total} reviews)` });
   t.push({ id: 'not-complete-before-checks', name: 'not "complete" before the milestone PR checks finished',
     result: !milestone.reported ? 'N/A' : milestone.completeBeforeChecksFinished ? 'FAIL' : 'PASS', detail: milestone.detail });
+  // Reported only, never pass/fail: where the rest of the Director's CI turns went.
+  if (breakdown) for (const r of breakdownRows(breakdown)) t.push(r);
   return t;
+}
+
+// ---- where the CI turns went ----
+// turns: the transcript turns ({ tokens, ci, prs: [..], tools: [{ watch, background }] }).
+// A CI turn is counted under every group it belongs to: "task" when it names a task PR,
+// "milestone" when it names the milestone PR (even together with a task PR, so batching the two
+// cannot hide milestone polling), "other" when it names any PR that is neither a task PR nor the milestone PR (even next to one that is), "unattributed"
+// when it names no PR. total is every CI turn once. No pass or fail.
+function ciBreakdown(turns, { taskPrs, milestonePrs } = {}) {
+  const task = new Set((taskPrs || []).map(String));
+  const ms = new Set((milestonePrs || []).filter((x) => x != null).map(String));
+  const grp = () => ({ turns: 0, contextTokens: 0, foregroundWatch: 0 });
+  const g = { total: grp(), taskPrs: grp(), milestonePr: grp(), otherPr: grp(), unattributed: grp() };
+  const add = (e, t) => {
+    e.turns++; e.contextTokens += t.tokens || 0;
+    e.foregroundWatch += (t.tools || []).filter((x) => x.watch && !x.background).length;
+  };
+  for (const t of Array.isArray(turns) ? turns : []) {
+    if (!t || !t.ci) continue;
+    const prs = (t.prs || []).map(String);
+    add(g.total, t);
+    if (!prs.length) { add(g.unattributed, t); continue; }
+    const isTask = prs.some((p) => task.has(p));
+    const isMs = prs.some((p) => ms.has(p));
+    if (isTask) add(g.taskPrs, t);
+    if (isMs) add(g.milestonePr, t);
+    if (prs.some((p) => !task.has(p) && !ms.has(p))) add(g.otherPr, t);
+  }
+  g.milestonePrNumbers = [...ms];
+  return g;
+}
+function breakdownRows(b) {
+  const row = (id, name, e, extra) => ({ id, name, result: 'INFO',
+    detail: `${e.turns} turn(s), ${e.contextTokens} context tokens, ${e.foregroundWatch} foreground --watch${extra || ''}` });
+  const nums = (b.milestonePrNumbers || []).map((n) => `#${n}`).join(', ');
+  return [
+    row('milestone-pr-ci-turns', 'milestone PR CI turns', b.milestonePr, nums ? ` (milestone PR ${nums})` : ' (no milestone PR known)'),
+    row('other-pr-ci-turns', 'other PR CI turns', b.otherPr),
+    row('total-ci-turns', 'total CI-related Director turns', b.total, ` (task PRs ${b.taskPrs.turns}, milestone PR ${b.milestonePr.turns}, other ${b.otherPr.turns}, no PR named ${b.unattributed.turns}; a turn naming several groups counts in each)`),
+  ];
 }
 function renderTable(targets) {
   const w = Math.max(...targets.map((x) => x.name.length));
@@ -336,20 +380,45 @@ function secretsFromJson(text) {
 // ---- the run's temp folder ----
 // The harness records its temp folder in a small run file under the out-dir at start, so a run
 // that was hard-killed can still be cleaned up by --cleanup-run. A recorded folder is deleted
-// only when it is <base>/<digits> (the harness's own per-process folder, base being the one
-// recorded with it) and holds nothing but h/ (Codex home) and p/ (the clone).
+// only when its recorded base is the base the harness itself would create (expectedTempBase),
+// it is <base>/<digits> (the harness's own per-process folder) and holds nothing but h/ (Codex
+// home) and p/ (the clone). The caller also checks with lstat that none of tmp, h and p is a
+// link (linkInTemp in ci-wait-live.js), because this function never touches the disk.
 const nodePath = require('path');
-function deletableTemp(tmp, base, entries) {
-  if (typeof tmp !== 'string' || typeof base !== 'string' || !tmp || !base) return false;
+const nodeOs = require('os');
+// The same rule the harness uses to create its temp base.
+function expectedTempBase(env, platform, tmpdir) {
+  const e = env || process.env;
+  return e.AGENT_TEAM_LIVE_TMP || ((platform || process.platform) === 'win32' ? 'C:\\cw6' : nodePath.join(tmpdir || nodeOs.tmpdir(), 'cw6'));
+}
+const sameDir = (a, b) => {
+  const x = nodePath.resolve(a); const y = nodePath.resolve(b);
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+};
+function deletableTemp(tmp, base, entries, expectedBase) {
+  if (typeof tmp !== 'string' || typeof base !== 'string' || typeof expectedBase !== 'string' || !tmp || !base || !expectedBase) return false;
+  if (!sameDir(base, expectedBase)) return false;
   const t = nodePath.resolve(tmp);
-  if (nodePath.resolve(nodePath.dirname(t)) !== nodePath.resolve(base)) return false;
+  if (!sameDir(nodePath.dirname(t), base)) return false;
   if (!/^\d+$/.test(nodePath.basename(t))) return false;
   return (entries || []).every((e) => e === 'h' || e === 'p');
+}
+// True when a process with this pid exists (signal 0 only checks; EPERM means it exists).
+// 'alive', 'dead' or 'unknown' (a missing or invalid pid: the guard must not fail open on it).
+function pidState(pid) {
+  const n = Number(pid);
+  if (pid == null || pid === '' || !Number.isInteger(n) || n <= 0) return 'unknown';
+  return pidAlive(n) ? 'alive' : 'dead';
+}
+function pidAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try { process.kill(n, 0); return true; } catch (e) { return !!e && e.code === 'EPERM'; }
 }
 const runFileName = (run) => `ci-wait-${run}.run.json`;
 
 module.exports = {
-  CLOCK_TOLERANCE_S, deletableTemp, runFileName,
+  CLOCK_TOLERANCE_S, deletableTemp, expectedTempBase, pidAlive, pidState, runFileName, ciBreakdown, breakdownRows,
   CHECK_NAME, TOOLS, TIMEOUT_MIN, USAGE, RUN_RE,
   parseArgs, runPrefix, ownsBranch, selectCleanup,
   evaluatePreflight, requiredChecksIn, rulesetSteps,
