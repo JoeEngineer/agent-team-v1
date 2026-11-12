@@ -18,7 +18,7 @@ Both 0.6.0 live runs (CW-7, PR #97) missed "at most one CI-related Director turn
 2. **Put `--names` into the first merge-gate call.** It needs no extra turn, and the gate is unchanged: `--names` only reads names, and the merge still runs only when `ci-wait.js <n> --once --sha <head_sha>` passes.
 
 ## Decision
-Option 2. The first PR's merge call starts with `ci-wait.js --names <n>` (its output is ignored by the gate; sh `;`, PowerShell `;`), followed by the usual gate-merge-comment chain. The Director reads the names from that same call's output and then asks the user. The target and the harness stay as written. A re-run of the live harness on both tools checks the fix.
+Option 2. The first PR's merge call starts with `ci-wait.js --names <n>` (its output is ignored by the gate; sh `;`, PowerShell `;`), followed by the usual gate-merge-comment chain. The Director reads the names from that same call's output and then asks the user. The target stays as written. (Amended by 0017: the harness no longer charges no-PR checkpoint turns to task PRs; it reports them separately.) A re-run of the live harness on both tools checks the fix.
 
 ## Consequences
 - One call per PR also holds for the first PR. The user question about names and auto-merge is a user turn, not a CI turn.
