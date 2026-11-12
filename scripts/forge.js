@@ -224,12 +224,15 @@ function gitlabPipelineCi(status) {
 //   { ok, number, state, head_sha, base,
 //     checks: [{ name, workflow, state: 'pass'|'fail'|'pending' }]   (GitHub)
 //     pipeline: { id, status } | null                                (GitLab) }
-// One CLI call.
-function requestStatus(forge, number, cwd, timeout = 20000, run = cli) {
+// One CLI call. With `{ resolution: true }` it also asks for whether auto-merge
+// is queued and when the request was merged, and adds `auto_merge` (bool) and
+// `merged_at` (ISO time | null) to the result (used by reconcile-logs.js).
+function requestStatus(forge, number, cwd, timeout = 20000, run = cli, { resolution = false } = {}) {
   const gitlab = forge === 'gitlab';
   const args = gitlab
     ? ['mr', 'view', String(number), '--output', 'json']
-    : ['pr', 'view', String(number), '--json', 'headRefOid,baseRefName,state,statusCheckRollup'];
+    : ['pr', 'view', String(number), '--json', 'headRefOid,baseRefName,state,statusCheckRollup' + (resolution ? ',autoMergeRequest,mergedAt' : '')];
+  const more = (info, parsed) => (resolution ? { auto_merge: Boolean(info.autoMerge), merged_at: (gitlab ? parsed.merged_at : parsed.mergedAt) || null } : {});
   let parsed;
   try {
     parsed = JSON.parse(run(forge, args, cwd, timeout));
@@ -245,6 +248,7 @@ function requestStatus(forge, number, cwd, timeout = 20000, run = cli) {
     return {
       ok: true, number: info.number != null ? info.number : Number(number), state: info.state, head_sha: String(head), base: info.base,
       checks: [], pipeline: hp ? { id: hp.id != null ? hp.id : null, status: hp.status != null ? String(hp.status) : null } : null,
+      ...more(info, parsed),
     };
   }
   if (typeof parsed.headRefOid !== 'string' || !parsed.headRefOid) return { ok: false, error: 'PR JSON has no headRefOid', notFound: false };
@@ -252,6 +256,7 @@ function requestStatus(forge, number, cwd, timeout = 20000, run = cli) {
   return {
     ok: true, number: Number(number), state: info.state, head_sha: parsed.headRefOid, base: info.base,
     checks: normalizeRollup(parsed.statusCheckRollup), pipeline: null,
+    ...more(info, parsed),
   };
 }
 
