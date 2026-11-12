@@ -56,21 +56,69 @@ function ciKinds(cmd) {
 const isWatch = (cmd) => WATCH.test(codeView(cmd));
 
 // The command as it runs: text that is only data is removed first, so a PR number or a script
-// name inside it cannot count. Removed: heredoc bodies and PowerShell here-strings, the value of
-// --body/-b/--message/-m/--title/--notes, the script of sed, the arguments of .Replace(...) and
-// -replace, and whole echo/printf/Write-Host/Write-Output lines. A Codex exec call wraps the
-// command in a JS string, so a literal \n there is a line break and \" is a quote.
+// name inside it cannot count. Removed: heredoc bodies and PowerShell here-strings (unless an
+// interpreter reads them: bash, sh, pwsh, node, python, Invoke-Expression, iex), the value of
+// --body/-b/--message/-m/--title/--notes, the script of the sed segment, the arguments of
+// .Replace(...) and -replace, and the own arguments of echo/printf/Write-Host/Write-Output up to
+// the next ; && || | or line break (a $(...), `...` or (...) sub-expression inside them runs, so it
+// is kept). A Codex exec call wraps the command in a JS string, so a literal \n there is a line
+// break and \" is a quote. When in doubt the text stays: an over-count is cosmetic, an
+// under-count hides a real CI call.
 const STR = String.raw`(?:"(?:[^"\\]|\\.)*"|'[^']*')`;
 const OPT_VALUE = new RegExp(String.raw`(--body|--message|--title|--notes|--description|-b|-m|-t)(\s+|=)${STR}`, 'g');
-const SED_SCRIPT = new RegExp(String.raw`(\bsed\b[^\n]*?\s)${STR}`, 'g');
+const SED_SCRIPT = new RegExp(String.raw`(\bsed\b[^\n;&|]*?\s)${STR}`, 'g');
 const PS_REPLACE_METHOD = new RegExp(String.raw`\.Replace\(\s*${STR}\s*(?:,\s*${STR}\s*)?\)`, 'gi');
 const PS_REPLACE_OP = new RegExp(String.raw`(-i?c?replace\s+)${STR}(?:\s*,\s*${STR})?`, 'gi');
+const INTERPRETER_BEFORE = /(?<![\w.-])(?:bash|sh|zsh|pwsh|powershell|node|python3?|Invoke-Expression|iex)\b/i;
+const INTERPRETER_AFTER = /\bInvoke-Expression\b|\biex\b|\bpwsh\b|\bpowershell\b|\|\s*(?:node|python3?|bash|sh|zsh)\b/i;
+const PRINT_CMD = /(^|[;&|\n{(]|["'`])[ \t]*(?:echo|printf|Write-Host|Write-Output)\b/gi;
+// Index of the ")" that closes the "(" at i (quotes respected); s.length when there is none.
+function closeParen(s, i) {
+  let depth = 0; let q = null;
+  for (let j = i; j < s.length; j++) {
+    const c = s[j];
+    if (q) { if (c === '\\' && q === '"') j++; else if (c === q) q = null; continue; }
+    if (c === '"' || c === "'") q = c;
+    else if (c === '(') depth++;
+    else if (c === ')' && --depth === 0) return j;
+  }
+  return s.length;
+}
+// Replace each print command's own arguments by the sub-expressions that run inside them.
+function stripPrint(s) {
+  const re = new RegExp(PRINT_CMD.source, 'gi');
+  let out = ''; let last = 0; let m;
+  while ((m = re.exec(s))) {
+    const start = m.index + m[1].length;
+    const kept = [];
+    let j = m.index + m[0].length; let q = null;
+    while (j < s.length) {
+      const c = s[j];
+      if (q === "'") { if (c === "'") q = null; j++; continue; }
+      if (c === '$' && s[j + 1] === '(') { const e = closeParen(s, j + 1); kept.push(s.slice(j + 2, e)); j = e + 1; continue; }
+      if (c === '`') { const e = s.indexOf('`', j + 1); if (e < 0) { j++; continue; } kept.push(s.slice(j + 1, e)); j = e + 1; continue; }
+      if (q === '"') { if (c === '\\') j++; else if (c === '"') q = null; j++; continue; }
+      if (c === '"' || c === "'") { q = c; j++; continue; }
+      if (c === '(') { const e = closeParen(s, j); kept.push(s.slice(j + 1, e)); j = e + 1; continue; }
+      if (c === ';' || c === '|' || c === '&' || c === '\n') break;
+      j++;
+    }
+    out += s.slice(last, start) + kept.join('\n');
+    last = j; re.lastIndex = Math.max(j, m.index + 1);
+  }
+  return out + s.slice(last);
+}
 function codeView(cmd) {
   let s = String(cmd || '').replace(/\\r?\\n/g, '\n').replace(/\\"/g, '"');
-  s = s.replace(/(<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3(?!\w))/g, '$1$4');   // heredoc body
-  s = s.replace(/@(['"])\r?\n[\s\S]*?\r?\n\1@/g, "@''@");                                   // PowerShell here-string
+  // heredoc body: kept when the line that opens it runs an interpreter (bash <<EOF)
+  s = s.replace(/(<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3(?!\w))/g, (all, head, q, tag, tail, off, str) => {
+    const pre = str.slice(str.lastIndexOf('\n', off) + 1, off);
+    return INTERPRETER_BEFORE.test(pre) ? all : head + tail;
+  });
+  // PowerShell here-string: kept when an interpreter reads it elsewhere in the call
+  s = s.replace(/@(['"])\r?\n[\s\S]*?\r?\n\1@/g, (all, q, off, str) => (INTERPRETER_AFTER.test(str.slice(0, off) + str.slice(off + all.length)) ? all : "@''@"));
   s = s.replace(OPT_VALUE, '$1$2""').replace(SED_SCRIPT, '$1""').replace(PS_REPLACE_METHOD, '.Replace()').replace(PS_REPLACE_OP, '$1""');
-  return s.split('\n').filter((l) => !/^\s*(?:echo|printf|Write-Host|Write-Output)\b/i.test(l)).join('\n');
+  return stripPrint(s);
 }
 // The pieces of a command that run one after the other.
 const segmentsOf = (view) => view.split(/&&|\|\||[;|\n]/);
@@ -180,13 +228,26 @@ function hooksActiveIn(text) {
 // ---- shared summary over a list of turns ----
 // turn: { index, id, tokens, tools: [{ name, command, background, kinds, prs, watch }],
 //         notified: [{ taskId, toolUseId, ci, prs }], ci: boolean, prs: [..] }
+// A CI turn whose only CI kind is `reconcile-logs.js --merges` (a checkpoint, not a look at CI).
+// A turn with no tool detail (a hand-made one) is not reconcile-only: when in doubt it is a CI read.
+function isReconcileOnly(t) {
+  const kinds = ((t && t.tools) || []).flatMap((x) => x.kinds || []);
+  return kinds.length > 0 && kinds.every((k) => k === 'reconcile-merges') && !((t.notified || []).some((n) => n.ci));
+}
 function summarize(turns) {
   const sum = (list) => list.reduce((a, t) => a + t.tokens, 0);
   const ciTurns = turns.filter((t) => t.ci);
   const byPr = {};
   const unattributed = { turns: 0, contextTokens: 0 };
+  // The turns that name no PR, split: reconcile checkpoints, and other CI reads whose PR could not be read.
+  const noPr = { reconcile: { turns: 0, contextTokens: 0 }, reads: { turns: 0, contextTokens: 0 } };
   for (const t of ciTurns) {
-    if (!t.prs.length) { unattributed.turns++; unattributed.contextTokens += t.tokens; continue; }
+    if (!t.prs.length) {
+      unattributed.turns++; unattributed.contextTokens += t.tokens;
+      const g = isReconcileOnly(t) ? noPr.reconcile : noPr.reads;
+      g.turns++; g.contextTokens += t.tokens;
+      continue;
+    }
     for (const pr of t.prs) {
       const e = byPr[pr] || (byPr[pr] = { turns: 0, contextTokens: 0 });
       e.turns++;
@@ -197,7 +258,7 @@ function summarize(turns) {
   return {
     turnCount: turns.length,
     contextTokens: sum(turns),
-    ci: { turns: ciTurns.length, contextTokens: sum(ciTurns), byPr, unattributed,
+    ci: { turns: ciTurns.length, contextTokens: sum(ciTurns), byPr, unattributed, noPr,
       startedByNotification: ciTurns.filter((t) => t.notified.length).length },
     watch: { foreground: watches.filter((x) => !x.background).length, background: watches.filter((x) => x.background).length },
   };
@@ -352,7 +413,7 @@ function isDirectorRollout(objs) {
 }
 
 module.exports = {
-  CI_PATTERNS, codeView, isBackgroundCommand, ciKinds, isWatch, prNumbers, commandOf, ctxTokens, toObjects,
+  CI_PATTERNS, codeView, isReconcileOnly, isBackgroundCommand, ciKinds, isWatch, prNumbers, commandOf, ctxTokens, toObjects,
   milestoneJsonIn, milestoneJsonInEvent, directorText, hooksActiveIn,
   summarize, parseClaudeStream, parseCodexRollout, isDirectorRollout,
 };

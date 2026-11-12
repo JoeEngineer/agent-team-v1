@@ -4,6 +4,7 @@
 // Unit tests: tests/ci-wait-live.test.js.
 'use strict';
 
+const CT = require('./ci-turns.js');
 const CHECK_NAME = 'sample-ci';
 const TOOLS = ['claude', 'codex'];
 // A pending review counts as a timeout only when its summary says it waited this long
@@ -244,15 +245,20 @@ function evaluateTargets(input) {
   const per = (taskPrs || []).map((pr) => ({ pr, turns: (summary.ci.byPr[pr] || { turns: 0 }).turns }));
   const worst = per.reduce((a, p) => Math.max(a, p.turns), 0);
   const un = summary.ci.unattributed.turns;
-  // Only turns that name a task PR are charged to it. A CI turn that names no PR (a reconcile
-  // checkpoint at the end of a wave or before the milestone PR, which the Director prompt
-  // requires) cannot be pinned on a task PR, so it is reported (INFO row, count and tokens) and
-  // not counted here. Turns that only name another PR (the milestone PR) are reported by
-  // ciBreakdown. A task PR with 2 real CI turns still fails.
-  const ok2 = worst <= 1;
+  // Two kinds of CI turn name no PR. A reconcile-only turn (`reconcile-logs.js --merges` is its
+  // only CI kind: a checkpoint at the end of a wave or before the milestone PR, which the Director
+  // prompt requires) is not a look at CI and is not charged to any task PR; it is reported in an
+  // INFO row. Any other no-PR CI turn (a statusCheckRollup read, `gh pr checks $n` in a loop,
+  // `ci-wait.js $n`) is a real CI look whose PR could not be read, so it is charged: the target
+  // fails when a task PR has 2 or more CI turns, or when the task-PR turns plus these exceed the
+  // number of task PRs. Turns that only name another PR (the milestone PR) are reported by ciBreakdown.
+  const np = summary.ci.noPr || { reconcile: { turns: 0 }, reads: { turns: un } };
+  const reads = np.reads.turns;
+  const charged = per.reduce((a, p) => a + p.turns, 0) + reads;
+  const ok2 = worst <= 1 && charged <= per.length;
   t.push({ id: 'ci-turns-per-task-pr', name: '<= 1 CI-related Director turn per task PR',
     result: !per.length ? 'N/A' : ok2 ? 'PASS' : 'FAIL',
-    detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}${un ? `; ${un} more CI turn(s) name no PR (reported separately, not charged to a task PR)` : ''}` : 'no task PRs found' });
+    detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}${reads ? `; ${reads} unattributed CI read(s) name no PR and are charged to the total (${charged} for ${per.length} task PR(s))` : ''}${np.reconcile.turns ? `; ${np.reconcile.turns} reconcile checkpoint(s) not charged` : ''}` : 'no task PRs found' });
   const pend = reviews.pending;
   const bad = pend.filter((p) => !p.timeout);
   t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout', result: bad.length ? 'FAIL' : 'PASS',
@@ -274,7 +280,7 @@ function ciBreakdown(turns, { taskPrs, milestonePrs } = {}) {
   const task = new Set((taskPrs || []).map(String));
   const ms = new Set((milestonePrs || []).filter((x) => x != null).map(String));
   const grp = () => ({ turns: 0, contextTokens: 0, foregroundWatch: 0 });
-  const g = { total: grp(), taskPrs: grp(), milestonePr: grp(), otherPr: grp(), unattributed: grp() };
+  const g = { total: grp(), taskPrs: grp(), milestonePr: grp(), otherPr: grp(), unattributed: grp(), reconcile: grp(), unattributedReads: grp() };
   const add = (e, t) => {
     e.turns++; e.contextTokens += t.tokens || 0;
     e.foregroundWatch += (t.tools || []).filter((x) => x.watch && !x.background).length;
@@ -283,7 +289,7 @@ function ciBreakdown(turns, { taskPrs, milestonePrs } = {}) {
     if (!t || !t.ci) continue;
     const prs = (t.prs || []).map(String);
     add(g.total, t);
-    if (!prs.length) { add(g.unattributed, t); continue; }
+    if (!prs.length) { add(g.unattributed, t); add(CT.isReconcileOnly(t) ? g.reconcile : g.unattributedReads, t); continue; }
     const isTask = prs.some((p) => task.has(p));
     const isMs = prs.some((p) => ms.has(p));
     if (isTask) add(g.taskPrs, t);
@@ -300,7 +306,8 @@ function breakdownRows(b) {
   return [
     row('milestone-pr-ci-turns', 'milestone PR CI turns', b.milestonePr, nums ? ` (milestone PR ${nums})` : ' (no milestone PR known)'),
     row('other-pr-ci-turns', 'other PR CI turns', b.otherPr),
-    row('no-pr-ci-turns', 'CI turns naming no PR (not charged to a task PR)', b.unattributed),
+    row('reconcile-checkpoint-turns', 'reconcile checkpoints (no PR, not charged to a task PR)', b.reconcile),
+    row('unattributed-ci-read-turns', 'unattributed CI reads (no PR, charged to the task-PR total)', b.unattributedReads),
     row('total-ci-turns', 'total CI-related Director turns', b.total, ` (task PRs ${b.taskPrs.turns}, milestone PR ${b.milestonePr.turns}, other ${b.otherPr.turns}, no PR named ${b.unattributed.turns}; a turn naming several groups counts in each)`),
   ];
 }

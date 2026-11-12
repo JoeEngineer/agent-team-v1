@@ -250,7 +250,10 @@ test('ci-wait-live milestone: "complete" printed before the checks finished is f
 });
 
 test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
-  const summary = (fg, byPr, unattributed) => ({ watch: { foreground: fg, background: 1 }, ci: { byPr, unattributed: { turns: unattributed || 0, contextTokens: 0 } } });
+  // reads: no-PR CI turns that are real CI looks; reconcile: no-PR reconcile-only checkpoints
+  const summary = (fg, byPr, reads, reconcile) => ({ watch: { foreground: fg, background: 1 }, ci: { byPr,
+    unattributed: { turns: (reads || 0) + (reconcile || 0), contextTokens: 0 },
+    noPr: { reconcile: { turns: reconcile || 0, contextTokens: 0 }, reads: { turns: reads || 0, contextTokens: 0 } } } });
   const quiet = { total: 3, byCi: { green: 3 }, pending: [] };
   const okMs = { reported: { status: 'complete' }, completeBeforeChecksFinished: false, detail: 'fine' };
   const good = L.evaluateTargets({ summary: summary(0, { 4: { turns: 1 }, 5: { turns: 1 } }), taskPrs: ['4', '5'], reviews: quiet, milestone: okMs });
@@ -259,16 +262,22 @@ test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
     reviews: { total: 2, byCi: { pending: 1 }, pending: [{ statesTimeWaited: false, waitedMinutes: null, timeout: false }] },
     milestone: { reported: { status: 'complete' }, completeBeforeChecksFinished: true, detail: 'early' } });
   nodeAssert.deepStrictEqual(bad.map((t) => t.result), ['FAIL', 'FAIL', 'FAIL', 'FAIL']);
-  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /2 more CI turn\(s\) name no PR \(reported separately, not charged to a task PR\)/.test(bad[1].detail), bad[1].detail);
-  // Turns that name no PR are reported, not charged to a task PR (a measurement fix, not a softer target).
+  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /2 unattributed CI read\(s\) name no PR and are charged to the total \(5 for 2 task PR\(s\)\)/.test(bad[1].detail), bad[1].detail);
+  // Reconcile-only no-PR turns are reported, not charged to a task PR. Other no-PR CI turns are real CI looks and are charged.
   const perPrOk = { 4: { turns: 1 }, 5: { turns: 1 } };
   const pick = (s) => L.evaluateTargets({ summary: s, taskPrs: ['4', '5'], reviews: quiet, milestone: okMs })[1];
-  eq(pick(summary(0, perPrOk, 0)).result, 'PASS', '1 turn each');
-  eq(pick(summary(0, perPrOk, 6)).result, 'PASS', 'every PR at 1 and six no-PR checkpoint turns: still PASS');
-  assert(/6 more CI turn\(s\) name no PR/.test(pick(summary(0, perPrOk, 6)).detail), pick(summary(0, perPrOk, 6)).detail);
-  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 0)).result, 'FAIL', 'one task PR with 2 real CI turns fails, with no no-PR turns at all');
-  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 6)).result, 'FAIL', 'and still fails next to no-PR turns');
-  eq(pick(summary(0, { 4: { turns: 1 } }, 2)).result, 'PASS', 'a PR with no CI turn and two no-PR turns');
+  eq(pick(summary(0, perPrOk, 0, 0)).result, 'PASS', '1 turn each');
+  eq(pick(summary(0, perPrOk, 0, 6)).result, 'PASS', 'every PR at 1 and six reconcile-only checkpoint turns: still PASS');
+  assert(/6 reconcile checkpoint\(s\) not charged/.test(pick(summary(0, perPrOk, 0, 6)).detail), pick(summary(0, perPrOk, 0, 6)).detail);
+  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 0, 0)).result, 'FAIL', 'one task PR with 2 real CI turns fails, with no no-PR turns at all');
+  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 0, 6)).result, 'FAIL', 'and still fails next to reconcile turns');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 0, 2)).result, 'PASS', 'a PR with no CI turn and two reconcile turns');
+  eq(pick(summary(0, perPrOk, 1, 0)).result, 'FAIL', 'every PR at 1 and one unattributed CI read (a loop poll): 3 for 2 PRs');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 1, 3)).result, 'PASS', 'one read leaves room when a PR has no turn; reconcile turns beside it do not count');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 2, 0)).result, 'FAIL', 'two unattributed reads with one attributed turn: 3 for 2 PRs');
+  // no split given (an older summary): every no-PR turn is treated as a read
+  const old = summary(0, perPrOk, 0, 0); old.ci.unattributed.turns = 1; delete old.ci.noPr;
+  eq(pick(old).result, 'FAIL', 'without the split a no-PR turn is charged');
   eq(pick(summary(0, { 4: { turns: 1 }, 9: { turns: 3 } }, 0)).result, 'PASS', 'turns on a PR that is not a task PR (the milestone PR) are not counted');
   const none = L.evaluateTargets({ summary: summary(0, {}), taskPrs: [], reviews: { total: 0, byCi: {}, pending: [{ timeout: true, waitedMinutes: 9 }] }, milestone: { reported: null, completeBeforeChecksFinished: false, detail: 'none' } });
   nodeAssert.deepStrictEqual(none.map((t) => t.result), ['PASS', 'N/A', 'PASS', 'N/A']);
@@ -307,12 +316,19 @@ test('ci-wait-live breakdown: milestone-PR, other-PR and total CI turns are repo
   const quiet = { total: 0, byCi: {}, pending: [] };
   const ms = { reported: { status: 'complete' }, completeBeforeChecksFinished: false, detail: 'fine' };
   const t = L.evaluateTargets({ summary, taskPrs: ['4'], reviews: quiet, milestone: ms, breakdown: b });
-  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO', 'INFO']);
-  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'CI turns naming no PR (not charged to a task PR)', 'total CI-related Director turns']);
+  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO', 'INFO', 'INFO']);
+  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'reconcile checkpoints (no PR, not charged to a task PR)', 'unattributed CI reads (no PR, charged to the task-PR total)', 'total CI-related Director turns']);
   assert(/3 turn\(s\), 900 context tokens, 2 foreground --watch \(milestone PR #9\)/.test(t[4].detail), t[4].detail);
-  assert(/1 turn\(s\), 600 context tokens/.test(t[6].detail), t[6].detail);
-  assert(/6 turn\(s\), 2100 context tokens/.test(t[7].detail), t[7].detail);
-  eq(L.renderTable(t).split('\n').length, 8, 'one row per target and metric');
+  assert(/0 turn\(s\), 0 context tokens/.test(t[6].detail), `no reconcile turn here: ${t[6].detail}`);
+  assert(/1 turn\(s\), 600 context tokens/.test(t[7].detail), t[7].detail);
+  assert(/6 turn\(s\), 2100 context tokens/.test(t[8].detail), t[8].detail);
+  eq(L.renderTable(t).split('\n').length, 9, 'one row per target and metric');
+  // the no-PR split: a reconcile-only turn versus a turn with any other CI kind
+  const rt = (kinds) => ({ ci: true, tokens: 10, prs: [], tools: [{ kinds, watch: false, background: false }] });
+  const split = L.ciBreakdown([rt(['reconcile-merges']), rt(['reconcile-merges']), rt(['status-check-rollup']), rt(['reconcile-merges', 'pr-checks']), rt(['pr-checks'])], { taskPrs: ['4'], milestonePrs: [] });
+  eq(split.reconcile.turns, 2, 'reconcile-only turns');
+  eq(split.unattributedReads.turns, 3, 'a rollup read, reconcile plus a check, and a check are reads');
+  eq(split.unattributed.turns, 5, 'the total of no-PR turns is unchanged');
   // a Director that polls only the milestone PR is visible even though the per-task-PR target passes
   const only = L.ciBreakdown([1, 2, 3, 4, 5].map((i) => ({ ci: true, tokens: 10, prs: ['9'], tools: [] })), { taskPrs: ['4', '5'], milestonePrs: ['9'] });
   const tt = L.evaluateTargets({ summary: Object.assign({}, summary, { ci: { byPr: { 9: { turns: 5 } }, unattributed: { turns: 0, contextTokens: 0 } } }), taskPrs: ['4', '5'], reviews: quiet, milestone: ms, breakdown: only });

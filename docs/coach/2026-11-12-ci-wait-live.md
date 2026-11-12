@@ -33,7 +33,8 @@ New parser first; old parser's number in brackets where it differs.
 | CI-related context tokens (share of all) | 469,429 (19.5%) | 466,453 (25.1%) |
 | `--watch`, foreground / background | 4 / 0 | 0 / 0 |
 | Reviewer `ci` values | pending 5 | green 4 |
-| CI turns on task PRs / milestone PR / no PR named | 4 [5] / 1 / 1 [0] | 4 / 1 / 1 |
+| CI turns on task PRs / milestone PR | 4 [5] / 1 | 4 / 1 |
+| No-PR CI turns: reconcile checkpoints / unattributed CI reads | 0 / 1 [0 / 0] | 1 / 0 |
 | CI turns per task PR | #17: 3 [4], #23: 1 (#18, #19: 0) | #36: 2, #37: 1, #38: 1 |
 | Reported complete, relative to last check finishing | 25 s after | 37 s after |
 
@@ -47,11 +48,12 @@ New parser first; old parser's number in brackets where it differs.
 | CI-related context tokens (share of all) | 759,547 (23.9%) | 543,504 (17.4%) |
 | `--watch`, foreground / background | 0 / 0 | 0 / 0 |
 | Reviewer `ci` values | pending 5, none 2 | green 5 |
-| CI turns on task PRs / milestone PR / no PR named | 10 / 1 / 2 | 4 / 1 [2] / 3 [2] |
+| CI turns on task PRs / milestone PR | 10 / 1 | 4 / 1 [2] |
+| No-PR CI turns: reconcile checkpoints / unattributed CI reads | 0 / 2 | 3 [2] / 0 |
 | CI turns per task PR | #20: 6, #21: 4 [6], #22: 5 [6] | #39: 2, #40: 1, #41: 1 |
 | Reported complete, relative to last check finishing | while 1 check was still running | 65 s after |
 
-How to read the groups. A turn that names several PRs counts once in each group, so the per-PR counts can add up to more than the CI turn total. "No PR named" is a CI turn whose command names no PR (for example `reconcile-logs.js --merges`). The Claude "before" run's task PRs include the Director-records PR #23, because the harness counts every PR into the milestone branch.
+How to read the groups. A turn that names several PRs counts once in each group, so the per-PR counts can add up to more than the CI turn total. A "no-PR" CI turn is one whose command names no PR the parser can read. There are two kinds. A **reconcile checkpoint** is a turn whose only CI kind is `reconcile-logs.js --merges`; it is not a look at CI and is not charged to a task PR. An **unattributed CI read** is any other no-PR CI turn; it is a real look at CI whose PR could not be read, and it is charged to the task-PR total. The Claude "before" run has one of those, and it is not a checkpoint: turn 20 is `for n in 18 19; do gh pr checks $n --watch --interval 15 >/dev/null 2>&1; gh pr checks $n; ...`, a foreground `--watch` on #18 and #19 through a loop variable (the PR number is in `$n`, so the parser cannot read it). Codex "before" has two unattributed reads (turns 10 and 11: `gh pr list ... --json statusCheckRollup`). The Claude "before" run's task PRs include the Director-records PR #23, because the harness counts every PR into the milestone branch.
 
 Two things the table says plainly:
 
@@ -63,7 +65,7 @@ Two things the table says plainly:
 | Target | Claude before | Claude after | Codex before | Codex after |
 |---|---|---|---|---|
 | No foreground `--watch` | FAIL (4 foreground) | PASS (0) | PASS (0) | PASS (0) |
-| At most one CI-related Director turn per task PR | FAIL (#17: 3) | FAIL (#36: 2) | FAIL (#20: 6, #21: 4, #22: 5) | FAIL (#39: 2) |
+| At most one CI-related Director turn per task PR | FAIL (#17: 3, plus 1 unattributed read: 5 for 4 PRs) | FAIL (#36: 2) | FAIL (#20: 6, #21: 4, #22: 5, plus 2 unattributed reads) | FAIL (#39: 2) |
 | Reviewer `ci: pending` only on timeout | FAIL (5 of 5 pending, no wait time stated) | PASS (0 pending of 4) | FAIL (5 pending, no wait time stated; 2 more `none`) | PASS (0 pending of 5) |
 | Milestone not reported complete before its PR checks finished | PASS (25 s after) | PASS (37 s after) | FAIL (reported complete, `ci: pending`, 1 check still running) | PASS (65 s after) |
 
@@ -98,7 +100,9 @@ Verdict: **(c) the required first-run step**, same as Claude. Neither run polled
 
 ### The "no PR named" turns
 
-- **Claude after (1): turn 22.** `for n in 37 38; do gh pr view $n --json state -q .state; done; node ".../reconcile-logs.js" --merges; sed -i ... STATUS.md; git pull; ...`. The PR number is a shell loop variable. It is the "end of a wave" `reconcile-logs.js --merges` checkpoint. `skills/director/references/merging.md` ("Queued PRs: checkpoints") and `skills/director/SKILL.md` step 9 require it: before the next merge when something is queued, at the end of a wave, and before opening the milestone PR. Nothing was queued in this run. Verdict: **(c) required checkpoint**, not a CI wait.
+Two kinds, and they are not the same thing (see the table notes): reconcile checkpoints, and unattributed CI reads. The Claude "before" turn 20 is an unattributed read (a foreground `--watch` on #18 and #19 through a loop variable), not a checkpoint; the after runs have none of those.
+
+- **Claude after (1 reconcile checkpoint): turn 22.** `for n in 37 38; do gh pr view $n --json state -q .state; done; node ".../reconcile-logs.js" --merges; sed -i ... STATUS.md; git pull; ...`. The PR number is a shell loop variable. It is the "end of a wave" `reconcile-logs.js --merges` checkpoint. `skills/director/references/merging.md` ("Queued PRs: checkpoints") and `skills/director/SKILL.md` step 9 require it: before the next merge when something is queued, at the end of a wave, and before opening the milestone PR. Nothing was queued in this run. Verdict: **(c) required checkpoint**, not a CI wait.
 - **Codex after (3 with the fixed parser, 2 with the old): turns 25, 39 and 42.** Turns 25 and 39 are the same checkpoint (once before the fold-in merge, once before opening the milestone PR), each bundled with housekeeping (`git rebase`, `Move-Item run-state.json`, `gh pr create`). Turn 42 is `reconcile-logs.js --merges; git worktree list; gh pr view 43 --json title,body,commits`. Verdict for all three: **(c) required checkpoint**. Turn 42 was a parser over-count of a different kind: see below.
 
 ### The over-count found in turn 42 (fixed here)
@@ -111,7 +115,8 @@ The old parser took PR numbers from every `gh pr` command in a call that matched
 |---|---|---|
 | Claude #36: 2 turns | (c) required first-run step | Stays FAIL as written. Done: CW-9 puts `--names` into the first merge-gate call (option 2 below). |
 | Codex #39: 2 turns | (c) required first-run step | Same. |
-| "No PR named" turns | (c) required checkpoint | They are measured and reported, but not charged to a task PR (a measurement fix, below). |
+| Reconcile checkpoints (no PR) | (c) required checkpoint | Measured and reported, but not charged to a task PR (a measurement fix, below). |
+| Unattributed CI reads (no PR) | real CI looks (only in the "before" runs) | Charged to the task-PR total. |
 
 The two options that were open in the first version of this report:
 
@@ -124,15 +129,15 @@ The `reconcile-logs.js --merges` checkpoints are the part of option 1 that was t
 
 All in `tests/live/ci-turns.js` and `tests/live/ci-wait-lib.js`, with unit tests.
 
-**1. Attribution.** A turn's PR numbers used to come from the whole call. Now a command is first reduced to the code that runs: heredoc bodies and PowerShell here-strings, the value of `--body`/`-b`/`--message`/`--title`, the script of `sed`, `.Replace(...)` and `-replace` arguments, and `echo`/`Write-Host` lines are removed. PR numbers are then taken only from the segments (split at `;`, `&&`, `||`, `|` and line breaks) that match a CI pattern: `ci-wait.js <n>`, `gh pr checks|merge|view|status <n>`, the `glab mr` equivalents. Evidence that this was wrong before: Claude cw9 turn 21 is `reconcile-logs.js --merges`, then a `sed` STATUS edit, then `gh pr create --body "...#54, #55, #56..."`; it was charged to #55 and #56. Codex after turn 42 is above. New tests: both shapes, plus a table of quoted-text shapes that must name no PR and count as no CI.
+**1. Attribution.** A turn's PR numbers used to come from the whole call. Now a command is first reduced to the code that runs (`codeView`): heredoc bodies and PowerShell here-strings, the value of `--body`/`-b`/`--message`/`--title`, the script of the `sed` segment, `.Replace(...)` and `-replace` arguments, and the own arguments of `echo`/`printf`/`Write-Host`/`Write-Output` are removed. Three limits keep this from hiding real CI calls (the first version of this fix did, found in review): a print command loses only its own arguments up to the next `;`, `&&`, `||`, `|` or line break, and a `$(...)`, backtick or `(...)` sub-expression inside it is kept because it runs (`echo $(gh pr checks 5)`, `Write-Host (gh pr checks 5)`); the sed removal stops at the end of the sed segment; and a heredoc or here-string that an interpreter reads (`bash <<EOF`, `sh`, `pwsh`, `node`, `python`, `Invoke-Expression`, `iex`) keeps its text. When in doubt the text stays, because an over-count is cosmetic and an under-count hides a CI call. PR numbers are then taken only from the segments (split at `;`, `&&`, `||`, `|` and line breaks) that match a CI pattern: `ci-wait.js <n>`, `gh pr checks|merge|view|status <n>`, the `glab mr` equivalents. Evidence that this was wrong before: Claude cw9 turn 21 is `reconcile-logs.js --merges`, then a `sed` STATUS edit, then `gh pr create --body "...#54, #55, #56..."`; it was charged to #55 and #56. Codex after turn 42 is above. New tests: both shapes, plus a table of quoted-text shapes that must name no PR and count as no CI.
 
 **2. Classification (Codex cw9 turns 26 and 40).** They are not misclassified. Both calls do end with `node .../reconcile-logs.js --merges` (the last line of the call). The first 400 characters of the command, which is all the report keeps, show only the STATUS edit, which is why it looked otherwise. The classification was right, so there is no bug to fix in that case. What I did change: a script name mentioned inside quoted text, a heredoc, a `.Replace(...)` string, a `--body` or an `echo` no longer counts as the script running. The test pins both sides: the STATUS edit alone is not a CI turn; the same edit followed by `reconcile-logs.js --merges` is one reconcile turn, tied to no PR. (That test passes on the old parser too, as expected: it protects the right behaviour.)
 
-**3. The target with no-PR turns.** The exact old rule in `evaluateTargets` was: FAIL if any task PR had more than 1 CI turn, **or** if (CI turns on task PRs) + (CI turns naming no PR) was more than the number of task PRs. Codex cw9: 5 task PRs at 1 turn each, plus 6 `reconcile-logs.js --merges` turns that name no PR, is 11 > 5, so FAIL ("11 CI turn(s) for 5 task PR(s), 6 of them not tied to a PR") although every task PR got exactly 1. Those checkpoints are required by the Director prompt and belong to no task PR, so charging them against the task PRs was a measurement error. New rule: FAIL only if some task PR has 2 or more CI turns that name it. No-PR turns get their own INFO row (count, context tokens), and the target's detail line says how many there were. **This is a measurement fix, not a softened target:** a task PR with 2 CI turns still FAILs (tests: 2 real turns with 0 no-PR turns, and 2 real turns next to 6 no-PR turns, both FAIL), and Claude and Codex "after" still FAIL it. Note: decision 0016 says the harness "stays as written"; this changes the harness rule on the Director's request (the no-PR half only).
+**3. The target with no-PR turns.** The exact old rule in `evaluateTargets` was: FAIL if any task PR had more than 1 CI turn, **or** if (CI turns on task PRs) + (CI turns naming no PR) was more than the number of task PRs. Codex cw9: 5 task PRs at 1 turn each, plus 6 `reconcile-logs.js --merges` turns that name no PR, is 11 > 5, so FAIL ("11 CI turn(s) for 5 task PR(s), 6 of them not tied to a PR") although every task PR got exactly 1. Those checkpoints are required by the Director prompt and belong to no task PR, so charging them against the task PRs was a measurement error. New rule: only reconcile-only turns (`reconcile-logs.js --merges` is the only CI kind in the turn) go uncharged. Any other no-PR CI turn is a real CI look whose PR could not be read (a `statusCheckRollup` read, `gh pr checks $n` in a loop, `ci-wait.js $n`), so it is charged: FAIL if some task PR has 2 or more CI turns that name it, or if (task-PR CI turns) + (unattributed CI reads) is more than the number of task PRs. The INFO output has two rows, "reconcile checkpoints" and "unattributed CI reads", each with count and tokens (the first version of this fix exempted every no-PR turn, which let a loop poll through; found in review). **This is a measurement fix, not a softened target:** a task PR with 2 CI turns still FAILs, and so does a loop poll (tests: 2 real turns with 0 no-PR turns, 2 real turns next to 6 reconcile turns, a `for n in 5 6; do gh pr checks $n; done` poll, and a `statusCheckRollup` read all FAIL; reconcile-only turns PASS), and Claude and Codex "after" still FAIL it. Note: decision 0016 says the harness "stays as written"; this changes the harness rule on the Director's request (the no-PR half only).
 
 ## Re-run after CW-9
 
-Plugin `54415b1` (0.6.0 plus CW-9), harness `5f9153f`, large tier, label `cw9`. The runs differ in size from the "after" runs: Claude had 4 task PRs (the three tasks plus a STATUS bookkeeping PR, #60), Codex had 5 task PRs (the three tasks, a records PR #62, and a re-review of #59 that led to a fix PR #64), with 91 turns. Totals are not directly comparable with the "after" runs; per task PR they are.
+Plugin `54415b1` (0.6.0 plus CW-9), harness `5f9153f`, large tier, label `cw9`. The runs differ in size from the "after" runs: Claude had 4 task PRs (the three tasks plus a STATUS bookkeeping PR, #60), Codex had 5 task PRs (#57, #58 and #59 are the three tasks; #62 is a records PR; **#64 is the fix PR**: the large-tier final review of the milestone PR #63 requested changes on head `5f43506` for a Unicode lowercasing bug in `slugify` (`Kelvin sign` and `dotted capital I` turn into ASCII letters), the Director sent task `-3` back, #64 ("Fix Unicode slugification") fixed it, and the final review ran again on #63 and approved head `7276c56`), plus an earlier changes-requested round on #59, with 91 turns. Totals are not directly comparable with the "after" runs; per task PR they are.
 
 | | Claude after | Claude cw9 | Codex after | Codex cw9 |
 |---|---|---|---|---|
@@ -143,7 +148,8 @@ Plugin `54415b1` (0.6.0 plus CW-9), harness `5f9153f`, large tier, label `cw9`. 
 | CI-related context tokens (share) | 466,453 (25.1%) | 563,515 (26.8%) | 543,504 (17.4%) | 826,563 (14.1%) |
 | CI turns on task PRs (tokens) | 4 (304,728) | 4 [5] (313,360 [392,468]) | 4 (255,974) | 5 (339,580) |
 | CI turns on milestone PR (tokens) | 1 (83,026) | 1 (87,513) | 1 [2] (76,014 [150,000]) | 1 (81,656) |
-| CI turns naming no PR (tokens) | 1 (78,699) | 2 [1] (162,642 [83,534]) | 3 [2] (211,516 [137,530]) | 6 (405,327) |
+| No-PR reconcile checkpoints (tokens) | 1 (78,699) | 2 [1] (162,642 [83,534]) | 3 [2] (211,516 [137,530]) | 6 (405,327) |
+| No-PR unattributed CI reads (tokens) | 0 | 0 | 0 | 0 |
 | CI turns per task PR | #36: 2, #37: 1, #38: 1 | #54: 1, #55: 1 [2], #56: 1 [2], #60: 1 | #39: 2, #40: 1, #41: 1 | #57: 1, #58: 1, #59: 1, #62: 1, #64: 1 |
 | CI tokens per task PR | 101,576 | 78,340 | 85,325 | 67,916 |
 | `--watch`, foreground / background | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 |
@@ -155,7 +161,7 @@ Targets, per run:
 | Target | Claude cw9 | Codex cw9 |
 |---|---|---|
 | No foreground `--watch` | PASS (0) | PASS (0) |
-| At most one CI-related Director turn per task PR | PASS (#54: 1, #55: 1, #56: 1, #60: 1) (old parser: FAIL, #55: 2, #56: 2) | PASS (#57, #58, #59, #62, #64: 1 each) (old rule: FAIL, "11 CI turn(s) for 5 task PR(s)") |
+| At most one CI-related Director turn per task PR | PASS (#54: 1, #55: 1, #56: 1, #60: 1; 2 reconcile checkpoints not charged, 0 unattributed reads) (old parser: FAIL, #55: 2, #56: 2) | PASS (#57, #58, #59, #62, #64: 1 each; 6 reconcile checkpoints not charged, 0 unattributed reads) (old rule: FAIL, "11 CI turn(s) for 5 task PR(s)") |
 | Reviewer `ci: pending` only on timeout | PASS (5 reviews, all green) | **FAIL** (1 pending of 10: see below) |
 | Milestone not reported complete before its PR checks finished | PASS (35 s after) | PASS (64 s after) |
 
@@ -165,12 +171,12 @@ The six no-PR turns in Codex cw9 (turns 26, 33, 40, 47, 63, 83) are all `reconci
 
 ### New miss: Codex cw9, "reviewer pending only on timeout"
 
-The pending review is the first review of task `-3` (slugify), head `d68bde5`. The reviewer's `review-json` (in the Director transcript and in `reviews.jsonl`) says:
+The pending review is the first review of task `-3` (slugify), PR #59, head `d68bde5` (the first head of #59; the second round approved head `fe5d56c`, which is the one merged). The reviewer's `review-json` (in the Director transcript and in `reviews.jsonl`) says:
 
 - `verdict: changes_requested`, `severity: major`, one blocking finding (`missing-tests`: no non-ASCII input test), `tests_passed: true`,
 - `ci: pending`, `summary: "The suite passes, but the ASCII-only boundary lacks required coverage; CI was not waited: changes requested."`
 
-What happened: the reviewer did not time out. It followed `agents/reviewer.md` ("Waiting for CI": for a blocking finding, don't do the full wait; run `ci-wait.js <n> --once --sha <head_sha>` once, and if it shows pending put "not waited: changes requested" in `summary`; and the `ci` field text: "The one other case is the blocking-finding single check above, marked 'not waited: changes requested'"). The Director sent the PR back, and the later review of the fix reported green. So the reviewer behaved as written, and **the harness misread it**: `reviewStats` in `tests/live/ci-wait-lib.js` counts every `ci: pending` that does not state a wait of at least `TIMEOUT_MIN` minutes as a violation, and never looks at the verdict or at the documented exception.
+What happened: the reviewer did not time out. It followed `agents/reviewer.md` ("Waiting for CI": for a blocking finding, don't do the full wait; run `ci-wait.js <n> --once --sha <head_sha>` once, and if it shows pending put "not waited: changes requested" in `summary`; and the `ci` field text: "The one other case is the blocking-finding single check above, marked 'not waited: changes requested'"). The Director sent #59 back (attempt 2), and the review of the fix reported green. So the reviewer behaved as written, and **the harness misread it**: `reviewStats` in `tests/live/ci-wait-lib.js` counts every `ci: pending` that does not state a wait of at least `TIMEOUT_MIN` minutes as a violation, and never looks at the verdict or at the documented exception.
 
 Recommended change (not made here, as asked; I did not touch `agents/reviewer.md`):
 

@@ -340,3 +340,72 @@ test('ci-turns: a STATUS edit only is not a reconcile turn; the same call that e
   nodeAssert.deepStrictEqual(r.turns.map((t) => t.ci), [false, true]);
   eq(r.ci.unattributed.turns, 1, 'the second turn is the one reconcile turn, tied to no PR');
 });
+
+test('ci-turns: real CI calls chained after echo/printf/Write-Host, or inside them, still count and still name their PR', () => {
+  const real = [
+    'echo "== checks =="; gh pr checks 5',
+    'echo done && node ci-wait.js 5 --once',
+    'Write-Host "x"; node ci-wait.js 5 --once',
+    'printf x; gh pr checks 5',
+    'echo $(gh pr checks 5)',
+    'echo "result: $(gh pr checks 5)"',
+    'Write-Host (gh pr checks 5)',
+    'echo "a" | gh pr checks 5',
+    'echo one\nWrite-Output "two"\ngh pr checks 5',
+    'text(await tools.exec_command({cmd:"echo start; gh pr checks 5",max_output_tokens:500}));',
+  ];
+  for (const c of real) {
+    nodeAssert.deepStrictEqual(T.ciKinds(c).length > 0, true, `counts as CI: ${c}`);
+    nodeAssert.deepStrictEqual(T.prNumbers(c), ['5'], `names PR 5: ${c}`);
+  }
+  nodeAssert.deepStrictEqual(T.ciKinds('echo "==checks== gh pr checks 5"; echo done'), [], 'control: the same words only printed are not CI');
+  nodeAssert.deepStrictEqual(T.ciKinds('echo "(gh pr checks 5)"'), [], 'control: parentheses inside a quoted string do not run');
+});
+
+test('ci-turns: sed only loses its own script; a later call keeps its quoted path', () => {
+  const c = 'sed -n 1,40p STATUS.md; node "$P/scripts/ci-wait.js" 5 --once';
+  nodeAssert.deepStrictEqual(T.ciKinds(c), ['ci-wait']);
+  nodeAssert.deepStrictEqual(T.prNumbers(c), ['5']);
+  const d = "sed -i 's/a/b/; s/c/d/' STATUS.md && node \"$P/scripts/ci-wait.js\" 6 --once";
+  nodeAssert.deepStrictEqual(T.prNumbers(d), ['6'], 'a script with ; inside is still removed, the call after it stays');
+  nodeAssert.deepStrictEqual(T.ciKinds("sed -i 's/gh pr checks 5/x/' STATUS.md"), [], 'control: the script itself is data');
+});
+
+test('ci-turns: a heredoc or here-string that an interpreter runs keeps its text', () => {
+  nodeAssert.deepStrictEqual(T.prNumbers('bash <<EOF\ngh pr checks 5\nEOF'), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("sh <<'EOF'\nnode ci-wait.js 5 --once\nEOF"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("bash -s <<'EOF'\ngh pr checks 5\nEOF"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("$c=@'\ngh pr checks 5\n'@; Invoke-Expression $c"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("$c=@'\ngh pr checks 5\n'@\niex $c"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("@'\ngh pr checks 5\n'@ | pwsh -Command -"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("node - <<'EOF'\nrequire('child_process').execSync('gh pr checks 5')\nEOF"), ['5']);
+  // controls: data-only heredocs are still removed (a file name ending in .sh is not an interpreter)
+  nodeAssert.deepStrictEqual(T.ciKinds("cat > run.sh <<'EOF'\ngh pr checks 5\nEOF"), []);
+  nodeAssert.deepStrictEqual(T.ciKinds("cat <<'EOF' > notes.md\ngh pr checks 5\nEOF"), []);
+  nodeAssert.deepStrictEqual(T.ciKinds("$n=@'\ngh pr checks 5\n'@; Set-Content notes.md $n"), []);
+});
+
+test('ci-turns: a no-PR turn is reconcile-only or a CI read; a loop poll is a read and fails the per-PR target, reconcile checkpoints do not', () => {
+  const L = require('./live/ci-wait-lib.js');
+  const gate = (n) => `node ci-wait.js ${n} --once --sha abc${n} && gh pr merge ${n} --squash`;
+  const mk = (extra) => T.parseClaudeStream([
+    asst('m1', [bash('a', gate(5), false)], usage(1, 100, 0)),
+    asst('m2', [bash('b', gate(6), false)], usage(1, 200, 0)),
+    ...extra,
+  ]);
+  const pick = (r) => L.evaluateTargets({ summary: r, taskPrs: ['5', '6'], reviews: { total: 0, byCi: {}, pending: [] }, milestone: { reported: null }, breakdown: L.ciBreakdown(r.turns, { taskPrs: ['5', '6'], milestonePrs: [] }) });
+  const base = mk([]);
+  eq(pick(base)[1].result, 'PASS', 'control: one gate per PR');
+  const rec = mk([asst('m3', [bash('c', 'node reconcile-logs.js --merges', false)], usage(1, 300, 0)), asst('m4', [bash('d', 'node reconcile-logs.js --merges', false)], usage(1, 400, 0))]);
+  eq(rec.ci.noPr.reconcile.turns, 2, 'precondition: two reconcile-only turns were seen');
+  eq(pick(rec)[1].result, 'PASS', 'reconcile checkpoints are not charged');
+  const loop = mk([asst('m3', [bash('c', 'for n in 5 6; do gh pr checks $n; done', false)], usage(1, 300, 0))]);
+  eq(loop.ci.noPr.reads.turns, 1, 'precondition: the loop poll names no PR and is a read');
+  eq(loop.ci.noPr.reconcile.turns, 0, 'and is not a reconcile turn');
+  const lt = pick(loop);
+  eq(lt[1].result, 'FAIL', 'a loop poll is a CI look that cannot be pinned on one PR: charged, 3 turns for 2 PRs');
+  assert(/1 unattributed CI read\(s\)/.test(lt[1].detail), lt[1].detail);
+  const rollup = mk([asst('m3', [bash('c', 'gh pr list --json number,statusCheckRollup', false)], usage(1, 300, 0))]);
+  eq(pick(rollup)[1].result, 'FAIL', 'a statusCheckRollup read is charged');
+  eq(pick(mk([asst('m3', [bash('c', 'node reconcile-logs.js --merges; gh pr checks 9', false)], usage(1, 300, 0))]))[1].result, 'PASS', 'a turn that names another PR (9) is not a no-PR turn');
+});
