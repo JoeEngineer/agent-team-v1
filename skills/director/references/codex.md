@@ -115,6 +115,8 @@ On Windows the merge call is the PowerShell 5.1 form from `merging.md` ("The mer
 node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)." } }
 ```
 
+On the first task PR whose CI has run, prefix that call with `node "<plugin root>\scripts\ci-wait.js" --names <n>; ` (PowerShell `;` continues whatever `--names` returns). If the reviewer reported `pending`, put the prefix on the queue call, or on the followup's shell call if it has one; it is never a call of its own (`merging.md`, "First task PR: the names").
+
 ## Reviews
 
 When hooks are active, the hook logs `review-json` from `SubagentStop`. When hooks are off, log each verdict yourself with `log-event.js review`. Never both, or the log gets duplicate review lines.

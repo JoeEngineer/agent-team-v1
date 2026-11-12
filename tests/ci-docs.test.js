@@ -128,6 +128,25 @@ test('templates: the CI line says names and auto-merge are recorded in STATUS.md
   }
 });
 
+test('director docs: --names rides the first merge-gate call with a plain ; and is never a call of its own (decision 0016)', () => {
+  const dskill = read('skills/director/SKILL.md');
+  const merging = read('skills/director/references/merging.md');
+  const sh = 'node "<plugin root>/scripts/ci-wait.js" --names <n>; node "<plugin root>/scripts/ci-wait.js" <n> --once --sha <head_sha> && gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha> && gh pr comment <n>';
+  const ps = 'node "<plugin root>\\scripts\\ci-wait.js" --names <n>; node "<plugin root>\\scripts\\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n>';
+  assert(merging.includes(sh), 'sh prefixed shape');
+  assert(merging.includes(ps), 'PowerShell prefixed shape');
+  assert(merging.includes('there is no merge call: put `--names <n>;` in front of the queue call (`--auto`)'), 'pending case');
+  assert(dskill.includes('prefix that PR\'s merge call with `node "<plugin root>/scripts/ci-wait.js" --names <n>;`'), 'SKILL prefix rule');
+  assert(dskill.includes('Never run `--names` as a call of its own.'), 'SKILL never standalone');
+  // Every `ci-wait.js" --names <n>` command in the two files is followed by `;`, so none stands alone.
+  for (const [name, text] of [['SKILL.md', dskill], ['merging.md', merging]]) {
+    const all = text.match(/ci-wait\.js" --names <n>/g) || [];
+    const prefixed = text.match(/ci-wait\.js" --names <n>;/g) || [];
+    assert(all.length >= 1, `${name}: no --names command at all`);
+    eq(prefixed.length, all.length, `${name}: a --names command without the ; prefix`);
+  }
+});
+
 test('plugin manifests are 0.6.0', () => {
   eq(JSON.parse(read('plugin.json')).version, '0.6.0', 'plugin.json version');
   eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '0.6.0', '.claude-plugin/plugin.json version');
