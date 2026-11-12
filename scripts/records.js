@@ -245,10 +245,18 @@ const driftMessage = (id, drift) => `agent-team: task ${id} changed ${Object.ent
 // Ask the forge what happened to the request instead of guessing from command
 // output: the Director often chains a merge with other commands whose output
 // mentions "error" or "failed". Returns forge.requestInfo's normalized shape,
-// or null if gh/glab can't answer.
-function prState(input, { forge: which = 'github', target, repo }) {
-  return forge.requestInfo(which, { target, repo }, input.cwd || lib.projectDir(input), 7000);
+// or null if gh/glab can't answer. `timeout` is the call's limit in ms.
+function prState(input, { forge: which = 'github', target, repo }, timeout = FORGE_CALL_MS) {
+  return forge.requestInfo(which, { target, repo }, input.cwd || lib.projectDir(input), timeout);
 }
+
+// The merge logger runs in a PostToolUse hook that Claude Code kills after 10 s
+// (hooks/hooks.json). All its forge calls in one run share HOOK_BUDGET_MS, each
+// capped at FORGE_CALL_MS; a call with less than MIN_CALL_MS left is not
+// started. Node's own start-up and the log writes fit in what is left.
+const FORGE_CALL_MS = 7000;
+const HOOK_BUDGET_MS = 7500;
+const MIN_CALL_MS = 500;
 
 function mergeOutcome(state) {
   if (!state) return 'unknown';
@@ -450,8 +458,9 @@ function glabCancels(cmd) {
 }
 
 // Log every merge in a shell command to merges.jsonl, asking the forge what
-// happened. Returns the text for the Director (warnings), or undefined; the
-// same text also goes to stderr.
+// happened. Returns the text for the Director (warnings), or undefined. Each
+// warning also goes to stderr as soon as it is known, so a hook killed later
+// still leaves it in the hook log.
 function logMerges(input, tool = 'claude') {
   const cmd = (input.tool_input && input.tool_input.command) || '';
   // Cheap pre-check only; flags may sit between the words (`glab mr -R g/p merge`).
@@ -460,6 +469,15 @@ function logMerges(input, tool = 'claude') {
   const gates = mergeGates(cmd);
   const cwd = input.cwd || lib.projectDir(input);
   const warnings = [];
+  const warn = (text) => { warnings.push(text); process.stderr.write(`${text}\n`); };
+  // One deadline for every forge call of this run: the limit for the next call,
+  // or 0 when there is no longer time to start one.
+  const deadline = Date.now() + HOOK_BUDGET_MS;
+  const callMs = () => {
+    const left = deadline - Date.now();
+    return left < MIN_CALL_MS ? 0 : Math.min(FORGE_CALL_MS, left);
+  };
+  const NOT_CHECKED = 'not checked: the hook\'s time for forge calls ran out';
   const mergesFile = () => path.join(lib.logDir(input), 'merges.jsonl');
   const mineOf = (which, pr) => (r) => forgeOf(r) === which && String(r.pr) === String(pr);
 
@@ -471,21 +489,28 @@ function logMerges(input, tool = 'claude') {
   // the queued line open and warns (a push now could be auto-merged unreviewed).
   const cancelled = (m, target) => {
     const which = m.forge;
-    const st = forge.requestStatus(which, target, cwd, 7000, undefined, { resolution: true, repo: m.repo || null });
-    const pr = st.ok && st.number != null ? st.number : target;
     const noun = forge.noun(which);
-    const label = `${noun} ${pr == null ? '(current branch)' : pr}`;
     const what = which === 'gitlab' ? 'the glab cancel_merge_when_pipeline_succeeds call' : '`gh pr merge --disable-auto`';
-    const check = which === 'gitlab'
+    const checkOf = (pr) => (which === 'gitlab'
       ? `glab mr view ${pr == null ? '' : `${pr} `}--output json (merge_when_pipeline_succeeds)`
-      : `gh pr view ${pr == null ? '' : `${pr} `}--json autoMergeRequest`;
+      : `gh pr view ${pr == null ? '' : `${pr} `}--json autoMergeRequest`);
+    const labelOf = (pr) => `${noun} ${pr == null ? '(current branch)' : pr}`;
+    const ms = callMs();
+    if (!ms) {
+      warn(`agent-team: WARNING: auto-merge may still be on for ${labelOf(target)}: ${what} ran, but it was ${NOT_CHECKED}. ` +
+        `Verify with \`${checkOf(target)}\` before any push to this ${noun}; the queued line in merges.jsonl stays open.`);
+      return;
+    }
+    const st = forge.requestStatus(which, target, cwd, ms, undefined, { resolution: true, repo: m.repo || null });
+    const pr = st.ok && st.number != null ? st.number : target;
+    const label = labelOf(pr);
     const known = st.ok && ['OPEN', 'MERGED', 'CLOSED'].includes(st.state);
     if (!known || (st.state === 'OPEN' && st.auto_merge)) {
       const why = !st.ok ? `${forge.viewCommand(which)} couldn't answer (${st.error})`
         : !known ? `${forge.viewCommand(which)} reported state ${st.state}`
           : `${forge.viewCommand(which)} says auto-merge is still on`;
-      warnings.push(`agent-team: WARNING: auto-merge may still be on for ${label}. ${what} ran, but ${why}. ` +
-        `Do not push to this ${noun} until \`${check}\` shows auto-merge off; the queued line in merges.jsonl stays open.`);
+      warn(`agent-team: WARNING: auto-merge may still be on for ${label}. ${what} ran, but ${why}. ` +
+        `Do not push to this ${noun} until \`${checkOf(pr)}\` shows auto-merge off; the queued line in merges.jsonl stays open.`);
       return;
     }
     const rows = readJsonl(mergesFile());
@@ -521,7 +546,7 @@ function logMerges(input, tool = 'claude') {
     if (!q) return;
     const res = resolutionOf(q, st, label);
     appendOnce(input, 'merges.jsonl', 'resolution_id', { ...common, ...res.fields, note: 'checked after a cancel', ...tail });
-    if (res.warn) warnings.push(`agent-team: ${res.text}`);
+    if (res.warn) warn(`agent-team: ${res.text}`);
   };
 
   // Only real `gh pr merge` / `glab mr merge` segments count, not the words
@@ -529,8 +554,14 @@ function logMerges(input, tool = 'claude') {
   lib.findMerges(cmd).forEach((m, i) => {
     // `gh pr merge N --disable-auto` cancels a queued merge; it is not a merge.
     if (m.forge === 'github' && boolFlag(m.args, '--disable-auto')) return cancelled(m, m.target);
-    const state = prState(input, m);
+    const ms = callMs();
+    const state = ms ? prState(input, m, ms) : null;
     const auto = isAutoMerge(m);
+    if (!ms) {
+      const view = (m.forge === 'gitlab' ? ['glab mr view', m.target, '--output json'] : ['gh pr view', m.target, '--json state,autoMergeRequest']).filter(Boolean).join(' ');
+      warn(`agent-team: WARNING: the outcome of ${forge.noun(m.forge)} ${m.target || '(current branch)'}'s merge was ${NOT_CHECKED}; it is logged as unknown. ` +
+        `Verify with \`${view}\`${auto ? ': if auto-merge is queued, reconcile-logs.js will not track it' : ''}.`);
+    }
     const outcome = mergeOutcome(state);
     const pr = state && state.number != null ? String(state.number) : m.target;
     let head = auto ? matchHead(m) : null;
@@ -549,7 +580,7 @@ function logMerges(input, tool = 'claude') {
       ignored = gate;
       gate = null;
       if (outcome === 'merged') {
-        warnings.push(`agent-team: WARNING: ${forge.noun(m.forge)} ${pr} was merged directly after \`ci-wait.js --queue-check\`, which passes on pending CI; it is not a green gate. ` +
+        warn(`agent-team: WARNING: ${forge.noun(m.forge)} ${pr} was merged directly after \`ci-wait.js --queue-check\`, which passes on pending CI; it is not a green gate. ` +
           'Check its CI now. Gate a direct merge with `ci-wait.js <n> --once --sha <head_sha>`.');
       }
     }
@@ -566,14 +597,12 @@ function logMerges(input, tool = 'claude') {
       ...(carried ? { match_head_from_ts: carried } : {}),
       ...(gate ? { gate } : {}),
       ...(ignored ? { gate_ignored: ignored } : {}),
+      ...(ms ? {} : { note: NOT_CHECKED }),
       chained,
     });
   });
   for (const c of glabCancels(cmd)) cancelled(c, c.target);
-  if (!warnings.length) return undefined;
-  const text = warnings.join('\n');
-  process.stderr.write(`${text}\n`);
-  return text;
+  return warnings.length ? warnings.join('\n') : undefined;
 }
 
 // ---------------------------------------------------------------------------

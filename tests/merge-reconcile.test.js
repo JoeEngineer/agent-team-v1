@@ -524,6 +524,61 @@ test('glab cancel that glab does not confirm: no line, warning names the glab ch
   eq(closed.outcome, 'closed', 'closed'); eq(closed.pr, '30', 'pr from the forge'); eq(closed.resolution_id.startsWith('github:30:'), true, 'resolves PR 30');
 });
 
+// Review of #103: each forge call had its own 7 s limit, so two cancels against
+// a hanging gh took 14 s, and Claude Code kills the PostToolUse hook at 10 s,
+// losing both warnings. All calls of one run now share one deadline.
+function hangingLog(command, routes, queuedPrs) {
+  const p = tmpProject();
+  const logs = path.join(p, '.agent-team', 'logs');
+  fs.writeFileSync(path.join(logs, 'merges.jsonl'), queuedPrs.map((n) => JSON.stringify(queued(n, `2026-11-01T10:0${n % 10}:00.000Z`, { match_head: SHA }))).join('\n') + '\n');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-hang-'));
+  fs.writeFileSync(path.join(dir, 'routes.json'), JSON.stringify(routes));
+  const env = {
+    AGENT_TEAM_FAKE_GH: FAKE_CI, FAKE_CI_ROUTES: path.join(dir, 'routes.json'), FAKE_CI_STATE: path.join(dir, 'state.json'),
+    FAKE_CI_LOG: path.join(dir, 'calls.log'), FAKE_CI_PID: path.join(dir, 'pids.txt'),
+  };
+  const t0 = Date.now();
+  const r = logMerge(p, command, env);
+  const elapsed = Date.now() - t0;
+  const read = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), 'utf8').trim().split('\n').filter(Boolean) : []);
+  return { r, elapsed, rows: readLog(p, 'merges.jsonl'), calls: read('calls.log').map((l) => JSON.parse(l)), pids: read('pids.txt').map(Number) };
+}
+const ctxOf = (r) => JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+
+test('hook budget: two cancels against a hanging gh end under 9 s, with a warning for each; the queued lines stay open', () => {
+  const h = hangingLog('gh pr merge 11 --disable-auto; gh pr merge 12 --disable-auto', { 'view:11': { hang: true }, 'view:12': { hang: true } }, [11, 12]);
+  eq(h.pids.length >= 1, true, 'precondition: the stand-in gh started hanging');
+  eq(h.r.status, 0, `hook exit (stderr: ${h.r.stderr})`);
+  assert(h.elapsed < 9000, `took ${h.elapsed} ms; Claude Code kills the hook at 10 s`);
+  const ctx = ctxOf(h.r);
+  assert(/auto-merge may still be on for PR 11\. `gh pr merge --disable-auto` ran, but gh pr view couldn't answer \(timed out\)/.test(ctx), ctx);
+  assert(/auto-merge may still be on for PR 12/.test(ctx), ctx);
+  assert(/`gh pr view 12 --json autoMergeRequest`/.test(ctx), ctx);
+  for (const n of [11, 12]) assert(h.r.stderr.includes(`auto-merge may still be on for PR ${n}`), `stderr has PR ${n}: ${h.r.stderr}`);
+  eq(h.rows.length, 2, 'nothing written: both queued lines stay open');
+  eq(JSON.stringify(require(path.join(SCRIPTS, 'records.js')).openQueued(h.rows).map((x) => x.pr)), '["11","12"]', 'both still open for reconcile');
+});
+
+test('hook budget: a slow merge then a cancel: the merge is logged unknown, the cancel is "not checked" with the check to run, all under 9 s', () => {
+  const h = hangingLog('gh pr merge 13 --squash && gh pr merge 11 --disable-auto', { 'view:13': { hang: true }, 'view:11': prJson('OPEN', { auto: false }) }, [11]);
+  eq(h.calls.length, 1, 'precondition: only the merge lookup ran; the cancel lookup was skipped');
+  eq(h.calls[0][2], '13', 'the merge lookup was for PR 13');
+  assert(h.elapsed < 9000, `took ${h.elapsed} ms`);
+  const ctx = ctxOf(h.r);
+  assert(/auto-merge may still be on for PR 11: `gh pr merge --disable-auto` ran, but it was not checked: the hook's time for forge calls ran out\. Verify with `gh pr view 11 --json autoMergeRequest`/.test(ctx), ctx);
+  const merge = h.rows.find((x) => x.pr === '13');
+  eq(merge.outcome, 'unknown', 'the slow merge is logged as unknown');
+  eq(h.rows.filter((x) => x.outcome === 'auto-merge-cancelled').length, 0, 'no cancelled line for the unchecked cancel');
+  // The other order: the cancel hangs, so the merge after it is not looked up.
+  const h2 = hangingLog('gh pr merge 11 --disable-auto; gh pr merge 13 --auto --squash', { 'view:11': { hang: true }, 'view:13': prJson('OPEN', { auto: true }) }, [11]);
+  assert(h2.elapsed < 9000, `took ${h2.elapsed} ms`);
+  eq(h2.calls.length, 1, 'only the cancel lookup ran');
+  const m13 = h2.rows.find((x) => x.pr === '13');
+  eq(m13.outcome, 'unknown', 'skipped merge: unknown'); eq(m13.note, "not checked: the hook's time for forge calls ran out", 'note');
+  const ctx2 = ctxOf(h2.r);
+  assert(/PR 11/.test(ctx2) && /the outcome of PR 13's merge was not checked.*`gh pr view 13 --json state,autoMergeRequest`: if auto-merge is queued, reconcile-logs\.js will not track it/.test(ctx2), ctx2);
+});
+
 test('a cancel in another repo asks that repo: gh -R o/r, and glab api projects/<encoded path>', () => {
   const p = tmpProject();
   const ghArgs = path.join(p, 'gh-args.jsonl');

@@ -27,7 +27,8 @@
 // that queues an auto-merge (`gh pr merge --auto` / `glab mr merge --auto-merge`).
 // Those merge at once when nothing makes them wait, so a queue is safe only
 // when the forge itself holds the merge for CI. Exit 0 (queueable) only when
-// the head equals --sha (else 4), nothing is red (else 1), and
+// the head equals --sha (else 4), nothing is red (else 1), the request is open
+// (else 5), and
 //   GitHub: the base requires a non-empty list of checks and the head runs (or
 //           has queued) every one of them (else 5);
 //   GitLab: the project setting "Pipelines must succeed"
@@ -69,9 +70,10 @@ const USAGE = [
   '       (--call-timeout <s>=30 limits one gh/glab call)',
   'exit: 0 green, 1 red, 8 pending, 3 none, 4 head moved, 2 unknown/error.',
   '--queue-check exit: 0 queueable, 1 red, 2 unknown (required checks or setting unreadable),',
-  '  4 head moved, 5 not queueable (GitHub: no required checks, or a required check the head',
-  '  does not run; GitLab: "Pipelines must succeed" is off). --sha is required; it can not be',
-  '  combined with --once, --names, --allow-none or --timeout.',
+  '  4 head moved, 5 not queueable (the request is not open; GitHub: no required checks, or',
+  '  a required check the head does not run; GitLab: "Pipelines must succeed" is off, or no',
+  '  pipeline on the MR head). --sha is required; it can not be combined with --once,',
+  '  --names, --allow-none or --timeout.',
   '--allow-none turns 3 into 0; with --once only when --sha is given and matches.',
   'required: [...] = the checks the base requires; null = none required, all checks',
   'count. Required checks that cannot be read (e.g. 403) give unknown (exit 2).',
@@ -398,7 +400,12 @@ function queueCheck(ctx, n) {
   // What stops the queue, worst first: unreadable (2), red (1), not queueable (5).
   let unreadable = null;
   let notQueueable = null;
-  if (ciCode === EXIT_OF.unknown) unreadable = (r.required && r.required.unreadable && r.required.note) || 'CI state unknown';
+  // GitLab's pipeline, as the forge layer reads it (status null = no pipeline).
+  const pipeline = r.status.pipeline || null;
+  const pipelineNote = pipeline && pipeline.status ? forgeLib.gitlabPipelineCi(pipeline.status).note : '';
+  if (ciCode === EXIT_OF.unknown) {
+    unreadable = (r.required && r.required.unreadable && r.required.note) || pipelineNote || 'CI state unknown';
+  }
   if (r.status.state && r.status.state !== 'OPEN') notQueueable = `${forgeLib.noun(ctx.forge)} is ${r.status.state}`;
   if (ctx.forge === 'gitlab') {
     const s = forgeLib.repoSettings(ctx.forge, ctx.cwd, ctx.opts.callTimeout * 1000, runnerUntil(ctx, null));
@@ -406,7 +413,9 @@ function queueCheck(ctx, n) {
     if (!s.ok) unreadable = unreadable || `could not read ${setting}: ${s.error}`;
     else if (s.only_allow_merge_if_pipeline_succeeds === null) unreadable = unreadable || `could not read ${setting}: not in the project JSON this token sees`;
     else if (!s.only_allow_merge_if_pipeline_succeeds) notQueueable = notQueueable || `${setting} is off, so glab mr merge --auto-merge may merge without a green pipeline`;
-    if (rec.ci === 'none') notQueueable = notQueueable || 'no pipeline on the MR head, so the auto-merge has nothing to wait for';
+    if (rec.ci === 'none') {
+      notQueueable = notQueueable || `${pipelineNote || 'no pipeline on the MR head'}, so the auto-merge has nothing to wait for`;
+    }
   } else if (!unreadable) {
     const names = r.required.names;
     if (!names || !names.length) {

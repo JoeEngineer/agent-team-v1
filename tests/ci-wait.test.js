@@ -789,6 +789,32 @@ test('queue-check (GitHub): required checks unreadable (403, admin-only protecti
   eq(exec(Q(), gh(pr([running('build')]), { rules: rules('build') })).code, 0, 'readable again -> 0');
 });
 
+test('queue-check (GitHub): a required set from classic branch protection only (no rulesets): present -> 0, missing -> 5, admin-only 403 -> 2', () => {
+  const classic = (...contexts) => JSON.stringify({ strict: false, contexts, checks: [] });
+  const present = exec(Q(), gh(pr([running('ci/legacy')]), { rules: rules(), protection: classic('ci/legacy') }));
+  eq(JSON.stringify(present.rec.required), '["ci/legacy"]', 'precondition: the set came from classic protection alone');
+  eq(present.code, 0, 'present and pending -> queueable');
+  const missing = exec(Q(), gh(pr([ok('build')]), { rules: rules(), protection: classic('ci/legacy') }));
+  eq(missing.code, 5, 'missing -> not queueable');
+  assert(/required check ci\/legacy not run by the head/.test(missing.rec.queue_reason), missing.rec.queue_reason);
+  const admin = exec(Q(), gh(pr([running('ci/legacy')]), { rules: rules(), protection: ADMIN_ONLY }));
+  eq(admin.code, 2, 'admin-only 403 -> unknown');
+  assert(/reading classic branch protection needs admin rights/.test(admin.rec.queue_reason), admin.rec.queue_reason);
+});
+
+test('queue-check (GitLab): a skipped pipeline is 5 and says so; a manual one is 0; an unrecognised status is 2 and names it', () => {
+  const on = JSON.stringify({ only_allow_merge_if_pipeline_succeeds: true });
+  const skipped = exec(Q('12'), { view: mr('skipped'), project: on }, { forgeName: 'gitlab' });
+  eq(skipped.code, 5, 'skipped');
+  assert(/^pipeline was skipped, so the auto-merge has nothing to wait for$/.test(skipped.rec.queue_reason), skipped.rec.queue_reason);
+  const manual = exec(Q('12'), { view: mr('manual'), project: on }, { forgeName: 'gitlab' });
+  eq(manual.rec.ci, 'pending', 'precondition: manual reads as pending');
+  eq(manual.code, 0, 'manual: the auto-merge waits for it');
+  const odd = exec(Q('12'), { view: mr('brand_new_state'), project: on }, { forgeName: 'gitlab' });
+  eq(odd.code, 2, 'unrecognised -> unknown');
+  assert(/unrecognised pipeline status 'brand_new_state'/.test(odd.rec.queue_reason), odd.rec.queue_reason);
+});
+
 test('queue-check: a request that cannot be read, or one already merged or closed', () => {
   const dead = exec(Q(), gh(NOT_LOGGED_IN));
   eq(dead.code, 2, 'view failed -> 2');

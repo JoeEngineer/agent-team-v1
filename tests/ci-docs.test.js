@@ -277,6 +277,19 @@ test('director docs: backticks balance on every line outside fenced code blocks'
   eq(odd('a `b` c\n(1)`nothing is queued (when `x` row)').join(','), '2', 'detector flags a stray backtick');
 });
 
+test('merging.md and coach.md describe the CW-10 reconcile and logger lines (head moved at merge, empty --merges, unconfirmed cancel, new merge fields)', () => {
+  const merging = read('skills/director/references/merging.md');
+  assert(merging.includes('`WARNING: PR <n> merged at <X>, not the reviewed <Y>: check it`') && merging.includes('It is not a clean merge') && merging.includes('tell the user'), 'head moved at merge');
+  assert(merging.includes('`no queued merges (N merge lines in <path>)`'), 'nothing queued');
+  assert(merging.includes('`no merges.jsonl at <path>; hooks may be off`') && merging.includes('Tell the user the hooks may be off'), 'missing log');
+  assert(merging.includes('`auto-merge may still be on for PR <n>`') && merging.includes('`gh pr view <n> --json autoMergeRequest`'), 'unconfirmed cancel');
+  assert(merging.includes('no pipeline on the MR head') && merging.includes('the request is not open'), 'exit 5 causes');
+  const coach = read('agents/coach.md');
+  for (const word of ['`ci-wait`', '`gh-checks`', '`ci-wait-queue`', '`gate_ignored: "ci-wait-queue"`', '`head_moved: true`', '`merged_head`', '`match_head_from_ts`', '`note: "checked after a cancel"`']) {
+    assert(coach.includes(word), `coach.md names ${word}`);
+  }
+});
+
 test('plugin manifests are 0.6.0', () => {
   eq(JSON.parse(read('plugin.json')).version, '0.6.0', 'plugin.json version');
   eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '0.6.0', '.claude-plugin/plugin.json version');

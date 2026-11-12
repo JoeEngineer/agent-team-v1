@@ -81,19 +81,34 @@ function hasLocalBranch(name, cwd) {
   }
 }
 
+// git accepts any unambiguous prefix of a long option (`git push --mirr` is
+// --mirror, `--del` is --delete) and `--opt=value`. True when a long flag may be
+// `option`: it is `--` plus at least one letter and, without its `=value`, a
+// prefix of `option`. A prefix shared with another option is ambiguous to git,
+// which then refuses to run, so treating it as `option` only refuses a command
+// git would refuse anyway.
+function longFlagIs(flag, option) {
+  if (!/^--[^-=]/.test(flag)) return false;
+  const name = flag.split('=')[0];
+  return option.startsWith(name);
+}
+const anyLongFlag = (flags, ...options) => flags.some((f) => options.some((o) => longFlagIs(f, o)));
+// A short-option cluster containing `letter` (`-vd` is -v -d).
+const shortHas = (flags, letter) => flags.some((f) => /^-[a-zA-Z]+$/.test(f) && f.slice(1).includes(letter));
+
 function checkGitPush(args, cwd) {
   const flags = args.filter((a) => a.startsWith('-'));
   const positional = args.filter((a) => !a.startsWith('-'));
-  if (flags.some((f) => /^(-f|--force|--force-with-lease|--force-if-includes)(=|$)/.test(f) || /^-[a-zA-Z]*f/.test(f))) {
+  if (anyLongFlag(flags, '--force', '--force-with-lease', '--force-if-includes') || flags.some((f) => /^-[a-zA-Z]*f/.test(f))) {
     block('force-push');
   }
-  if (flags.includes('--mirror')) block('`git push --mirror` overwrites and deletes branches on the remote');
-  if (flags.includes('--prune')) block('`git push --prune` deletes branches on the remote');
-  if (flags.includes('--all') || flags.includes('--branches')) {
+  if (anyLongFlag(flags, '--mirror')) block('`git push --mirror` overwrites and deletes branches on the remote');
+  if (anyLongFlag(flags, '--prune')) block('`git push --prune` deletes branches on the remote');
+  if (anyLongFlag(flags, '--all', '--branches')) {
     const local = PROTECTED.find((b) => hasLocalBranch(b, cwd));
     if (local) block(`\`git push --all\` would push protected branch "${local}"`);
   }
-  const deleting = flags.some((f) => f === '-d' || f === '--delete');
+  const deleting = anyLongFlag(flags, '--delete') || shortHas(flags, 'd');
   const refspecs = positional.slice(1); // first positional is the remote
   for (const spec of refspecs) {
     if (spec.startsWith('+')) block(`force refspec "${spec}"`);
@@ -114,7 +129,12 @@ function checkGitPush(args, cwd) {
 // `git add -A` / `git add .` would commit agent worktrees under .claude/worktrees/
 // or .agent-team/worktrees/ as gitlinks. Block it only while that folder exists and isn't ignored.
 function checkGitAdd(args, cwd) {
-  const all = args.some((a) => a === '-A' || a === '--all' || a === '.' || a === ':/' || /^-[a-zA-Z]*A/.test(a));
+  // -A in a cluster; --all, its alias --no-ignore-removal, or an abbreviation
+  // of either; or a pathspec for the whole tree: `.`, `./`, `.\`, `:/`, `:/.`,
+  // `:(top)`, or `*` (PowerShell passes it to git unexpanded, and git's
+  // pathspec `*` matches every path).
+  const all = args.some((a) => /^-[a-zA-Z]*A/.test(a) || longFlagIs(a, '--all') || (a.length > 4 && longFlagIs(a, '--no-ignore-removal')) ||
+    /^(?:\.[\\/]*|:[\\/]\.?|:\(top\)[\\/.]*|\*)$/.test(a));
   if (!all) return;
   const git = (...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   let top;
