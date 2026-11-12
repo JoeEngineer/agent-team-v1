@@ -12,12 +12,12 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | Issue | PR |
 |---|---|---|---|---|---|---|---|
 | CW-0 | Breakdown | architect | large (opus) / high | 1 | done | #81 | |
-| CW-1 | CI wait helper and forge status | implementer | medium (sonnet) / high | | planned | #82 | |
-| CW-2 | Guard tests for auto-merge; fix `2>&1` | implementer | medium (sonnet) / high | | planned | #83 | |
-| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | | planned | #84 | |
-| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / medium | | planned | #85 | |
-| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | | planned | #86 | |
-| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | | planned | #87 | |
+| CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | merged | #82 | #90 |
+| CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | changes requested | #83 | #89 |
+| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 1 | in review | #84 | #94 |
+| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / high | 2 | changes requested | #85 | #91 |
+| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 1 | in review | #86 | #93 |
+| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 1 | in review | #87 | #92 |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | | planned | #88 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
@@ -35,7 +35,16 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - The guard's `2>&1` bug (reads `2` as the PR number; reproduced on main) is fixed in this milestone (CW-2).
 - Fold-ins keep their incremental review; only a reviewed head is merged or queued.
 - GitLab: unit tests only; no live GitLab run.
+- CW-1: `ci-wait.js --once` makes N+2 calls for N PRs on one base (adds the classic-protection lookup) instead of 2 per PR; accepted, since skipping it would change the gate.
+- Scratch repo is private (user has Pro/Team). Headless live runs skip permissions inside the temp clone only; the guard hooks still run.
+- User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
 
 ## Blocked
 
 ## Needs the user
+
+- Delete the leftover temp folder `C:\cw6\38888` from an aborted harness run (its PR and branch were cleaned up; the safety check blocked the Director's removal).
+
+## Scratch repo
+
+`JoeEngineer/agent-team-ci-sample` (private): auto-merge on and `sample-ci` required on `milestone/*`, set by the user. The harness preflight passes.
