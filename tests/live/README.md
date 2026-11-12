@@ -62,7 +62,7 @@ node tests/live/ci-wait-live.js --tool codex --repo OWNER/REPO --plugin <path to
 | `--seed-only` | Push the fixture once so the `sample-ci` check name exists, then clean up. Use it before adding the check to the ruleset. |
 | `--smoke` | Plumbing check only: a one-line Director prompt instead of the milestone, about 3 minutes. It does not need auto-merge or the ruleset. |
 | `--model M`, `--timeout-min N`, `--out-dir DIR` | Director model (default: the tool's default), Director time limit (default 75), where the report goes (default `<tmp>/agent-team-ci-wait-live`). |
-| `--cleanup-run <run> [--dry-run] [--out-dir DIR]` | Close the open PRs and issues, delete the branches of one earlier run, and delete that run's temp folder (found through the run file below), for example after the harness was killed hard. `--dry-run` only lists them. Pass the same `--out-dir` the run used, if any. |
+| `--cleanup-run <run> [--dry-run] [--force] [--out-dir DIR]` | Close the open PRs and issues, delete the branches of one earlier run, and delete that run's temp folder (found through the run file below), for example after the harness was killed hard. `--dry-run` only lists them. Pass the same `--out-dir` the run used, if any. |
 
 ## What you set up once
 
@@ -98,6 +98,14 @@ A PASS/FAIL table for the four targets, the metrics, and a JSON file with everyt
 | reviewer `pending` only on timeout | every `ci: pending` in `reviews.jsonl` has a summary that states a wait of 8 minutes or more (the helper's default deadline is 9). |
 | not "complete" before the PR checks finished | the Director's `milestone-json` said `incomplete`, or the milestone PR's checks had all finished before the line was printed. The line is stamped with the local clock when the harness reads it from the stream and compared with GitHub's `completedAt` for the last check, so only a gap of more than 10 seconds counts as early; the margin in seconds (negative: printed before the check finished) is shown next to the verdict and kept in the JSON as `milestone.marginSeconds`. `N/A` when no line was printed. |
 
+Below the four targets the table has three `INFO` rows (no pass or fail; also in the JSON under `metrics.ci`):
+
+| Row | JSON | What it counts |
+|---|---|---|
+| milestone PR CI turns | `metrics.ci.milestonePr` | CI-related Director turns that name the milestone PR (the one the harness finds for `milestone/<run>`, or the one `milestone-json` reports): count, total context tokens, foreground `--watch` commands. A turn naming both a task PR and the milestone PR counts here too, so batching them cannot hide milestone polling. |
+| other PR CI turns | `metrics.ci.otherPr` | CI turns that name some PR that is neither a task PR nor the milestone PR. |
+| total CI-related Director turns | `metrics.ci.total` | Every CI turn once (task PRs, milestone PR, other, and turns naming no PR) with its total context tokens: the figure to compare before and after. `metrics.ci.taskPrs` holds the task-PR share. |
+
 A baseline run is expected to miss targets: that is data, not a harness failure. **Exit code:** 0 when the run finished and the report was written, whatever the targets say; 1 for a harness error (setup failed, the Director crashed or timed out, the wrong plugin or no hooks, cleanup failed); 2 for bad arguments or a failed preflight.
 
 The metrics come from the Director's own transcript only, not its subagents' (Claude: assistant messages without a parent tool call, a message split over several lines counted once; Codex: the non-subagent rollout in the temp home):
@@ -116,7 +124,7 @@ Each run takes 20 to 40 minutes of wall clock, plus the Director's model usage (
 
 On success, failure and Ctrl-C (SIGTERM and SIGHUP too, where the OS delivers them) the harness closes its own open PRs and issues, deletes the branches whose name starts with its run prefix (never `main` or the default branch, never another run's), and removes the temp folder, including any copied Codex `auth.json`. Auth is never written to the report, the transcript copy or the console.
 
-A process that is killed hard (on Windows, Stop-Process, a timeout that kills the process, or a background task stopped by its parent) gets no handler, so it leaves its PRs, issues and branches on GitHub **and its temp folder** (`C:\cw6\<pid>` by default), which for a Codex run holds a copied `auth.json` under `h\`. Run `node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <run> --dry-run` to see what is left (the run name is in the first lines of the output, and in the file name of the run file), then the same without `--dry-run`. It deletes the temp folder it finds in the run file, but only if that folder is `<base>/<digits>` and holds nothing but `h` and `p`; anything else is left alone and reported. If there is no run file (a different `--out-dir`, or it was deleted), delete the temp folder by hand. `--keep` skips cleanup, leaves the run file and prints that command.
+A process that is killed hard (on Windows, Stop-Process, a timeout that kills the process, or a background task stopped by its parent) gets no handler, so it leaves its PRs, issues and branches on GitHub **and its temp folder** (`C:\cw6\<pid>` by default), which for a Codex run holds a copied `auth.json` under `h\`. Run `node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <run> --dry-run` to see what is left (the run name is in the first lines of the output, and in the file name of the run file), then the same without `--dry-run`. It deletes the temp folder it finds in the run file, but only if the recorded base is the one the harness would use now (`AGENT_TEAM_LIVE_TMP` if set, else `C:\cw6` on Windows or `<os tmp>/cw6`), the folder is `<base>/<digits>`, it holds nothing but `h` and `p`, and none of the folder, `h` and `p` is a symlink or junction (nothing is ever deleted through a link; there is no separate pre-delete of `auth.json`). It also refuses while the pid recorded in the run file is still alive, because the run may still be in flight; pass `--force` when that pid is not the harness any more (a reused pid). Anything refused is left alone and reported (exit 1). Run `--cleanup-run` with the same `AGENT_TEAM_LIVE_TMP` the run had. If there is no run file (a different `--out-dir`, or it was deleted), delete the temp folder by hand. `--keep` skips cleanup, leaves the run file and prints that command.
 
 ## Known gaps
 

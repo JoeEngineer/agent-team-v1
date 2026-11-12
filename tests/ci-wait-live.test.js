@@ -274,6 +274,44 @@ test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
   assert(L.renderTable(good).split('\n').length === 4, 'one row per target');
 });
 
+test('ci-wait-live breakdown: milestone-PR, other-PR and total CI turns are reported with tokens and foreground watches, never pass/fail', () => {
+  const tool = (watch, background) => ({ watch, background: !!background });
+  const turns = [
+    { ci: true, tokens: 100, prs: ['4'], tools: [tool(false)] },                       // task PR
+    { ci: true, tokens: 200, prs: ['9'], tools: [tool(true)] },                        // milestone PR, foreground watch
+    { ci: true, tokens: 300, prs: [9], tools: [tool(true, true), tool(true)] },        // milestone PR (number, not string), 1 bg + 1 fg watch
+    { ci: true, tokens: 400, prs: ['4', '9'], tools: [] },                             // task and milestone together
+    { ci: true, tokens: 500, prs: ['77'], tools: [tool(true)] },                       // some other PR
+    { ci: true, tokens: 600, prs: [], tools: [] },                                     // names no PR
+    { ci: false, tokens: 9999, prs: ['9'], tools: [tool(true)] },                      // not a CI turn: ignored
+  ];
+  const b = L.ciBreakdown(turns, { taskPrs: ['4', '5'], milestonePrs: ['9'] });
+  nodeAssert.deepStrictEqual(b.milestonePr, { turns: 3, contextTokens: 900, foregroundWatch: 2 });
+  nodeAssert.deepStrictEqual(b.otherPr, { turns: 1, contextTokens: 500, foregroundWatch: 1 });
+  nodeAssert.deepStrictEqual(b.taskPrs, { turns: 2, contextTokens: 500, foregroundWatch: 0 });
+  nodeAssert.deepStrictEqual(b.unattributed, { turns: 1, contextTokens: 600, foregroundWatch: 0 });
+  nodeAssert.deepStrictEqual(b.total, { turns: 6, contextTokens: 2100, foregroundWatch: 3 });
+  // boundaries: no turns, no milestone PR known
+  nodeAssert.deepStrictEqual(L.ciBreakdown([], { taskPrs: [], milestonePrs: [] }).total, { turns: 0, contextTokens: 0, foregroundWatch: 0 });
+  eq(L.ciBreakdown(turns, { taskPrs: ['4'], milestonePrs: [] }).milestonePr.turns, 0, 'without a known milestone PR its turns land in other');
+  eq(L.ciBreakdown(turns, { taskPrs: ['4'], milestonePrs: [] }).otherPr.turns, 3, 'PR 9 (x2, not with a task PR) and 77 are "other"');
+  // evaluateTargets: three INFO rows appended, the four real targets unchanged, one row each in the table
+  const summary = { watch: { foreground: 0, background: 0 }, ci: { byPr: { 4: { turns: 1 } }, unattributed: { turns: 0, contextTokens: 0 } } };
+  const quiet = { total: 0, byCi: {}, pending: [] };
+  const ms = { reported: { status: 'complete' }, completeBeforeChecksFinished: false, detail: 'fine' };
+  const t = L.evaluateTargets({ summary, taskPrs: ['4'], reviews: quiet, milestone: ms, breakdown: b });
+  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO']);
+  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'total CI-related Director turns']);
+  assert(/3 turn\(s\), 900 context tokens, 2 foreground --watch \(milestone PR #9\)/.test(t[4].detail), t[4].detail);
+  assert(/6 turn\(s\), 2100 context tokens/.test(t[6].detail), t[6].detail);
+  eq(L.renderTable(t).split('\n').length, 7, 'one row per target and metric');
+  // a Director that polls only the milestone PR is visible even though the per-task-PR target passes
+  const only = L.ciBreakdown([1, 2, 3, 4, 5].map((i) => ({ ci: true, tokens: 10, prs: ['9'], tools: [] })), { taskPrs: ['4', '5'], milestonePrs: ['9'] });
+  const tt = L.evaluateTargets({ summary: Object.assign({}, summary, { ci: { byPr: { 9: { turns: 5 } }, unattributed: { turns: 0, contextTokens: 0 } } }), taskPrs: ['4', '5'], reviews: quiet, milestone: ms, breakdown: only });
+  eq(tt[1].result, 'PASS', 'the existing target still ignores the milestone PR');
+  assert(/5 turn\(s\), 50 context tokens/.test(tt[4].detail), tt[4].detail);
+});
+
 // ---- secrets ----
 test('ci-wait-live redact: known token shapes and listed secrets are gone from the serialized output', () => {
   const secret = 'rt-0123456789abcdefghijklmnop';
@@ -571,6 +609,124 @@ test('ci-wait-live cleanup-run refuses a recorded folder that is not a harness t
     eq(r.status, 0, `genuine record works (${r.stdout})`);
     assert(!fs.existsSync(k.rec.tmp), 'deleted');
   } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: a recorded base that is not the expected base is refused (unit and end to end)', () => {
+  const exp = path.join(os.tmpdir(), 'cw6-expected');
+  eq(L.deletableTemp(path.join(exp, '4242'), exp, ['h', 'p'], exp), true, 'control: the expected base is fine');
+  eq(L.deletableTemp(path.join(exp, '4242'), exp, ['h', 'p'], path.join(os.tmpdir(), 'cw6-other')), false, 'recorded base differs from the expected one');
+  eq(L.deletableTemp(path.join(exp, '4242'), exp, [], exp), true, 'an empty folder of the right shape is deletable (a run killed before the clone)');
+  eq(L.deletableTemp(path.join(exp, '4242'), exp, ['h', 'p']), false, 'no expected base given: refused');
+  eq(L.expectedTempBase({ AGENT_TEAM_LIVE_TMP: exp }, 'win32', 'T'), exp, 'the env var wins');
+  eq(L.expectedTempBase({}, 'win32', 'T'), 'C:\\cw6', 'Windows default');
+  eq(L.expectedTempBase({}, 'linux', path.join('T')), path.join('T', 'cw6'), 'other default');
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    // a self-consistent record (<base>/<digits> with h and p) under a base the harness would not use
+    const other = path.join(k.h.dir, 'otherbase'); const tmp = path.join(other, '4242');
+    fs.mkdirSync(path.join(tmp, 'h'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'h', 'auth.json'), '{}');
+    fs.writeFileSync(file, JSON.stringify(Object.assign({}, k.rec, { tmp, base: other })));
+    const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(r.status, 1, 'refused: exit 1');
+    assert(/refusing to delete/.test(r.stdout) && fs.existsSync(path.join(tmp, 'h', 'auth.json')), `kept (${r.stdout})`);   // precondition: the shape was valid, only the base was wrong
+    // recovery control: the same shape under the expected base is deleted
+    fs.writeFileSync(file, JSON.stringify(k.rec));
+    const ok2 = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(ok2.status, 0, `expected base works (${ok2.stdout})`);
+    assert(!fs.existsSync(k.rec.tmp), 'deleted');
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: an empty recorded folder is deleted', () => {
+  const k = keptRun();
+  try {
+    fs.rmSync(path.join(k.rec.tmp, 'h'), { recursive: true, force: true });
+    fs.rmSync(path.join(k.rec.tmp, 'p'), { recursive: true, force: true });
+    eq(fs.readdirSync(k.rec.tmp).length, 0, 'precondition: the folder is empty');
+    const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(r.status, 0, `exit 0 (${r.stdout})`);
+    assert(!fs.existsSync(k.rec.tmp), 'deleted');
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: a recorded pid that is still alive is refused unless --force', () => {
+  eq(L.pidAlive(process.pid), true, 'this process is alive');
+  eq(L.pidAlive(0), false, 'pid 0 is not a run');
+  eq(L.pidAlive(undefined), false, 'a missing pid is not alive');
+  const gone = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+  eq(L.pidAlive(Number(gone.stdout)), false, 'an exited process is not alive');
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    // a live process that is not this harness: a sleeping node child
+    const child = require('child_process').spawn(process.execPath, ['-e', 'setTimeout(()=>{}, 60000)'], { stdio: 'ignore' });
+    try {
+      assert(child.pid && L.pidAlive(child.pid), 'precondition: the recorded pid is alive');
+      fs.writeFileSync(file, JSON.stringify(Object.assign({}, k.rec, { pid: child.pid })));
+      const dry = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--dry-run']);
+      eq(dry.status, 1, 'a dry run reports the refusal too');
+      const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+      eq(r.status, 1, 'exit 1 while the pid is alive');
+      assert(/still alive/.test(r.stdout) && /--force/.test(r.stdout), r.stdout);
+      assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')) && fs.existsSync(file), 'nothing deleted, run file kept');
+      const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
+      eq(f.status, 0, `--force deletes (${f.stdout})`);
+      assert(!fs.existsSync(k.rec.tmp), 'deleted with --force');
+    } finally { child.kill(); }
+  } finally { rm(k.h.dir); }
+});
+
+// A symlink (a junction on Windows, which needs no privilege) in place of tmp, h or p.
+function tryLink(target, linkPath) {
+  try { fs.symlinkSync(target, linkPath, 'junction'); return true; } catch (e) { return false; }
+}
+test('ci-wait-live cleanup-run: a link for tmp, h or p is refused and nothing outside is deleted', () => {
+  const k = keptRun();
+  try {
+    const outside = path.join(k.h.dir, 'outside'); fs.mkdirSync(outside);
+    const victim = path.join(outside, 'auth.json'); fs.writeFileSync(victim, 'precious');
+    const probe = path.join(k.h.dir, 'probe-link');
+    if (!tryLink(outside, probe)) { console.log('  (skipped: links cannot be created here)'); return; }
+    fs.rmSync(probe, { recursive: true, force: true });
+    const file = path.join(k.h.outDir, k.runFile);
+    const cleanup = () => harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    for (const which of ['h', 'p']) {
+      fs.rmSync(path.join(k.rec.tmp, which), { recursive: true, force: true });
+      assert(tryLink(outside, path.join(k.rec.tmp, which)), `precondition: ${which} is a link`);
+      assert(fs.lstatSync(path.join(k.rec.tmp, which)).isSymbolicLink(), `${which} reads as a link`);
+      const r = cleanup();
+      eq(r.status, 1, `${which} as a link: exit 1`);
+      assert(/refusing to delete/.test(r.stdout) && /link/.test(r.stdout), r.stdout);
+      eq(fs.readFileSync(victim, 'utf8'), 'precious', `the auth.json outside survives (${which})`);
+      assert(fs.existsSync(k.rec.tmp) && fs.existsSync(file), 'folder and run file kept');
+      fs.rmSync(path.join(k.rec.tmp, which), { recursive: true, force: true });   // removes the link only
+      eq(fs.readFileSync(victim, 'utf8'), 'precious', 'removing the link leaves its target');
+      fs.mkdirSync(path.join(k.rec.tmp, which));
+    }
+    // tmp itself a link to a real <base>/<digits> folder
+    const real = path.join(k.h.dir, 'real'); fs.mkdirSync(path.join(real, 'h'), { recursive: true });
+    fs.writeFileSync(path.join(real, 'h', 'auth.json'), 'precious2');
+    const linkTmp = path.join(k.h.tmpBase, '7777');
+    assert(tryLink(real, linkTmp), 'precondition: tmp is a link');
+    fs.writeFileSync(file, JSON.stringify(Object.assign({}, k.rec, { tmp: linkTmp })));
+    const rt = cleanup();
+    eq(rt.status, 1, 'tmp as a link: exit 1');
+    eq(fs.readFileSync(path.join(real, 'h', 'auth.json'), 'utf8'), 'precious2', 'the target of a linked tmp survives');
+    fs.rmSync(linkTmp, { recursive: true, force: true });
+    // recovery control: the genuine record is deleted normally
+    fs.writeFileSync(file, JSON.stringify(k.rec));
+    const good = cleanup();
+    eq(good.status, 0, `genuine record works (${good.stdout})`);
+    assert(!fs.existsSync(k.rec.tmp), 'deleted');
+    eq(fs.readFileSync(victim, 'utf8'), 'precious', 'the outside file is still there');
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live args: --force only goes with --cleanup-run', () => {
+  eq(L.parseArgs(['--repo', 'o/r', '--cleanup-run', RUN, '--force']).opts.force, true, 'accepted');
+  assert(L.parseArgs(['--repo', 'o/r', '--seed-only', '--force']).error.includes('--cleanup-run'), 'rejected elsewhere');
 });
 
 // ---- --preflight-only: read-only, starts nothing ----
