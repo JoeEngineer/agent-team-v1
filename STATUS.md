@@ -20,7 +20,7 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
 | CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | merged | #95 | #96 |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | approved; fold-in after the CW-9 re-run | #88 | #97 |
-| CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | fold-in | #98 | #99 |
+| CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | merged | #98 | #99 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
@@ -44,6 +44,11 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - CW-4: after the one fallback CI wait (Claude background, Codex reviewer re-wait), still pending means tell the user; no further waits.
 - 0016: both after runs missed "≤1 CI turn per task PR" on the first PR only, because of the one-time `--names` call (CW-7). Fix the prompt (CW-9: `--names` shares the first merge-gate call); the target stays as written; re-run live on both tools.
 - User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
+
+## Carried into the post-final-review fix batch
+
+- SKILL.md:87 still says to put `--names` "on the queue call or the wait/followup call" in the pending case; merging.md and codex.md now say: on the merge call after the green report, or the Claude background wait (CW-9 incremental review).
+- tests/ci-docs.test.js no-bare-`;` test should assert it scanned at least one merge example line (CW-9 incremental review).
 
 ## Blocked
 
