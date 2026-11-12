@@ -201,6 +201,21 @@ function inArithmetic(cmd, i) {
   return opens > closes;
 }
 
+// End of the word that starts at cmd[i]: the target of a redirection (`out.txt`,
+// `/dev/null`, `$null`, `"a b"`, `1`, `-`). Stops before a character that
+// starts something else (`;` `&` `|` `<` `>` `(` `)` a backtick or whitespace),
+// so a command after the redirection is still read.
+function skipRedirectTarget(cmd, i) {
+  let q = null;
+  for (; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (q) { if (c === q) q = null; continue; }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (/[\s;&|<>()`]/.test(c)) break;
+  }
+  return i;
+}
+
 // Split a command line into segments on && || ; | and newlines, then tokenize
 // each segment with basic single/double quote handling. Newlines inside quotes
 // stay in the token, and heredoc bodies (after `<<WORD`, `<<'WORD'`, `<<-WORD`)
@@ -209,12 +224,16 @@ function inArithmetic(cmd, i) {
 // command substitution), a backslash or backtick before a newline joins the two
 // lines, `>` ends a token (`main>out.txt`), and the braces of a block
 // (`{git push}`) are dropped while `HEAD@{1}` and `${x}` keep theirs.
+// Output redirections are not arguments and do not end a segment: `>f`, `>>f`,
+// `N>f`, `N>&M`, `>&N`, `>&f`, `>|f`, `&>f`, `&>>f` (and PowerShell's `*>&1`)
+// are dropped along with their target, so `gh pr merge --squash 2>&1` has no
+// number, and `2>&1` is not a `2` followed by a `&` break and a `1`.
 // Not read: `$(…)` inside a double-quoted string.
 function segments(cmd) {
   const out = [];
-  let cur = [], tok = '', quote = null, hasTok = false;
+  let cur = [], tok = '', quote = null, hasTok = false, quoted = false;
   const heredocs = []; // delimiters waiting for the end of the current line
-  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; };
+  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; quoted = false; };
   const pushSeg = () => { pushTok(); if (cur.length) out.push(cur); cur = []; };
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i];
@@ -222,7 +241,7 @@ function segments(cmd) {
       if (c === quote) quote = null; else tok += c;
       continue;
     }
-    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
+    if (c === '"' || c === "'") { quote = c; hasTok = true; quoted = true; continue; }
     if (c === '\\' || c === '`') {
       // Line continuation (sh: backslash, PowerShell: backtick).
       const nl = cmd[i + 1] === '\n' ? 1 : (cmd[i + 1] === '\r' && cmd[i + 2] === '\n' ? 2 : 0);
@@ -230,7 +249,17 @@ function segments(cmd) {
       if (c === '`') { pushSeg(); continue; }
     }
     if (c === '(' || c === ')') { pushSeg(); continue; }
-    if (c === '>') { pushTok(); continue; }
+    if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
+      // A redirection. A glued file-descriptor number (`2>`, `*>`) belongs to it,
+      // not to the arguments; anything else glued on (`main>out`) is a real token.
+      if (hasTok && !quoted && /^(?:\d+|\*)$/.test(tok)) { tok = ''; hasTok = false; } else pushTok();
+      let j = i + (c === '&' ? 2 : 1);
+      if (cmd[j] === '>') j++;
+      if (cmd[j] === '&' || cmd[j] === '|') j++;
+      while (cmd[j] === ' ' || cmd[j] === '\t') j++;
+      i = skipRedirectTarget(cmd, j) - 1;
+      continue;
+    }
     if (c === '{' && !hasTok) continue;
     if (c === '}' && !tok.includes('{')) continue;
     if (c === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<' && !inArithmetic(cmd, i)) {
