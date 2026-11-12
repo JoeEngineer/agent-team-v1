@@ -17,12 +17,15 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 2 | merged | #84 | #94 |
 | CW-4 | Reviewer and Director prompts | implementer | large (opus) / high | 3 | changes requested | #85 | #91 |
 | CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
-| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | in review | #87 | #92 |
+| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
+| CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 1 | in progress | #95 | |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | | planned | #88 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
-Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → W3 CW-7 → final review.
+Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → final review.
+
+Live runs (CW-7): the Director starts the four harness runs as background commands (each takes 20–40 min, longer than an agent's foreground shell cap). The headless Directors use the large tier on both tools (Claude `opus`, Codex `gpt-6.1-sol`) in every run, so before/after compare the same model. A CW-7 implementer analyses the JSON reports and writes the before/after report. Baseline runs (0.5.0, commit 0205ab8) start once CW-8 is merged; the after runs start once CW-4 is merged.
 
 Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier (record 0013). Overrides: CW-2 effort high, CW-4 tier medium (record 0013).
 
