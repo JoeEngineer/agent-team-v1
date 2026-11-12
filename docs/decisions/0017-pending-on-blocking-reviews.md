@@ -18,7 +18,7 @@ The Codex re-run after CW-9 failed "reviewer `ci: pending` only on timeout" on o
 2. **Keep the single check on blocking verdicts**, require the exact marker at the start of `summary`, and have the harness accept `pending` only from a timed-out wait (with the time waited) or a blocking verdict with the marker.
 
 ## Decision
-Option 2. The spec's concern is a `pending` that leaves the Director to check CI itself. A blocking verdict never leads to a CI check by the Director, so that concern doesn't arise. The user may overrule this (reported at close).
+Option 2. The spec's concern is a `pending` that leaves the Director to check CI itself. A blocking verdict never leads to a CI check by the Director, so that concern doesn't arise. Reported to the user at close; the user confirmed it on 2026-11-12 ("if the reviewer is requesting changes, there is little point in waiting for CI to finish").
 
 Checkpoints: the Director runs `reconcile-logs.js --merges` only when STATUS.md has a `queued` row, at the next merge, at the end of a wave and before the milestone PR. With nothing queued, it skips them.
 
