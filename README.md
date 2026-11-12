@@ -213,7 +213,7 @@ A required status check is the name of a CI job, and the name exists only after 
     "required_status_checks": [ { "context": "<your CI job name, e.g. test>" } ] } }
 ```
 
-Get the names from the first CI run with `node "<plugin root>/scripts/ci-wait.js" --names <n>` or `gh pr checks <n> --json name`. Add them to the `milestone/*` ruleset and to `protect-main`, with the bypass list still empty. The Director never changes rulesets: it asks you, and records the names in STATUS.md.
+Get the names from the first CI run with `node "<plugin root>/scripts/ci-wait.js" --names <n>` (the Director runs this inside its first merge call) or `gh pr checks <n> --json name`. Add them to the `milestone/*` ruleset and to `protect-main`, with the bypass list still empty. The Director never changes rulesets: it asks you, and records the names in STATUS.md.
 
 **Auto-merge:** turn on **Settings → General → Pull Requests → Allow auto-merge**. The Director queues a merge with auto-merge only when CI is still pending and the ruleset names its required checks. Without this setting it waits for CI in a background check instead (Claude), or asks the reviewer to wait again (Codex). The Director asks you to turn it on; it doesn't change the setting itself.
 
@@ -228,7 +228,7 @@ GitLab's equivalent of rulesets is **protected branches** (Settings → Reposito
 
 The Director acts through *your* `glab` login. If you're a maintainer, so is it, so server rules can't tell you apart: the guard hook is what stops it merging into `main`, as on GitHub. Once you have CI, turn on **Pipelines must succeed** in Settings → Merge requests. Without it, a merge can go through before the pipeline finishes. The Director queues a merge with auto-merge (**Set to auto-merge**, set per MR) only when CI is still pending, and this setting is what makes the queued merge wait for green. The Director asks you to turn it on; it doesn't change it itself.
 
-The CI names come from the head pipeline's jobs, which exist only after CI has run once. Read them with `node "<plugin root>/scripts/ci-wait.js" --names <n>`. GitLab has no per-job list to fill in: **Pipelines must succeed** covers the whole pipeline.
+The CI names come from the head pipeline's jobs, which exist only after CI has run once. Read them with `node "<plugin root>/scripts/ci-wait.js" --names <n>` (the Director runs this inside its first merge call). GitLab has no per-job list to fill in: **Pipelines must succeed** covers the whole pipeline.
 
 Or from a terminal, for `milestone/*` (for `main`, change the existing protection in the UI):
 

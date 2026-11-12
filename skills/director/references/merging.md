@@ -36,11 +36,23 @@ In PowerShell (Windows PowerShell 5.1):
 node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)." } }
 ```
 
-- Put no other merges, `git pull` or file edits in that call. In sh never join with a bare `;`: use `&&`. Always pass the PR number.
+- Put no other merges, `git pull` or file edits in that call. Never join the gate, merge and comment with a bare `;`; use `&&` in sh. A bare `;` is allowed only after the `--names` prefix below, never between gate, merge and comment. Always pass the PR number.
 - Always use both merge flags: without `--delete-branch` the `task/<ID>` branch stays behind. If a merge went through without them, delete the branch (`git push origin --delete task/<ID>`).
 - `--match-head-commit` makes the merge fail if the PR head moved since the review.
 - The log stays correct: the logging hook finds the one merge segment in the chained command and asks the forge for the PR's state afterwards, so the merge line records the real outcome.
 - Do the bookkeeping (`git pull`, STATUS.md edits, the next PR's checks) in a separate call.
+
+**First task PR: the names.** On the first task PR whose CI has run on the milestone, prefix the merge call with `ci-wait.js --names <n>` and a plain `;`, so its result never gates the merge and it is never a turn of its own:
+
+```bash
+node "<plugin root>/scripts/ci-wait.js" --names <n>; node "<plugin root>/scripts/ci-wait.js" <n> --once --sha <head_sha> && gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha> && gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)."
+```
+
+```
+node "<plugin root>\scripts\ci-wait.js" --names <n>; node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)." } }
+```
+
+Read the names from that call's output, ask the user (ruleset names, "Allow auto-merge"; GitLab: "Pipelines must succeed", where `--names` prints the job names) and record them in `STATUS.md`'s CI block. If the first PR's reviewer reported `pending`, there is no merge call yet. If the names are already in `STATUS.md`'s CI block, no `--names` is needed. Otherwise send the followup as usual and put the `--names <n>;` prefix on the merge call that follows the green report; on Claude, put it on the background wait command.
 
 Gate results. Exit 0 (green): the merge and the comment run. Any other exit stops the call and nothing is merged; then act on it as on the same reviewer result:
 - 1 (red): "Red CI" below.
@@ -69,7 +81,7 @@ gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>
 
 (GitLab: `glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <head_sha>`.) Set the state to `queued` in `STATUS.md` and move on. The checkpoints below follow it up.
 
-Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on (GitLab: "Pipelines must succeed" on; it covers the whole pipeline, so no names are needed). Fill the block after the first CI run on the milestone: `node "<plugin root>/scripts/ci-wait.js" --names <n>` lists the required checks. `--auto` waits only for required checks, so without named ones it could merge before CI ran.
+Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on (GitLab: "Pipelines must succeed" on; it covers the whole pipeline, so no names are needed). Fill the block after the first CI run on the milestone, with names read from the `--names` prefix described under "First task PR: the names" below (never a call of its own). `--auto` waits only for required checks, so without named ones it could merge before CI ran.
 
 When auto-merge is not usable, say why in `STATUS.md` and set the state to `waiting CI` (this fallback costs two Director turns for that PR):
 - Claude: run `node "<plugin root>/scripts/ci-wait.js" <n> --sha <head_sha> --timeout 1800` as a background command (Bash `run_in_background`).
