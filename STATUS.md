@@ -42,6 +42,7 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - CW-1: `ci-wait.js --once` makes N+2 calls for N PRs on one base (adds the classic-protection lookup) instead of 2 per PR; accepted, since skipping it would change the gate.
 - Scratch repo is private (user has Pro/Team). Headless live runs skip permissions inside the temp clone only; the guard hooks still run.
 - CW-4: after the one fallback CI wait (Claude background, Codex reviewer re-wait), still pending means tell the user; no further waits.
+- 0017: keep the single `--once` check on blocking reviews (marker required); checkpoints only when something is queued; harness reports no-PR turns separately (amends 0016).
 - 0016: both after runs missed "≤1 CI turn per task PR" on the first PR only, because of the one-time `--names` call (CW-7). Fix the prompt (CW-9: `--names` shares the first merge-gate call); the target stays as written; re-run live on both tools.
 - User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
 
@@ -49,6 +50,8 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 
 - SKILL.md:87 still says to put `--names` "on the queue call or the wait/followup call" in the pending case; merging.md and codex.md now say: on the merge call after the green report, or the Claude background wait (CW-9 incremental review).
 - tests/ci-docs.test.js no-bare-`;` test should assert it scanned at least one merge example line (CW-9 incremental review).
+- 0017: reviewer marker "not waited: changes requested" exact at the start of `summary`; harness records the verdict and accepts `pending` only from a timed-out wait with the time stated or a blocking verdict with the marker.
+- 0017: run `reconcile-logs.js --merges` checkpoints only when STATUS.md has a `queued` row (SKILL.md, merging.md, codex.md, gitlab.md).
 
 ## Blocked
 
