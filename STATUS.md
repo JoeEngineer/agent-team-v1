@@ -13,11 +13,11 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 |---|---|---|---|---|---|---|---|
 | CW-0 | Breakdown | architect | large (opus) / high | 1 | done | #81 | |
 | CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | merged | #82 | #90 |
-| CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | changes requested | #83 | #89 |
-| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 1 | in progress | #84 | |
-| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / medium | 1 | in progress | #85 | |
-| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 1 | in progress | #86 | |
-| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 1 | in progress | #87 | |
+| CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | merged | #83 | #89 |
+| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 2 | fold-in | #84 | #94 |
+| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / high | 2 | in review | #85 | #91 |
+| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | in review | #86 | #93 |
+| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | fold-in | #87 | #92 |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | | planned | #88 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
@@ -43,4 +43,16 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 
 ## Needs the user
 
-- Scratch repo `JoeEngineer/agent-team-ci-sample` (private) is created. Before CW-7: turn on Settings → General → "Allow auto-merge". After the harness's seed run, add the check name it prints (`sample-ci`) as a required status check in a `milestone/*` ruleset with no bypass list.
+- Delete the leftover temp folder `C:\cw6\38888` from an aborted harness run (its PR and branch were cleaned up; the safety check blocked the Director's removal).
+
+## Scratch repo
+
+`JoeEngineer/agent-team-ci-sample` (private): auto-merge on and `sample-ci` required on `milestone/*`, set by the user. The harness preflight passes.
+
+## Follow-ups (not in this milestone)
+
+- Guard, pre-existing: input redirections are not parsed, so `git push origin main<in` is allowed while bash pushes main (CW-2 review; listed in 0015).
+- Guard, pre-existing: an escaped double quote inside double quotes can hide a later merge (`"a \"b\" c" && gh pr merge 7`); PowerShell backtick escapes and variables as merge targets aren't modelled (CW-2 architect).
+- Guard over-block: a read-only `gh api graphql` query that names `branchProtectionRules` is refused as "changing branch protection".
+- CW-2 (0015) refuses harmless glued redirections in git/gh/glab commands (`git diff>x`); the message says to add a space.
+- Merge lines record no repo, so a PR merged with `-R other/repo` is reconciled against the current repo (CW-3).

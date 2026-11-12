@@ -17,5 +17,5 @@ This project uses the `agent-team` plugin on Codex. Skills are invoked as `$agen
 **Project specifics:**
 - Test command: `<fill in>`
 - Lint command: `<fill in>`
-- CI: `<GitHub Actions workflow or GitLab CI pipeline name, or "none">`
+- CI: `<GitHub Actions workflow or GitLab CI pipeline name, or "none">`. The required check names and the auto-merge setting are recorded in STATUS.md after the first CI run; the Director asks me to set them, and never changes them itself.
 - Reviewer identity: `<"same account" or bot account name>`

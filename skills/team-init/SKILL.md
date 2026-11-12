@@ -27,6 +27,26 @@ Set up this project for the `agent-team` plugin. The shared steps apply to both 
    - **GitHub:** `gh api repos/{owner}/{repo}/rulesets`. If `gh` is not installed or not logged in, say so, skip this check, and tell me to look at the rulesets by hand. If `main` or `milestone/*` is not covered, show me the two rulesets from the plugin README's "Protect your branches" section (`<plugin root>/README.md`) with the repo filled in, and explain why the bypass list stays empty and approvals stay at 0.
    - **GitLab:** `glab api projects/:id/protected_branches`. If `glab` can't answer, say so and tell me to look under Settings → Repository → Protected branches. If `main` isn't protected with push set to No one, or `milestone/*` isn't protected with force push off, show me the settings from the README's "On GitLab" section.
 
+Required checks and auto-merge are not set up here. They come after the first CI run, in the section "CI names and auto-merge" below. Don't add a required-checks rule during setup.
+
+## CI names and auto-merge (after the first CI run)
+
+Run these in a milestone, once CI has run at least once on one of its PRs. The Director never changes repository settings, rulesets or branch protection; it asks me.
+
+1. **Required check names.** Required status checks on the `milestone/*` ruleset need real check names, and a name exists only after CI has run once. Turning the rule on with an empty list enforces nothing. Read the names with `node "<plugin root>/scripts/ci-wait.js" --names <n>` (or `gh pr checks <n> --json name` on GitHub; on GitLab, the head pipeline's job names). The helper prints `checks` (what the head runs) and, on GitHub, `required` (what the base requires): `[]` means nothing is required, and `null` means the list couldn't be read. On GitLab `required` is always `null`.
+2. **Ask me** to add those names as required status checks to the `milestone/*` ruleset and to `protect-main`, with the bypass list still empty. Show the rule with a placeholder name, never an empty list:
+
+   ```json
+   { "type": "required_status_checks", "parameters": {
+       "required_status_checks": [ { "context": "<your CI job name, e.g. test>" } ] } }
+   ```
+
+   Then record the names in STATUS.md.
+3. **Ask me** to turn on auto-merge. On GitHub: Settings → General → Pull Requests → "Allow auto-merge". On GitLab: turn on "Pipelines must succeed" (Settings → Merge requests), which is what makes a queued merge wait for CI. Record the auto-merge setting in STATUS.md.
+4. **Private repos:** rulesets and auto-merge need a paid GitHub plan. If the repo is private and the plan doesn't allow them, say so; the milestone then merges only after CI is green at merge time.
+
+If `ci-wait.js --names` says a list couldn't be read (`required` is `null` on GitHub), the token can't read the rules, usually because classic branch protection needs admin rights. Ask me to check the names by hand.
+
 ## Claude Code steps
 
 Run these only when you are running in Claude Code.
