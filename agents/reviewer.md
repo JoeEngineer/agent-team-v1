@@ -32,12 +32,12 @@ The plugin root comes from the task card's CONTEXT line. Exit codes: 0 green, 1 
 - Pending and less than about 900 s has passed in total: run it once more with `--timeout <900 - waited>`. The total counts only the time spent inside `ci-wait.js` (the sum of the `waited_s` it reports), not your review time. That is at most 2 calls per reviewed head (about 15 minutes). Never poll in separate short turns.
 - Head moved (4): the PR has new commits. Review the new commits, then wait again for the new head. The two-call cap starts again for each reviewed head.
 - A Director followup asking you to "wait again and report ci" (the Codex fallback for pending CI) gets one more wait on the same head under the same rules: a fresh 900 s, at most 2 calls. Then report as below.
-- A blocking finding (`changes_requested` or `reject`): don't do the full wait. Run `node "<plugin root>/scripts/ci-wait.js" <n> --once --sha <head_sha>` once and report what it shows. If it shows pending, put "not waited: changes requested" in `summary`.
+- A blocking finding (`changes_requested` or `reject`): don't do the full wait. Run `node "<plugin root>/scripts/ci-wait.js" <n> --once --sha <head_sha>` once and report what it shows. If it shows pending, `summary` must start with exactly `not waited: changes requested` (`not waited: rejected` for `reject`), then anything else you want to say (decision 0017).
 - If the card gives no helper path, use `gh pr checks <n> --watch --fail-fast --interval 30` (GitHub), or on GitLab one command that polls `head_pipeline.status` from `glab mr view <n> --output json` every 30 s, with the same timeout.
 
 Report `ci` from the final state, one of:
 - `green`, `red`, `none`: as the helper says.
-- `pending`: CI had not finished when you stopped. This is a timeout of the wait, with the time waited in `summary`. The one other case is the blocking-finding single check above, marked "not waited: changes requested".
+- `pending`: CI had not finished when you stopped. This is a timeout of the wait, with the time waited in `summary`. The one other case is the blocking-finding single check above, with `summary` starting with the `not waited:` marker.
 - `unknown`: the helper could not tell (exit 2; for example the required checks can't be read, decision 0014). Put the helper's note in `summary`. Don't report it as `pending`.
 
 A failing required check is blocking unless you explain in `summary` why it isn't caused by this PR: don't `approve` with `ci: red` without that.

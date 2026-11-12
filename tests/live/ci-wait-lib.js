@@ -172,6 +172,14 @@ function waitedMinutes(summary) {
   }
   return best;
 }
+// Decision 0017: a blocking verdict (changes_requested, reject) may leave ci pending after one
+// --once check, if the summary starts with "not waited:" (any case). The legacy phrase
+// "not waited: changes requested" anywhere in the summary also counts (saved Codex cw9 run).
+function blockingNotWaited(verdict, summary) {
+  if (verdict !== 'changes_requested' && verdict !== 'reject') return false;
+  const s = String(summary || '');
+  return /^\s*not waited:/i.test(s) || /not waited: changes requested/i.test(s);
+}
 function reviewStats(reviews) {
   const lines = Array.isArray(reviews) ? reviews : [];
   const byCi = {};
@@ -181,8 +189,9 @@ function reviewStats(reviews) {
     byCi[ci] = (byCi[ci] || 0) + 1;
     if (ci === 'pending') {
       const w = waitedMinutes(r.summary);
-      pending.push({ task: r.task_id || r.task || r.pr || null, summary: String(r.summary || '').slice(0, 300), statesTimeWaited: w != null, waitedMinutes: w,
-        timeout: w != null && w >= TIMEOUT_MIN });
+      const verdict = r.verdict != null ? String(r.verdict) : null;
+      pending.push({ task: r.task_id || r.task || r.pr || null, verdict, summary: String(r.summary || '').slice(0, 300), statesTimeWaited: w != null, waitedMinutes: w,
+        timeout: w != null && w >= TIMEOUT_MIN, blockingNotWaited: blockingNotWaited(verdict, r.summary) });
     }
   }
   return { total: lines.length, byCi, pending };
@@ -260,9 +269,9 @@ function evaluateTargets(input) {
     result: !per.length ? 'N/A' : ok2 ? 'PASS' : 'FAIL',
     detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}${reads ? `; ${reads} unattributed CI read(s) name no PR and are charged to the total (${charged} for ${per.length} task PR(s))` : ''}${np.reconcile.turns ? `; ${np.reconcile.turns} reconcile checkpoint(s) not charged` : ''}` : 'no task PRs found' });
   const pend = reviews.pending;
-  const bad = pend.filter((p) => !p.timeout);
-  t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout', result: bad.length ? 'FAIL' : 'PASS',
-    detail: pend.length ? `${pend.length} pending review(s): ${pend.map((p) => (p.waitedMinutes == null ? 'no wait time stated' : `waited ${p.waitedMinutes.toFixed(1)} min`)).join(', ')}` : `no pending reviews (${reviews.total} reviews)` });
+  const bad = pend.filter((p) => !p.timeout && !p.blockingNotWaited);
+  t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout or a marked blocking review', result: bad.length ? 'FAIL' : 'PASS',
+    detail: pend.length ? `${pend.length} pending review(s): ${pend.map((p) => (p.blockingNotWaited && !p.timeout ? `${p.verdict}, marked not waited` : p.waitedMinutes == null ? 'no wait time stated' : `waited ${p.waitedMinutes.toFixed(1)} min`)).join(', ')}` : `no pending reviews (${reviews.total} reviews)` });
   t.push({ id: 'not-complete-before-checks', name: 'not "complete" before the milestone PR checks finished',
     result: !milestone.reported ? 'N/A' : milestone.completeBeforeChecksFinished ? 'FAIL' : 'PASS', detail: milestone.detail });
   // Reported only, never pass/fail: where the rest of the Director's CI turns went.
@@ -430,7 +439,7 @@ module.exports = {
   CHECK_NAME, TOOLS, TIMEOUT_MIN, USAGE, RUN_RE,
   parseArgs, runPrefix, ownsBranch, selectCleanup,
   evaluatePreflight, requiredChecksIn, rulesetSteps,
-  waitedMinutes, reviewStats, mergesStats, checksFinished, milestoneTiming, evaluateTargets, renderTable,
+  waitedMinutes, blockingNotWaited, reviewStats, mergesStats, checksFinished, milestoneTiming, evaluateTargets, renderTable,
   directorPrompt, smokePrompt, TASKS,
   redact, secretsFromJson,
 };

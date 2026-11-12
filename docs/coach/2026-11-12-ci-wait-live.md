@@ -162,14 +162,14 @@ Targets, per run:
 |---|---|---|
 | No foreground `--watch` | PASS (0) | PASS (0) |
 | At most one CI-related Director turn per task PR | PASS (#54: 1, #55: 1, #56: 1, #60: 1; 2 reconcile checkpoints not charged, 0 unattributed reads) (old parser: FAIL, #55: 2, #56: 2) | PASS (#57, #58, #59, #62, #64: 1 each; 6 reconcile checkpoints not charged, 0 unattributed reads) (old rule: FAIL, "11 CI turn(s) for 5 task PR(s)") |
-| Reviewer `ci: pending` only on timeout | PASS (5 reviews, all green) | **FAIL** (1 pending of 10: see below) |
+| Reviewer `ci: pending` only on timeout | PASS (5 reviews, all green) | PASS under decision 0017 (1 pending of 10, a `changes_requested` review marked "not waited: changes requested"; FAIL under the harness as it was when the run was scored: see below) |
 | Milestone not reported complete before its PR checks finished | PASS (35 s after) | PASS (64 s after) |
 
 The first-PR step now fits in one turn on both tools. Claude cw9 turn 16 is `ci-wait.js --names 54; ci-wait.js 54 --once --sha ... && gh pr merge 54 ... && gh pr comment 54 ...`; Codex cw9 turn 25 is the same chain for #58 (its first merged PR). The Director wrote "Merging, with the one-time check-name readout added in front". Both runs got 1 CI turn on every task PR, including the first.
 
 The six no-PR turns in Codex cw9 (turns 26, 33, 40, 47, 63, 83) are all `reconcile-logs.js --merges` checkpoints, several bundled with STATUS edits. That is more than the prompt requires (it asks for one at the end of a wave and one before the milestone PR). They cost 405,327 context tokens, 49% of Codex's CI tokens in that run. They are not a target miss, but they are the largest remaining CI-related spend, and at least two of them (turns 26 and 40) printed nothing, so nothing was queued. Worth a look in a later task.
 
-### New miss: Codex cw9, "reviewer pending only on timeout"
+### Codex cw9, "reviewer pending only on timeout or a marked blocking review": the documented blocking-review case (PASS with decision 0017)
 
 The pending review is the first review of task `-3` (slugify), PR #59, head `d68bde5` (the first head of #59; the second round approved head `fe5d56c`, which is the one merged). The reviewer's `review-json` (in the Director transcript and in `reviews.jsonl`) says:
 
@@ -178,12 +178,17 @@ The pending review is the first review of task `-3` (slugify), PR #59, head `d68
 
 What happened: the reviewer did not time out. It followed `agents/reviewer.md` ("Waiting for CI": for a blocking finding, don't do the full wait; run `ci-wait.js <n> --once --sha <head_sha>` once, and if it shows pending put "not waited: changes requested" in `summary`; and the `ci` field text: "The one other case is the blocking-finding single check above, marked 'not waited: changes requested'"). The Director sent #59 back (attempt 2), and the review of the fix reported green. So the reviewer behaved as written, and **the harness misread it**: `reviewStats` in `tests/live/ci-wait-lib.js` counts every `ci: pending` that does not state a wait of at least `TIMEOUT_MIN` minutes as a violation, and never looks at the verdict or at the documented exception.
 
-Recommended change (not made here, as asked; I did not touch `agents/reviewer.md`):
+Decision 0017 (`docs/decisions/0017-pending-on-blocking-reviews.md`) accepts this case, and CW-11 made the change. The target now reads "reviewer `ci: pending` only on a timeout or a marked blocking review". The first version of this report recommended the change as follows:
 
 1. Harness, `tests/live/ci-wait-lib.js`, `reviewStats`: record the review's `verdict`, and in `evaluateTargets` do not count as a violation a pending whose verdict is `changes_requested` or `reject` and whose summary says it was not waited ("not waited" or "was not waited"). Show it in the detail line ("1 pending, not waited because changes were requested"). A pending on an approving review with no stated wait stays FAIL. This needs the same kind of decision as the no-PR rule: the spec target says "pending only on timeout", so the exception is real only if the spec accepts what `reviewer.md` already says. The director should decide that.
 2. Prompt, `agents/reviewer.md` "Waiting for CI": the prescribed phrase is "not waited: changes requested" but the reviewer wrote "CI was not waited: changes requested". Tighten the wording of the rule, for example "put exactly `not waited: changes requested` at the start of `summary`", so a harness (or the Coach) can match it exactly.
 
-Until one of these is done, this target will FAIL whenever a reviewer sends a PR back while CI is still running.
+Done in CW-11 (decision 0017):
+
+- `agents/reviewer.md`: on a blocking verdict with the single `--once` check pending, `summary` must start with exactly `not waited: changes requested` (`not waited: rejected` for `reject`).
+- `tests/live/ci-wait-lib.js`: `reviewStats` records each review's verdict, and `evaluateTargets` accepts `ci: pending` only when (a) the summary states a wait of 8 minutes or more, or (b) the verdict is `changes_requested` or `reject` and the summary starts with `not waited:` (case-insensitive). The legacy phrase "not waited: changes requested" anywhere in the summary also counts for a blocking verdict, which is how this saved run's "CI was not waited: changes requested" passes. An approve with pending and no stated wait still FAILs (unit tests pin this).
+
+Recomputed on the saved run. `ci-recompute.js` passes empty reviews to `evaluateTargets`, so it does not evaluate this target; I read the ten `review-json` blocks from the Director transcript (the same data `reviews.jsonl` held) and ran `reviewStats` and `evaluateTargets` on them. Result: the one pending review has `verdict: changes_requested`, `blockingNotWaited: true`, and the target is **PASS** ("1 pending review(s): changes_requested, marked not waited"). `node tests/live/ci-recompute.js <transcript> --compare <report.json>` on the same run prints one difference, `ci-turns-per-task-pr`: FAIL in the report, PASS recomputed (the no-PR rule above), and no difference on the pending target because it does not check it.
 
 ## The notification stream (CW-6 review finding 2)
 
@@ -196,7 +201,13 @@ Can the metric detect them? Not in this stream shape. The parser attaches a noti
 
 ## Follow-ups (not done here)
 
-1. Reviewer pending exception (harness `reviewStats`/`evaluateTargets`, and the `reviewer.md` wording), as above. The director decides whether the target accepts "not waited: changes requested".
+1. Reviewer pending exception: done in CW-11 (decision 0017), see above.
 2. Parser: attach a `task_notification` to the next turn even without a preceding `result` event, if its `tool_use_id` is a CI command, with a test using the mid-run order above.
 3. A live run with a slow CI would be needed to see a non-zero "started by a background notification". None of the six runs covered that path.
-4. Codex runs `reconcile-logs.js --merges` more often than the prompt asks (6 times in cw9, and at least two of them printed nothing). A prompt tweak could limit it to "when something is queued, at the end of a wave and before the milestone PR".
+4. Codex runs `reconcile-logs.js --merges` more often than the prompt asks (6 times in cw9, and at least two of them printed nothing). Done in CW-11 (decision 0017): the prompt now says to run it only when `STATUS.md` has a `queued` row.
+
+## Limits of these runs
+
+- **Never exercised live.** No run queued anything, so these paths were not run against a real forge: queueing with `--auto`, cancelling auto-merge, `reconcile-logs.js --merges` resolving a queued PR, the red and pending gate results, `ci-wait.js --queue-check` (added after the runs, decision 0018), and the Claude background wait (`run_in_background`). The reconcile checkpoints in the runs found nothing queued. Their behaviour rests on the unit and fake-CLI tests only.
+- **Parser under-count gap that remains.** A PowerShell here-string run through `& $c`, through another variable, or through an alias (an interpreter the parser does not recognise) is treated as text, so a CI call inside it is not counted. The parser leans toward over-counting, but this shape under-counts.
+- One run per cell is one sample; see the note at the top.

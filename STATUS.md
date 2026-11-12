@@ -21,10 +21,13 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | merged | #95 | #96 |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 4 | merged | #88 | #97 |
 | CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | merged | #98 | #99 |
+| CW-final | Final milestone review | reviewer | Fable (user-chosen) / high | 1 | done: 1 critical, 3 major, 15 minor | #81 | |
+| CW-10 | Final-review script fixes: guard `--admin=`, `--queue-check`, reconcile | implementer | large (opus) / high | 2 | changes requested (hook time budget) + git push abbreviation fold-in | #100 | #103 |
+| CW-11 | Final-review doc fixes, 0017 items, carried items | implementer | medium (sonnet) / medium | 2 | merged | #101 | #102 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
-Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → CW-9 (+ live re-run on both tools) → final review (Fable / high, started 2026-11-12) → CW-10 fix batch → milestone PR.
+Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → CW-9 (+ live re-run on both tools) → final review (Fable / high, started 2026-11-12) → CW-10 (scripts) ∥ CW-11 (docs) → milestone PR. Decision 0018: M1 and M3 treated as critical with C1.
 
 Live runs (CW-7): the Director starts the four harness runs as background commands (each takes 20–40 min, longer than an agent's foreground shell cap). The headless Directors use the large tier on both tools (Claude `opus`, Codex `gpt-6.1-sol`) in every run, so before/after compare the same model. A CW-7 implementer analyses the JSON reports and writes the before/after report. Baseline runs (0.5.0, commit 0205ab8) start once CW-8 is merged; the after runs start once CW-4 is merged. Baseline runs started 2026-11-12 03:04 UTC (runs live-20261112t030358-claude-a684 and live-20261112t030359-codex-def4), harness at CW-8 head 5f9153f. After runs (0.6.0, commit 666ce58) started 03:24 UTC: live-20261112t032427-claude-b8d9 and live-20261112t032428-codex-b4c2. Baselines done: Claude 6 CI turns / 469k tokens, 4 foreground --watch, 5/5 reviews pending; Codex 13 CI turns / 760k tokens, 5 pending reviews, reported complete while a check was running. After runs done: Claude 6 CI turns / 466k tokens, Codex 8 / 544k; both 0 --watch, 0 pending reviews, complete after green checks (37 s / 65 s); both miss "≤1 CI turn per task PR" on the first task PR (2 turns), which CW-7 diagnoses. Cleanup left each run's `milestone/live-*` branch (ruleset). CW-9 re-runs (plugin at PR #99 head 54415b1, same harness and models, label `cw9`) started alongside its review. Claude re-run (live-20261112t041015-claude-6cc7): `--names` now shares the first gate call, one gate turn per task PR; the target still reads FAIL (#55, #56: 2) because an end-of-wave reconcile + STATUS bookkeeping turn names both PRs in sed/PR-body text, which the parser counts (CW-7 parser follow-up). 7 CI turns / 564k tokens, 0 --watch, 0 pending, complete +35 s. Codex re-run (live-20261112t041017-codex-f463): 1 CI turn on every task PR (#57, #58, #59, #62, #64), but the target reads FAIL because 6 no-PR reconcile turns are charged; 1 review `pending` without a stated wait (new miss); 12 CI turns / 827k tokens over 91 turns, 5 task PRs; complete +64 s. CW-7 fold-in fixes the parser attribution and diagnoses the pending review.
 
@@ -46,7 +49,14 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - 0016: both after runs missed "≤1 CI turn per task PR" on the first PR only, because of the one-time `--names` call (CW-7). Fix the prompt (CW-9: `--names` shares the first merge-gate call); the target stays as written; re-run live on both tools.
 - User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
 
-## Carried into the post-final-review fix batch
+## Final review: not fixed in this milestone (report to the user)
+
+- PowerShell `$LASTEXITCODE` keeps a stale value if `node` can't start; `$LASTEXITCODE = 1;` before the gate would harden it (merging.md ~36; not reproducible).
+- GitLab `head_pipeline.sha` isn't compared with the MR head, so just after a push an older pipeline could be read (forge.js ~244; unconfirmed, needs a live GitLab run).
+- On a project with no CI, every review waits the 120 s grace before `none` (reviewer.md / ci-wait.js).
+- CW-10 review, unconfirmed glab: `glabCancels` passes a numeric project id as `--repo` (likely rejected by glab: a false warning, safe direction); a bare `glab mr merge` may default to auto-merge on recent glab, so it would be logged without `match_head` (needs `glab mr merge --help` on a current glab).
+
+## Carried into the post-final-review fix batch (CW-11)
 
 - SKILL.md:87 still says to put `--names` "on the queue call or the wait/followup call" in the pending case; merging.md and codex.md now say: on the merge call after the green report, or the Claude background wait (CW-9 incremental review).
 - tests/ci-docs.test.js no-bare-`;` test should assert it scanned at least one merge example line (CW-9 incremental review).
@@ -73,4 +83,3 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - Merge lines record no repo, so a PR merged with `-R other/repo` is reconciled against the current repo (CW-3).
 - CW-3 review minors: tests/ci-wait.test.js ~842 recovery control still uses `--call-timeout 1` (same slow-runner flake class); `mergeGates` logs `gh-checks` when both gates precede a merge (cosmetic).
 - Live harness parser (CW-7): PR numbers are taken from the whole call, not only the CI part (Codex turn 42 over-counts the milestone PR); a `task_notification` is attached only after a `result` event, so a background CI completion would go undetected. A slow-CI run is needed to see a non-zero notification count.
-- `tests/live/ci-recompute.js` prints recomputed numbers but doesn't diff them against the original run report (CW-7 review); a `--compare` option would make the check repeatable.
