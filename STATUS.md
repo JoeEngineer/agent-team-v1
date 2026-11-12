@@ -19,11 +19,12 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
 | CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | merged | #95 | #96 |
-| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | in progress | #88 | |
+| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | in review | #88 | #97 |
+| CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 1 | in progress | #98 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
-Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → final review.
+Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → CW-9 (+ live re-run on both tools) → final review.
 
 Live runs (CW-7): the Director starts the four harness runs as background commands (each takes 20–40 min, longer than an agent's foreground shell cap). The headless Directors use the large tier on both tools (Claude `opus`, Codex `gpt-6.1-sol`) in every run, so before/after compare the same model. A CW-7 implementer analyses the JSON reports and writes the before/after report. Baseline runs (0.5.0, commit 0205ab8) start once CW-8 is merged; the after runs start once CW-4 is merged. Baseline runs started 2026-11-12 03:04 UTC (runs live-20261112t030358-claude-a684 and live-20261112t030359-codex-def4), harness at CW-8 head 5f9153f. After runs (0.6.0, commit 666ce58) started 03:24 UTC: live-20261112t032427-claude-b8d9 and live-20261112t032428-codex-b4c2. Baselines done: Claude 6 CI turns / 469k tokens, 4 foreground --watch, 5/5 reviews pending; Codex 13 CI turns / 760k tokens, 5 pending reviews, reported complete while a check was running. After runs done: Claude 6 CI turns / 466k tokens, Codex 8 / 544k; both 0 --watch, 0 pending reviews, complete after green checks (37 s / 65 s); both miss "≤1 CI turn per task PR" on the first task PR (2 turns), which CW-7 diagnoses. Cleanup left each run's `milestone/live-*` branch (ruleset).
 
@@ -41,6 +42,7 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - CW-1: `ci-wait.js --once` makes N+2 calls for N PRs on one base (adds the classic-protection lookup) instead of 2 per PR; accepted, since skipping it would change the gate.
 - Scratch repo is private (user has Pro/Team). Headless live runs skip permissions inside the temp clone only; the guard hooks still run.
 - CW-4: after the one fallback CI wait (Claude background, Codex reviewer re-wait), still pending means tell the user; no further waits.
+- 0016: both after runs missed "≤1 CI turn per task PR" on the first PR only, because of the one-time `--names` call (CW-7). Fix the prompt (CW-9: `--names` shares the first merge-gate call); the target stays as written; re-run live on both tools.
 - User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
 
 ## Blocked
@@ -61,3 +63,4 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - CW-2 (0015) refuses harmless glued redirections in git/gh/glab commands (`git diff>x`); the message says to add a space.
 - Merge lines record no repo, so a PR merged with `-R other/repo` is reconciled against the current repo (CW-3).
 - CW-3 review minors: tests/ci-wait.test.js ~842 recovery control still uses `--call-timeout 1` (same slow-runner flake class); `mergeGates` logs `gh-checks` when both gates precede a merge (cosmetic).
+- Live harness parser (CW-7): PR numbers are taken from the whole call, not only the CI part (Codex turn 42 over-counts the milestone PR); a `task_notification` is attached only after a `result` event, so a background CI completion would go undetected. A slow-CI run is needed to see a non-zero notification count.
