@@ -89,6 +89,81 @@ test('Director CI guidance: one gated merge call, disable auto-merge before push
   assert(skill.includes('ask the user; don\'t merge'));
 });
 
+test('Director CI guidance: allow-none, auto-merge conditions, unknown, queued state, fallbacks, GitLab cancel', () => {
+  const dir = path.join(skillsDir, 'director');
+  const merging = fs.readFileSync(path.join(dir, 'references', 'merging.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+  const codex = fs.readFileSync(path.join(dir, 'references', 'codex.md'), 'utf8');
+  const gitlab = fs.readFileSync(path.join(dir, 'references', 'gitlab.md'), 'utf8');
+  const status = fs.readFileSync(path.join(ROOT, 'templates', 'project', 'STATUS.md'), 'utf8');
+  // --allow-none only with --sha
+  assert(merging.includes('use the same call with `--allow-none` after `--sha <head_sha>` (`--allow-none` only passes with a matching `--sha`)'));
+  // --auto only with named required checks and auto-merge allowed
+  assert(merging.includes('Auto-merge is usable when `STATUS.md`\'s CI block records named required checks on the milestone base and "Allow auto-merge" on.'));
+  assert(merging.includes('without named ones it could merge before CI ran'));
+  // Codex: PS 5.1 gate form and the reviewer re-wait followup
+  assert(codex.includes('ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n>'));
+  assert(codex.includes('send a followup to the same reviewer ("wait again and report ci", `kind=followup`'));
+  assert(merging.includes('Send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt)'));
+  // STATUS template: queued state and CI block; waiting CI is used by the fallbacks
+  assert(status.includes('`queued` (auto-merge on, not yet merged)'));
+  assert(status.includes('`waiting CI`'));
+  assert(status.includes('## CI'));
+  assert(status.includes('- Required checks on `milestone/*`:'));
+  assert(status.includes('- Auto-merge ("Allow auto-merge"): on / off'));
+  assert(merging.includes('set the state to `waiting CI`'));
+  assert(codex.includes('set the state to `waiting CI`'));
+  assert(skill.includes('state `queued` or `waiting CI`'));
+  // First-CI-run trigger points at the setup steps
+  assert(skill.includes('After the first task PR\'s CI has run on the milestone, do this once'));
+  assert(skill.includes('ci-wait.js" --names <n>'));
+  assert(skill.includes('"CI names and auto-merge (after the first CI run)"'));
+  assert(skill.includes('README\'s "Required check names"'));
+  assert(skill.includes('You never change repo settings yourself'));
+  // Milestone close: ci-wait on the milestone PR
+  assert(skill.includes('`node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once`'));
+  assert(merging.includes('(5) `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once`'));
+  // Reviewer unknown: the Director asks the user, never queues or waits; only a reviewed head is merged or queued
+  assert(skill.includes('When the reviewer\'s CI result is `unknown`, don\'t queue and don\'t wait: ask the user.'));
+  assert(merging.includes('Reviewer `ci: unknown` is different'));
+  assert(merging.includes('Don\'t queue and don\'t wait; ask the user.'));
+  assert(skill.includes('commits came after the review and their incremental review'));
+  assert(skill.includes('Only a reviewed head (`head_sha`) is ever merged or queued'));
+  // GitLab: the cancel row is a glab api call, and merging.md points at it
+  assert(gitlab.includes('glab api -X POST projects/:id/merge_requests/<n>/cancel_merge_when_pipeline_succeeds'));
+  assert(gitlab.includes('untested against a live instance'));
+  assert(!merging.includes('GitLab: cancel auto-merge'), 'merging.md must point at the gitlab.md cancel row');
+  assert(merging.includes('GitLab: the cancel row in `gitlab.md`'));
+  assert(!gitlab.includes('GitLab may queue the merge to happen when the pipeline succeeds'), 'stale running-pipeline paragraph');
+  assert(gitlab.includes('The gate merges only on a green pipeline'));
+});
+
+test('Reviewer CI wait: review work first, 900 s budget, unknown vs pending, blocking-finding single check', () => {
+  const reviewer = fs.readFileSync(path.join(ROOT, 'agents', 'reviewer.md'), 'utf8');
+  // The wait is the last numbered step: nothing numbered after it
+  const steps = [...reviewer.matchAll(/^(\d+)\. (.*)$/gm)].map((m) => ({ n: Number(m[1]), text: m[2] }));
+  const waitIdx = steps.findIndex((x) => x.text.startsWith('Wait for CI last'));
+  assert(waitIdx >= 0, 'no wait step in the numbered review steps');
+  eq(waitIdx, steps.length - 1, 'wait must be the last numbered step');
+  assert(steps.findIndex((x) => x.text.startsWith('For tests the PR adds')) < waitIdx);
+  assert(steps.findIndex((x) => x.text.startsWith('Separate blocking problems')) < waitIdx);
+  assert(!reviewer.includes('so it runs while you review'), 'stale: CI does not run while you review');
+  // Second call and the budget
+  assert(reviewer.includes('`--timeout <900 - waited>`'));
+  assert(reviewer.includes('counts only the time spent inside `ci-wait.js` (the sum of the `waited_s` it reports)'));
+  assert(reviewer.includes('at most 2 calls per reviewed head'));
+  assert(reviewer.includes('The two-call cap starts again for each reviewed head'));
+  // Blocking finding: one --once check, not the full wait
+  assert(reviewer.includes('ci-wait.js" <n> --once --sha <head_sha>`'));
+  assert(reviewer.includes('"not waited: changes requested"'));
+  // unknown is its own value; pending is a timeout (plus the one marked case)
+  assert(reviewer.includes('"ci": "green | red | pending | none | unknown"'));
+  assert(reviewer.includes('- `unknown`: the helper could not tell'));
+  assert(reviewer.includes('Don\'t report it as `pending`'));
+  assert(!/Report `pending` only on a timeout/.test(reviewer), 'old pending wording');
+  assert(!/unknown[^.]*report `pending`/i.test(reviewer), 'unknown must not be reported as pending');
+});
+
 test('--watch appears in no Director file; the reviewer has it only as a fallback', () => {
   const files = walk(path.join(skillsDir, 'director'));
   assert(files.length > 0, 'no Director files scanned');

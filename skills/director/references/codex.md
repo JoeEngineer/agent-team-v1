@@ -105,7 +105,7 @@ Get `<model>` from `node "<plugin root>/scripts/models.js" resolve <tier> --tool
 
 ## Merging and CI
 
-Codex has no background shell that wakes the Director, so the Claude fallback (a background `ci-wait.js`) doesn't exist here. When auto-merge isn't usable and the reviewer reported `ci: pending`, send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt, logged first like any followup) and merge on its report. Say in `STATUS.md` why auto-merge wasn't used.
+Codex has no background shell that wakes the Director, so the Claude fallback (a background `ci-wait.js`) doesn't exist here. When auto-merge isn't usable and the reviewer reported `ci: pending`, send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt, logged first like any followup) and merge on its report. Say in `STATUS.md` why auto-merge wasn't used, and set the state to `waiting CI` until the reviewer reports.
 
 The reviewer waits for CI in one blocking shell call: pass the shell tool's timeout parameter (e.g. `timeout_ms`, if it has one) set to 600000 ms.
 

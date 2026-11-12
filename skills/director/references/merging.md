@@ -17,7 +17,7 @@ main  ←── (user merges) ──  milestone/<slug>  ←── (Director merg
 All must be true:
 1. A `reviewer` delegation for this PR returned a `review-json` block with `"verdict": "approve"` (logged in `.agent-team/logs/reviews.jsonl`).
 2. The review block's `head_sha` equals the PR's current head (`gh pr view <n> --json headRefOid`). Commits pushed after the review need a new review first (for a fold-in commit, the incremental diff only; see below). Only a reviewed head is ever merged or queued.
-3. CI is green: the reviewer waited for it and reported `"ci": "green"`. Don't re-check what the reviewer reported; the gate in the merge call (below) re-reads it. (No CI configured, `"ci": "none"` → the reviewer must have run the tests: `"tests_passed": true`.)
+3. CI is green: the reviewer waited for it and reported `"ci": "green"`. (Reviewer `"ci": "unknown"`, for example the required checks can't be read: don't queue, don't wait; ask the user.) Don't re-check what the reviewer reported; the gate in the merge call (below) re-reads it. (No CI configured, `"ci": "none"` → the reviewer must have run the tests: `"tests_passed": true`.)
 4. The PR's base is `milestone/<slug>`.
 
 You never wait on CI in the foreground: no watch or polling loop. A task PR costs at most one short Director turn on CI.
@@ -50,7 +50,9 @@ If the reviewer ran the tests and they passed, use the same call with `--allow-n
 
 ### Reviewer reported `ci: pending`, or commits were pushed after the review
 
-A reviewer timeout leaves CI pending; a fold-in adds commits after the review (and its incremental review). Don't wait. If auto-merge is usable, queue it:
+A reviewer timeout leaves CI `pending`; a fold-in adds commits after the review. Once the incremental review has approved the new head, its `head_sha` is the one to queue or wait for. Only a reviewed head is ever merged or queued. Don't wait in the foreground.
+
+Reviewer `ci: unknown` is different: the helper couldn't tell (decision 0014). Don't queue and don't wait; ask the user. If auto-merge is usable, queue it:
 
 ```bash
 gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>
@@ -60,8 +62,8 @@ gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>
 
 Auto-merge is usable when `STATUS.md`'s CI block records named required checks on the milestone base and "Allow auto-merge" on. Fill the block after the first CI run on the milestone: `node "<plugin root>/scripts/ci-wait.js" --names <n>` lists the required checks. `--auto` waits only for required checks, so without named ones it could merge before CI ran.
 
-When auto-merge is not usable, say why in `STATUS.md` (this fallback costs two Director turns for that PR):
-- Claude: run `node "<plugin root>/scripts/ci-wait.js" <n> --sha <sha> --timeout 1800` as a background command (Bash `run_in_background`), and merge with the gate call above when its completion arrives.
+When auto-merge is not usable, say why in `STATUS.md` and set the state to `waiting CI` (this fallback costs two Director turns for that PR):
+- Claude: run `node "<plugin root>/scripts/ci-wait.js" <n> --sha <head_sha> --timeout 1800` as a background command (Bash `run_in_background`), and merge with the gate call above when its completion arrives.
 - Codex has no background shell that wakes the Director. Send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt) and merge on its report.
 
 ### Red CI
@@ -71,10 +73,10 @@ Red in review: send it back to the implementer with the failing check names, unl
 ### Queued PRs: checkpoints
 
 Run `node "<plugin root>/scripts/reconcile-logs.js" --merges` before the next merge when something is queued, at the end of a wave, and before opening the milestone PR. One call covers every queued PR. It prints one line per PR: merged, auto-merge-cancelled, closed, still queued (with its CI state), or head moved.
-- Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: cancel auto-merge), then send it back to the implementer with the failing check names. It counts as red CI.
+- Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: the cancel row in `gitlab.md`), then send it back to the implementer with the failing check names. It counts as red CI.
 - Head moved: disable auto-merge at once.
 
-Before any push to a queued PR (a send-back or a fold-in), disable auto-merge first (`gh pr merge <n> --disable-auto`; GitLab: cancel auto-merge). GitHub keeps auto-merge on when someone with write access pushes.
+Before any push to a queued PR (a send-back or a fold-in), disable auto-merge first (`gh pr merge <n> --disable-auto`; GitLab: the cancel row in `gitlab.md`). GitHub keeps auto-merge on when someone with write access pushes.
 
 ## The milestone PR
 
