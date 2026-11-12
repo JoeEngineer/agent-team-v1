@@ -12,7 +12,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { SCRIPTS, test, assert, eq } = require('./helpers');
-const { Playback } = require('./fake-ci-cli');
+const { Playback, keyOf } = require('./fake-ci-cli');
 
 const ciWait = require(path.join(SCRIPTS, 'ci-wait.js'));
 const forge = require(path.join(SCRIPTS, 'forge.js'));
@@ -44,7 +44,10 @@ const mr = (status, { sha = SHA, id = 55, target = 'main', state = 'opened' } = 
 
 // ---- in-process harness ----------------------------------------------------
 const T0 = 1000000;
-function exec(argv, routes, { forgeName = 'github', callMs = 0 } = {}) {
+// callMs: how long each call takes on the fake clock, a number or a function of
+// the route key. killOnTimeout: a call that would take longer than the timeout
+// it was given is killed at that timeout, the way execFileSync does it.
+function exec(argv, routes, { forgeName = 'github', callMs = 0, killOnTimeout = false } = {}) {
   const pb = new Playback(routes);
   const base = pb.runner();
   let t = T0;
@@ -52,7 +55,13 @@ function exec(argv, routes, { forgeName = 'github', callMs = 0 } = {}) {
   const raw = [];
   const errs = [];
   const runner = (f, a, c, to) => {
-    try { return base(f, a, c, to); } finally { t += callMs; }
+    const ms = typeof callMs === 'function' ? callMs(keyOf(a)) : callMs;
+    if (killOnTimeout && ms > to) {
+      pb.calls.push({ forge: f, key: keyOf(a), args: a, timeout: to, killed: true });
+      t += to;
+      throw Object.assign(new Error('spawnSync gh ETIMEDOUT'), { code: 'ETIMEDOUT', killed: true, signal: 'SIGKILL' });
+    }
+    try { return base(f, a, c, to); } finally { t += ms; }
   };
   const code = ciWait.main(argv, {
     run: runner, forge: forgeName, cwd: process.cwd(),
@@ -210,6 +219,13 @@ test('unknown: one failed look in the middle of a wait is tolerated, three in a 
   eq(gone.pb.count('view'), 2, 'stops at the 404');
 });
 
+test('unknown: a 502 while waiting on PR 404 is a blip, not "not found" (status read from stderr, not the command line)', () => {
+  const r = exec(['404'], gh([pr([running('b')]), { err: 'gh: HTTP 502: Bad Gateway' }, pr([ok('b')])]));
+  eq(r.pb.calls.filter((c) => c.key === 'view:404').length, 3, 'precondition and recovery: the failed call was for PR 404, and it was retried');
+  eq(r.code, 0, 'exit');
+  eq(r.rec.ci, 'green', 'ci');
+});
+
 console.log('ci-wait: head moved (--sha)');
 
 test('head moved before the first look: exit 4, sha_matches false, no further calls', () => {
@@ -272,22 +288,82 @@ test('no required checks: all checks decide, required is null, the note says so'
   assert(/no required checks on 'main'; decided on all checks/.test(r.rec.note), r.rec.note);
 });
 
-test('required checks unreadable (ruleset 403): fall back to all checks with a note, not an error', () => {
-  const r = exec(['7'], gh(pr([ok('build'), ok('lint')]), { rules: FORBIDDEN }));
-  eq(r.code, 0, 'exit');
-  eq(r.rec.ci, 'green', 'ci');
-  eq(r.rec.required, null, 'required');
-  assert(/could not read the required checks of 'main'.*rulesets.*403.*decided on all checks/.test(r.rec.note), r.rec.note);
-  eq(r.pb.count('protection'), 0, 'stops at the first unreadable source');
-  const red = exec(['7'], gh(pr([ok('build'), bad('lint')]), { rules: FORBIDDEN }));
-  eq(red.code, 1, 'all-checks fallback is the stricter reading');
+const ADMIN_ONLY = { err: 'gh: Must have admin rights to Repository. (HTTP 403)' };
+
+test('required checks unreadable (ruleset 403): unknown, exit 2, never green, and not retried', () => {
+  for (const flags of [[], ['--once']]) {
+    const r = exec(['7', ...flags], gh(pr([ok('build'), ok('lint')]), { rules: FORBIDDEN }));
+    eq(r.pb.count('rules'), 1, `precondition: the ruleset lookup ran and failed (${flags})`);
+    eq(r.code, 2, `exit (${flags})`);
+    eq(r.rec.ci, 'unknown', 'ci: all checks green is not enough');
+    eq(r.rec.required, null, 'required');
+    eq(JSON.stringify(r.rec.failing) + JSON.stringify(r.rec.pending), '[][]', 'no lists from a reading we do not trust');
+    assert(/could not read the required checks of 'main' \(rulesets: gh: Resource not accessible by integration \(HTTP 403\)\); permission: this token can't read the rulesets; not falling back to all checks/.test(r.rec.note), r.rec.note);
+    eq(r.pb.count('protection'), 0, 'stops at the first unreadable source');
+    eq(r.pb.calls.length, 2, 'a 403 is final: no further polls, no retry');
+    eq(r.sleeps.length, 0, 'no sleep');
+  }
 });
 
-test('required checks half-readable (ruleset names, protection 403): not trusted, all checks decide', () => {
-  const r = exec(['7'], gh(pr([ok('build'), bad('lint')]), { rules: rules('build'), protection: FORBIDDEN }));
-  eq(r.code, 1, 'exit: lint counts because the required set is incomplete');
-  eq(r.rec.required, null, 'required');
-  assert(/branch protection/.test(r.rec.note), r.rec.note);
+test('required checks half-readable (ruleset names, protection 403 needs admin): unknown even though the ruleset check passed', () => {
+  // The case the fallback got wrong: the ruleset says 'build' is required, it
+  // passed; classic protection (unreadable) may require 'deploy', which has not
+  // appeared on the head. Green would be a guess.
+  const r = exec(['7'], gh(pr([ok('build'), ok('lint')]), { rules: rules('build'), protection: ADMIN_ONLY }));
+  eq(r.pb.count('protection'), 1, 'precondition: protection was asked and refused');
+  eq(r.code, 2, 'exit');
+  eq(r.rec.ci, 'unknown', 'ci');
+  eq(r.rec.required, null, 'required: the partial set is not reported as the set');
+  assert(/branch protection: gh: Must have admin rights to Repository\. \(HTTP 403\)\); permission: reading classic branch protection needs admin rights on the repo/.test(r.rec.note), r.rec.note);
+  eq(r.pb.calls.length, 3, 'final: nothing after the refusal');
+});
+
+test('required checks: a protection 404 other than "Branch not protected" is unreadable, not "none"', () => {
+  const r = exec(['7'], gh(pr([ok('build')]), { protection: { err: 'gh: Not Found (HTTP 404)' } }));
+  eq(r.code, 2, 'exit');
+  assert(/answered 404, so it may be hidden from this token/.test(r.rec.note), r.rec.note);
+  eq(r.pb.calls.length, 3, 'a 404 is final');
+  const branchGone = exec(['7'], gh(pr([ok('build')]), { protection: { err: 'gh: Branch not found (HTTP 404)' } }));
+  eq(branchGone.code, 0, "GitHub's own 'Branch not found' is no protection");
+  eq(exec(['7'], gh(pr([ok('build')]))).code, 0, "recovery control: 'Branch not protected' is no protection, all checks decide");
+});
+
+test('required checks: a 403 on a base whose name contains 404 is still a 403 (status read from stderr, not the command line)', () => {
+  const routes = gh(pr([ok('build'), ok('lint')], { base: 'hotfix-404' }), { rules: rules('build'), protection: ADMIN_ONLY });
+  const r = exec(['7'], routes);
+  const prot = r.pb.calls.find((c) => c.key === 'protection');
+  assert(prot && prot.args[1].includes('hotfix-404'), 'precondition: the failing command line contains 404');
+  eq(r.code, 2, 'exit: not read as "not protected"');
+  eq(r.rec.ci, 'unknown', 'ci');
+  assert(/HTTP 403/.test(r.rec.note), r.rec.note);
+});
+
+test('required checks: a transient lookup failure is retried on the next poll (recovery), counted within the polls', () => {
+  const r = exec(['7', '--interval', '30', '--timeout', '90'], gh(pr([ok('build'), ok('lint')]), { rules: [{ err: 'gh: HTTP 502: Bad Gateway' }, rules('build')] }));
+  eq(r.pb.calls[1].key, 'rules', 'precondition: the first lookup ran');
+  eq(r.code, 0, 'exit: green once the set was read');
+  eq(r.pb.count('rules'), 2, 'asked again on the second poll');
+  eq(r.pb.count('view'), 2, 'two polls');
+  eq(r.sleeps.length, 1, 'one sleep');
+  eq(JSON.stringify(r.rec.required), '["build"]', 'required');
+  const missing = exec(['7', '--interval', '30', '--timeout', '90'], gh(pr([ok('lint')]), { rules: [{ hang: true }, rules('build')] }));
+  eq(missing.code, 8, 'a required check not on the head still keeps it pending after the retry');
+  eq(missing.pb.count('rules'), 2, 'looked up twice, then kept');
+  eq(missing.pb.count('view'), 3, 'polled to the deadline');
+});
+
+test('required checks: a lookup that never succeeds is unknown at the deadline, nothing after it', () => {
+  const r = exec(['7', '--interval', '30', '--timeout', '90'], gh(pr([ok('build')]), { rules: { err: 'gh: HTTP 502: Bad Gateway' } }));
+  eq(r.pb.count('rules'), 3, 'precondition: retried on every poll');
+  eq(r.pb.count('view'), 3, 'all polls used');
+  eq(r.pb.calls.length, 6, 'one step past: no call after the last poll');
+  eq(r.code, 2, 'exit');
+  eq(r.rec.ci, 'unknown', 'ci');
+  assert(/rulesets: gh: HTTP 502.*not falling back to all checks; deadline reached after 90s/.test(r.rec.note), r.rec.note);
+  eq(r.elapsed, 90, 'ended at the deadline');
+  const once = exec(['--once', '1', '2'], { view: pr([ok('b')]), rules: [{ err: 'gh: HTTP 502' }, rules()], protection: NOT_PROTECTED });
+  eq(JSON.stringify(once.recs.map((x) => x.ci)), '["unknown","green"]', '--once: unknown for the look that failed, the next request asks again');
+  eq(once.pb.count('rules'), 2, '--once: a transient failure is not cached');
 });
 
 test('required checks: rulesets and classic protection are merged (contexts and checks)', () => {
@@ -318,6 +394,28 @@ test('a rerun: the latest run of a check wins, in either order', () => {
   eq(exec(['7'], gh(pr([...passedThenBroke].reverse()))).code, 1, 'newer failure, array reversed');
   const required = exec(['7'], gh(pr(failedThenFixed), { rules: rules('test') }));
   eq(required.code, 0, 'rerun with a required check');
+});
+
+test('a rerun that has not started (no startedAt, or the zero time) replaces an older success, in either order', () => {
+  const older = ok('test', { startedAt: '2026-01-01T00:00:00Z' });
+  for (const [label, extra] of [['null', { startedAt: null }], ['missing', { startedAt: undefined }], ['zero time', { startedAt: '0001-01-01T00:00:00Z' }], ['empty', { startedAt: '' }]]) {
+    const queued = run_('test', 'QUEUED', '', extra);
+    for (const rollup of [[older, queued], [queued, older]]) {
+      const r = exec(['--once', '7'], gh(pr(rollup)));
+      eq(r.code, 8, `queued rerun with ${label} startedAt is pending, not the stale green`);
+      eq(JSON.stringify(r.rec.pending), '["test"]', 'pending');
+    }
+  }
+  const tieRun = running('test', { startedAt: '2026-01-01T00:00:00Z' });
+  eq(exec(['--once', '7'], gh(pr([older, tieRun]))).code, 8, 'tie: the unfinished run wins');
+  eq(exec(['--once', '7'], gh(pr([tieRun, older]))).code, 8, 'tie, reversed: the unfinished run still wins');
+  const ctxTie = [ctxt('ci/x', 'SUCCESS'), { ...ctxt('ci/x', 'PENDING'), startedAt: null }];
+  eq(exec(['--once', '7'], gh(pr(ctxTie.reverse()))).code, 8, 'status context with no time is newest too');
+  // control: a finished run with no startedAt falls back to completedAt, so a
+  // later-started success still wins over an earlier-completed failure
+  const done = [bad('test', 'FAILURE', { startedAt: null, completedAt: '2026-01-01T00:05:00Z' }), ok('test', { startedAt: '2026-01-01T00:10:00Z' })];
+  eq(exec(['--once', '7'], gh(pr(done))).code, 0, 'completedAt fallback');
+  eq(exec(['--once', '7'], gh(pr([...done].reverse()))).code, 0, 'completedAt fallback, reversed');
 });
 
 test('the same job name in two workflows are two checks: a failure in one is not hidden', () => {
@@ -411,9 +509,25 @@ test('--once: one line per request in argument order; exit is the worst', () => 
   eq(r.sleeps.length, 0, '--once never sleeps');
   eq(exec(['--once', '1', '3'], routes).code, 8, 'pending outranks green');
   eq(exec(['--once', '1', '4'], routes).code, 3, 'none outranks green');
-  eq(exec(['--once', '1', '4', '--allow-none'], routes).code, 0, '--allow-none: none is fine');
+  eq(exec(['--once', '1', '4', '--allow-none'], routes).code, 3, '--allow-none without --sha: none still counts in --once');
   eq(exec(['--once', '3', '4', '--allow-none'], routes).code, 8, '--allow-none does not hide pending');
   eq(exec(['--once', '1'], routes).code, 0, 'single green');
+});
+
+test('--once --allow-none: none passes only with a matching --sha (the caller already waited on that head)', () => {
+  const plain = exec(['--once', '7', '--allow-none'], gh(pr([])));
+  eq(plain.rec.ci, 'none', 'precondition: no checks on the head');
+  eq(plain.code, 3, 'without --sha: exit 3');
+  assert(/--allow-none needs a matching --sha with --once/.test(plain.rec.note), plain.rec.note);
+  const withSha = exec(['--once', '7', '--allow-none', '--sha', SHA.slice(0, 7)], gh(pr([])));
+  eq(withSha.rec.sha_matches, true, 'precondition: --sha matched');
+  eq(withSha.code, 0, 'with a matching --sha: exit 0');
+  assert(!/needs a matching --sha/.test(withSha.rec.note), withSha.rec.note);
+  eq(exec(['--once', '7', '--allow-none', '--sha', SHA2], gh(pr([]))).code, 4, 'with a different --sha: head moved');
+  eq(exec(['--once', '7', '--sha', SHA], gh(pr([]))).code, 3, 'a matching --sha without --allow-none: still 3');
+  const wait = exec(['7', '--allow-none', '--grace', '0'], gh(pr([])));
+  eq(wait.code, 0, 'wait mode: --allow-none needs no --sha (it waited out the grace period itself)');
+  assert(!/needs a matching --sha/.test(wait.rec.note), wait.rec.note);
 });
 
 test('--once: exit-code order is 2 > 4 > 1 > 8 > 3 > 0', () => {
@@ -487,6 +601,24 @@ test('deadline: each call is limited to the call timeout and never runs past dea
   const slow = exec(['7', '--timeout', '100', '--interval', '30', '--call-timeout', '30'], gh(pr([running('b')])), { callMs: 10000 });
   assert(slow.elapsed <= 100 + 30 + 10, `calls that take time still end within deadline + interval: ${slow.elapsed}s`);
   assert(slow.rec.waited_s >= 100, `waited_s ${slow.rec.waited_s}`);
+});
+
+test('deadline: the calls of one poll share the time left, so a slow CLI and a short timeout end by deadline + interval', () => {
+  // --timeout 1 --interval 0.25: everything must end by 1.25s. The status call
+  // is quick; each required lookup call takes 1.2s.
+  const r = exec(['7', '--timeout', '1', '--interval', '0.25', '--call-timeout', '30'], gh(pr([running('b')]), { rules: rules('b') }),
+    { callMs: (k) => (k.startsWith('view') ? 0 : 1200), killOnTimeout: true });
+  const prot = r.pb.calls.find((c) => c.key === 'protection');
+  eq(r.pb.calls.find((c) => c.key === 'rules').timeout, 1250, 'first lookup call: the whole budget');
+  assert(r.elapsed <= 1.25, `ended at ${r.elapsed}s, budget 1.25s`);
+  assert(prot && prot.killed, 'precondition: the second lookup call ran out of time');
+  eq(prot.timeout, 50, 'second lookup call: only what was left');
+  eq(r.pb.calls.length, 3, 'one step past: no poll starts once the budget is used up');
+  eq(r.code, 2, 'exit: the required set was never read');
+  assert(/\(branch protection: timed out\).*deadline reached/.test(r.rec.note), r.rec.note);
+  // recovery control: the same wait with a quick CLI reads the set and polls normally
+  const quick = exec(['7', '--timeout', '1', '--interval', '0.25', '--call-timeout', '30'], gh([pr([running('b')]), pr([ok('b')])], { rules: rules('b') }), { killOnTimeout: true });
+  eq(quick.code, 0, 'quick CLI: green');
 });
 
 console.log('ci-wait: --names');
@@ -603,6 +735,23 @@ test('forge: requestStatus never throws and keeps CLI errors apart from "no chec
   eq(r4.ok, false, 'an MR without a sha is not ok');
 });
 
+test('forge: httpStatus reads only the CLI output (stderr, then stdout), never err.message', () => {
+  const e = (message, stderr, stdout) => Object.assign(new Error(message), { stderr, stdout });
+  eq(forge.httpStatus(e('Command failed: gh api repos/o/r/branches/hotfix-404/protection', 'gh: Must have admin rights to Repository. (HTTP 403)', '')), 403, '403 with 404 in the command line');
+  eq(forge.httpStatus(e('Command failed: gh pr view 404', 'gh: HTTP 502: Bad Gateway', '')), 502, '502 for PR 404');
+  eq(forge.httpStatus(e('Command failed: gh pr view 404 (HTTP 404)', '', '')), null, 'a 404 only in the message is ignored');
+  eq(forge.httpStatus(e('x', 'gh: Not Found (HTTP 404)', '')), 404, 'gh 404');
+  eq(forge.httpStatus(e('x', 'glab: 404 Not Found', '')), 404, 'glab 404 Not Found');
+  eq(forge.httpStatus(e('x', 'GET https://gitlab.com/api/v4/projects/1/merge_requests/9: 404 {message: 404 Not found}', '')), 404, 'glab API error body');
+  eq(forge.httpStatus(e('x', '', '{"message":"x","status":"403"}\ngh: Forbidden (HTTP 403)')), 403, 'from stdout when stderr is empty');
+  eq(forge.httpStatus(e('x', 'gh: To use GitHub CLI, run: gh auth login', '')), null, 'no status');
+  eq(forge.httpStatus(new SyntaxError('Unexpected token')), null, 'parse error');
+  eq(forge.httpStatus(null), null, 'nothing');
+  const failingWith = (err) => () => { throw err; };
+  const pr404 = forge.requestStatus('github', 404, '.', 1000, failingWith(e('Command failed: gh pr view 404 --json x', 'gh: HTTP 502', '')));
+  eq(pr404.notFound, false, 'requestStatus: PR 404 with a 502 is not "not found"');
+});
+
 test('forge: existing exports are unchanged', () => {
   for (const k of ['FORGES', 'detect', 'forgeOfUrl', 'hostOfUrl', 'viewArgs', 'fromGitlab', 'fromGithub', 'requestInfo', 'noun', 'viewCommand']) {
     assert(k in forge, `forge.${k}`);
@@ -653,11 +802,13 @@ test('process: pending then green waits one real interval', () => {
 });
 
 test('process: pending until a real deadline is honoured to within one interval', () => {
-  const p = proc(['7', '--interval', '0.3', '--timeout', '0.9', '--grace', '0'], gh(pr([running('b')])));
-  eq(p.status, 8, `exit (stderr: ${p.stderr})`);
-  eq(viewCalls(p).length, 3, 'ceil(0.9/0.3) polls');
+  // A 1s interval: the poll at the deadline has one interval for its call, and
+  // a stand-in gh started on a busy machine needs a few hundred ms.
+  const p = proc(['7', '--interval', '1', '--timeout', '3', '--grace', '0'], gh(pr([running('b')])));
+  eq(p.status, 8, `exit (stderr: ${p.stderr}, note: ${p.lines[0] && p.lines[0].note})`);
+  eq(viewCalls(p).length, 3, 'ceil(3/1) polls');
   const w = p.lines[0].waited_s;
-  assert(w >= 0.8 && w <= 0.9 + 0.3 + 3, `waited_s ${w}`);
+  assert(w >= 2.9 && w <= 3 + 1 + 3, `waited_s ${w}`);
   eq(p.pids.length, 0, 'nothing left hanging');
 });
 
@@ -705,6 +856,8 @@ test('process: usage errors exit 2 with nothing on stdout', () => {
 test('process: exit codes for red, none and head moved', () => {
   eq(proc(['--once', '7'], gh(pr([bad('b')]))).status, 1, 'red');
   eq(proc(['--once', '7'], gh(pr([]))).status, 3, 'none');
-  eq(proc(['--once', '7', '--allow-none'], gh(pr([]))).status, 0, 'none allowed');
+  eq(proc(['--once', '7', '--allow-none'], gh(pr([]))).status, 3, 'none, --allow-none without --sha');
+  eq(proc(['--once', '7', '--allow-none', '--sha', SHA], gh(pr([]))).status, 0, 'none allowed with a matching --sha');
+  eq(proc(['--once', '7'], gh(pr([ok('b')]), { protection: ADMIN_ONLY })).status, 2, 'required checks unreadable');
   eq(proc(['--once', '7', '--sha', 'f'.repeat(40)], gh(pr([ok('b')]))).status, 4, 'head moved');
 });

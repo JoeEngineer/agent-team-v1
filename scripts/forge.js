@@ -133,12 +133,23 @@ function errorText(err) {
   return line.trim().slice(0, 300);
 }
 
-// `gh api` says "HTTP 404"; glab says "404 Not Found".
-function isNotFound(err) {
-  if (!err || err instanceof SyntaxError) return false;
-  const text = [err.stderr, err.stdout, err.message].filter(Boolean).join('\n');
-  return /\b404\b/.test(text);
+// The HTTP status a failed call reports, read from the CLI's own output
+// (stderr, then stdout) and never from err.message, which repeats the command
+// line: a base named `hotfix-404` or `gh pr view 404` must not read as a 404.
+// gh says "... (HTTP 404)"; glab says "404 Not Found" / "404 {message: 404 Not found}".
+// null when the output names no status (a timeout, a crash, a login prompt).
+function httpStatus(err) {
+  if (!err || err instanceof SyntaxError) return null;
+  for (const out of [err.stderr, err.stdout]) {
+    if (!out) continue;
+    const text = String(out);
+    const m = /\bHTTP ([1-5]\d\d)\b/.exec(text) || /\b([1-5]\d\d) (?:Not Found|Forbidden|Unauthorized)\b/i.exec(text);
+    if (m) return Number(m[1]);
+  }
+  return null;
 }
+
+const isNotFound = (err) => httpStatus(err) === 404;
 
 const failure = (err) => ({
   ok: false,
@@ -166,6 +177,12 @@ function githubCheckState(c) {
 // The rollup, one entry per check, the latest run of each name winning (a rerun
 // replaces the failed run it retried). Two workflows may use the same job name,
 // so the key includes the workflow; both stay visible.
+//
+// "Latest" is by startedAt. A queued or just-started rerun often has no
+// startedAt yet (null, missing, or GitHub's zero time 0001-01-01T00:00:00Z), so
+// a missing or zero startedAt counts as newest; otherwise the older SUCCESS it
+// replaces would win and report a stale green. A finished run with no startedAt
+// falls back to its completedAt. On a tie, a run that hasn't finished wins.
 function normalizeRollup(rollup) {
   const latest = new Map();
   (Array.isArray(rollup) ? rollup : []).forEach((c, i) => {
@@ -173,11 +190,21 @@ function normalizeRollup(rollup) {
     const name = c.name || c.context;
     if (!name) return;
     const key = `${c.workflowName || ''}\u0000${name}`;
-    const t = Date.parse(c.startedAt || c.completedAt || '') || 0;
+    const state = githubCheckState(c);
+    let t = timeOf(c.startedAt);
+    if (t === null) t = state === 'pending' ? Infinity : (timeOf(c.completedAt) ?? Infinity);
     const prev = latest.get(key);
-    if (!prev || t >= prev.t) latest.set(key, { t, i, entry: { name, workflow: c.workflowName || null, state: githubCheckState(c) } });
+    const wins = !prev || t > prev.t || (t === prev.t && (state === 'pending' || prev.entry.state !== 'pending'));
+    if (wins) latest.set(key, { t, i, entry: { name, workflow: c.workflowName || null, state } });
   });
   return [...latest.values()].sort((a, b) => a.i - b.i).map((v) => v.entry);
+}
+
+// A timestamp in ms, or null when missing, unparseable or GitHub's zero time
+// (0001-01-01T00:00:00Z parses to a large negative number).
+function timeOf(s) {
+  const t = Date.parse(s || '');
+  return Number.isFinite(t) && t > 0 ? t : null;
 }
 
 const GITLAB_PENDING = ['running', 'pending', 'created', 'waiting_for_resource', 'preparing', 'scheduled', 'manual', 'canceling'];
@@ -230,31 +257,42 @@ function requestStatus(forge, number, cwd, timeout = 20000, run = cli) {
 
 // The status checks a base branch requires, from rulesets
 // (`rules/branches/<base>`) and classic branch protection
-// (`branches/<base>/protection/required_status_checks`, 404 = none). GitHub
-// only. Two CLI calls at most. { ok: true, names: [...] } (empty = nothing is
-// required) or { ok: false, error } when either source can't be read - the
-// caller then falls back to "all checks" rather than guessing.
+// (`branches/<base>/protection/required_status_checks`). GitHub only. Two CLI
+// calls at most. Returns
+//   { ok: true, names: [...] }   both sources read; empty = nothing is required
+//   { ok: false, source, status, error, definitive }   a source couldn't be read
+// Classic protection counts as "none" only on GitHub's own 404 answer for it
+// ("Branch not protected" / "Branch not found"); any other 404 may be GitHub
+// hiding something from this token, so it is unreadable. `definitive` marks an
+// answer that asking again won't change (HTTP 401, 403, 404); a timeout, a 5xx
+// or garbled output is not definitive. The caller must not fall back to "all
+// checks" on ok: false: a required check that hasn't started would be missed.
 function requiredChecks(forge, base, cwd, timeout = 20000, run = cli) {
   if (forge === 'gitlab') return { ok: true, names: [] };
   const b = encodeURIComponent(base);
   const names = new Set();
+  const unreadable = (source, err) => {
+    const status = httpStatus(err);
+    return { ok: false, source, status, error: `${source}: ${failure(err).error}`, definitive: [401, 403, 404].includes(status) };
+  };
   try {
     const rules = JSON.parse(run(forge, ['api', `repos/{owner}/{repo}/rules/branches/${b}`], cwd, timeout));
-    if (!Array.isArray(rules)) return { ok: false, error: 'rulesets: output was not a list' };
+    if (!Array.isArray(rules)) return { ok: false, source: 'rulesets', status: null, error: 'rulesets: output was not a list', definitive: false };
     for (const r of rules) {
       if (!r || r.type !== 'required_status_checks') continue;
       const list = r.parameters && r.parameters.required_status_checks;
       for (const c of Array.isArray(list) ? list : []) if (c && c.context) names.add(String(c.context));
     }
   } catch (err) {
-    return { ok: false, error: `rulesets: ${failure(err).error}` };
+    return unreadable('rulesets', err);
   }
   try {
     const prot = JSON.parse(run(forge, ['api', `repos/{owner}/{repo}/branches/${b}/protection/required_status_checks`], cwd, timeout));
     for (const c of Array.isArray(prot && prot.contexts) ? prot.contexts : []) if (c) names.add(String(c));
     for (const c of Array.isArray(prot && prot.checks) ? prot.checks : []) if (c && c.context) names.add(String(c.context));
   } catch (err) {
-    if (!isNotFound(err)) return { ok: false, error: `branch protection: ${failure(err).error}` };
+    const said = [err && err.stderr, err && err.stdout].filter(Boolean).join('\n');
+    if (!(isNotFound(err) && /Branch not (?:protected|found)/i.test(said))) return unreadable('branch protection', err);
   }
   return { ok: true, names: [...names] };
 }
@@ -295,5 +333,5 @@ const viewCommand = (forge) => (forge === 'gitlab' ? 'glab mr view' : 'gh pr vie
 
 module.exports = {
   FORGES, detect, forgeOfUrl, hostOfUrl, viewArgs, fromGitlab, fromGithub, requestInfo, noun, viewCommand,
-  cli, requestStatus, requiredChecks, repoSettings, pipelineJobNames, gitlabPipelineCi, normalizeRollup, githubCheckState, errorText,
+  cli, requestStatus, requiredChecks, repoSettings, pipelineJobNames, gitlabPipelineCi, normalizeRollup, githubCheckState, errorText, httpStatus,
 };
