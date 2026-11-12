@@ -8,6 +8,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { readJsonl, unresolvedQueued } = require('./records');
 const { spawnSync } = require('child_process');
 
 const STALE_MS = 10 * 60 * 1000;
@@ -55,17 +56,11 @@ function localDate() {
 
 const sha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
-// How many `auto-merge-queued` lines in merges.jsonl have no resolution line
-// (no line carries their ts as `resolves_ts`). Offline: reads the file only.
-function unresolvedQueued(logDir) {
-  let rows;
-  try {
-    rows = fs.readFileSync(path.join(logDir, 'merges.jsonl'), 'utf8').split(/\r?\n/).flatMap((l) => {
-      try { const r = JSON.parse(l); return r && typeof r === 'object' ? [r] : []; } catch { return []; }
-    });
-  } catch { return 0; }
-  const resolved = new Set(rows.filter((r) => r.resolves_ts).map((r) => r.resolves_ts));
-  return rows.filter((r) => r.outcome === 'auto-merge-queued' && !resolved.has(r.ts)).length;
+// How many `auto-merge-queued` lines in merges.jsonl still need the forge's
+// answer (see records.unresolvedQueued: superseded older lines don't count).
+// Offline: reads the file only.
+function unresolvedCount(logDir) {
+  return unresolvedQueued(readJsonl(path.join(logDir, 'merges.jsonl'))).length;
 }
 
 function main() {
@@ -93,7 +88,7 @@ function main() {
   if (fs.existsSync(dest) && !o.force) fail(`destination already exists (use --force to overwrite): ${dest}`);
 
   // Counted before anything is cleared. Archiving stays offline; resolving is reconcile-logs.js's job.
-  const unresolved = unresolvedQueued(logDir);
+  const unresolved = unresolvedCount(logDir);
   const unresolvedNote = unresolved ? `${unresolved} auto-merge-queued merges unresolved; run reconcile-logs.js --merges first` : '';
 
   const pendingDir = path.join(logDir, '.pending');

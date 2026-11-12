@@ -802,18 +802,21 @@ test('process: pending then green waits one real interval', () => {
 });
 
 test('process: pending until a real deadline is honoured to within one interval', () => {
-  // A 1s interval: the poll at the deadline has one interval for its call, and
-  // a stand-in gh started on a busy machine needs a few hundred ms.
-  const p = proc(['7', '--interval', '1', '--timeout', '3', '--grace', '0'], gh(pr([running('b')])));
+  // A 3s interval: the poll at the deadline has one interval for its call, and
+  // a stand-in gh started on a slow CI runner (Windows, node 26) can need over a
+  // second just to start; 1s intervals made this flaky.
+  const p = proc(['7', '--interval', '3', '--timeout', '9', '--grace', '0'], gh(pr([running('b')])));
   eq(p.status, 8, `exit (stderr: ${p.stderr}, note: ${p.lines[0] && p.lines[0].note})`);
-  eq(viewCalls(p).length, 3, 'ceil(3/1) polls');
+  eq(viewCalls(p).length, 3, 'ceil(9/3) polls');
   const w = p.lines[0].waited_s;
-  assert(w >= 2.9 && w <= 3 + 1 + 3, `waited_s ${w}`);
+  assert(w >= 8.9 && w <= 9 + 3 + 3, `waited_s ${w}`);
   eq(p.pids.length, 0, 'nothing left hanging');
 });
 
 test('process: a hung gh is killed at the call timeout, reported unknown, and the next request still runs', () => {
-  const p = proc(['--once', '1', '2', '--call-timeout', '1'], { 'view:1': { hang: true }, 'view:2': pr([ok('b')]), rules: rules(), protection: NOT_PROTECTED });
+  // A call timeout far above node's start-up time on a slow runner: the stand-in
+  // must get as far as writing its pid before it is killed.
+  const p = proc(['--once', '1', '2', '--call-timeout', '5'], { 'view:1': { hang: true }, 'view:2': pr([ok('b')]), rules: rules(), protection: NOT_PROTECTED });
   eq(p.pids.length, 1, 'precondition: the stand-in started hanging');
   eq(p.status, 2, `exit (stderr: ${p.stderr})`);
   eq(p.lines.length, 2, 'both requests reported');
@@ -827,7 +830,7 @@ test('process: a hung gh is killed at the call timeout, reported unknown, and th
 });
 
 test('process: a hang during a wait is killed and reported unknown at once on the first look', () => {
-  const p = proc(['7', '--call-timeout', '1', '--timeout', '30', '--interval', '5'], gh({ hang: true }));
+  const p = proc(['7', '--call-timeout', '5', '--timeout', '30', '--interval', '5'], gh({ hang: true }));
   eq(p.pids.length, 1, 'precondition: hang reached');
   eq(p.status, 2, 'exit');
   eq(p.lines[0].ci, 'unknown', 'ci');

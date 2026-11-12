@@ -296,36 +296,90 @@ function matchHead(m) {
   return null;
 }
 
-// Per merge in lib.findMerges order: the CI gate that came earlier in the same
-// command, 'ci-wait' (scripts/ci-wait.js) or 'gh-checks' (`gh pr checks`), or null.
+// Split a command on its top-level joiners (&&, ||, ;, |, newline), outside
+// quotes. Each piece keeps the joiner that preceded it. A PowerShell guard
+// (`if ($LASTEXITCODE -eq 0) {`) is stripped from the piece it opens and counts as '&&'.
+function joinedPieces(cmd) {
+  const pieces = [];
+  let cur = '', joiner = null, quote = null;
+  const push = (next) => { pieces.push({ text: cur, joiner }); cur = ''; joiner = next; };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (quote) { cur += c; if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'") { quote = c; cur += c; continue; }
+    if (c === '&' && cmd[i + 1] === '&') { push('&&'); i++; continue; }
+    if (c === '|' && cmd[i + 1] === '|') { push('||'); i++; continue; }
+    if (c === '|') { push('|'); continue; }
+    if (c === ';' || c === '\n') { push(';'); continue; }
+    cur += c;
+  }
+  push(null);
+  return pieces.map((pc) => {
+    const guard = /^\s*\}?\s*if\s*\(\s*\$LASTEXITCODE\s+-eq\s+0\s*\)\s*\{\s*/i.exec(pc.text);
+    const text = pc.text.replace(/^\s*\}\s*/, '');
+    return guard ? { text: pc.text.slice(guard[0].length), joiner: '&&' } : { text, joiner: pc.joiner };
+  }).filter((pc) => pc.text.trim());
+}
+
+// 'ci-wait' | 'gh-checks' when the piece's own command is a CI gate, else null:
+// node <...ci-wait.js> (or ci-wait itself) or gh pr checks, not a word in an
+// argument (`cat scripts/ci-wait.js`).
+function gateOf(text) {
+  const seg = lib.segments(text)[0];
+  if (!seg) return null;
+  const isNode = /^(?:.*[/\x5c])?node(?:\.exe)?$/i.test(seg[0]);
+  const ciWait = /(?:^|[/\x5c])ci-wait(?:\.js)?$/;
+  if ((isNode && seg[1] && ciWait.test(seg[1])) || ciWait.test(seg[0])) return 'ci-wait';
+  if (/^(?:.*[/\x5c])?gh(?:\.exe)?$/.test(seg[0])) {
+    const gh = lib.ghParts(seg);
+    if (gh && gh[0] === 'pr' && gh[1] === 'checks') return 'gh-checks';
+  }
+  return null;
+}
+
+// Per merge in lib.findMerges order: the CI gate that ran before it in the same
+// command and that the merge depends on ('&&' or PowerShell's
+// `if ($LASTEXITCODE -eq 0)`; ';' and '||' do not gate), or null.
 function mergeGates(cmd) {
   const gates = [];
   let gate = null;
-  for (const seg of lib.allSegments(cmd)) {
-    if (seg.some((t) => /(?:^|[\\/])ci-wait(?:\.js)?$/.test(t))) gate = 'ci-wait';
-    const gh = lib.ghParts(seg);
-    if (gh && gh[0] === 'pr' && gh[1] === 'checks' && gate !== 'ci-wait') gate = 'gh-checks';
-    const gl = lib.glabParts(seg);
-    if ((gh && gh[0] === 'pr' && gh[1] === 'merge') || (gl && lib.isGlabMr(gl[0]) && lib.isGlabMerge(gl[1]))) gates.push(gate);
+  for (const pc of joinedPieces(cmd)) {
+    if (pc.joiner !== '&&') gate = null;
+    const own = gateOf(pc.text);
+    const n = lib.findMerges(pc.text).length;
+    for (let i = 0; i < n; i++) gates.push(gate);
+    if (own) gate = own;
   }
-  return gates;
+  // A heredoc or odd quoting can make the pieces disagree with findMerges: then no gate.
+  const total = lib.findMerges(cmd).length;
+  return gates.length === total ? gates : new Array(total).fill(null);
 }
 
+const forgeOf = (r) => r.forge || 'github';
+// The unresolved queued lines that still need an answer: the latest queued line
+// of each PR (an older one is superseded and resolved without the forge).
+function unresolvedQueued(rows) {
+  const latest = new Map();
+  for (const r of rows) if (r.outcome === 'auto-merge-queued') latest.set(`${forgeOf(r)}:${r.pr}`, r);
+  return openQueued(rows).filter((r) => latest.get(`${forgeOf(r)}:${r.pr}`) === r);
+}
 // merges.jsonl rows that queued an auto-merge and that no later line resolves
 // (no line has `resolves_ts` equal to their ts).
-const forgeOf = (r) => r.forge || 'github';
 function openQueued(rows) {
   const resolved = new Set(rows.filter((r) => r.resolves_ts).map((r) => r.resolves_ts));
   return rows.filter((r) => r.outcome === 'auto-merge-queued' && !resolved.has(r.ts));
 }
 
 // glab has no flag to cancel "merge when pipeline succeeds": it is an API call.
-// -> [{ forge, target }] for each `glab api ... merge_requests/<n>/cancel_merge_when_pipeline_succeeds`.
+// -> [{ forge, target }] for each POST `glab api ... merge_requests/<n>/cancel_merge_when_pipeline_succeeds`.
 function glabCancels(cmd) {
   const out = [];
   for (const seg of lib.allSegments(cmd)) {
     const gl = lib.glabParts(seg);
     if (!gl || gl[0] !== 'api') continue;
+    const post = gl.some((t, i) => /^(?:-X|--method)$/i.test(t) && /^POST$/i.test(gl[i + 1] || '')) ||
+      gl.some((t) => /^(?:-X|--method=)POST$/i.test(t));
+    if (!post) continue;
     for (const t of gl) {
       const m = /merge_requests\/(\d+)\/cancel_merge_when_pipeline_succeeds/.exec(t);
       if (m) out.push({ forge: 'gitlab', target: m[1] });
@@ -341,10 +395,14 @@ function logMerges(input, tool = 'claude') {
   const chained = lib.segments(cmd).length > 1;
   const gates = mergeGates(cmd);
   const cancelled = (m, pr) => {
-    const open = openQueued(readJsonl(path.join(lib.logDir(input), 'merges.jsonl')))
-      .filter((r) => forgeOf(r) === m.forge && String(r.pr) === String(pr));
-    const q = open.length ? open[open.length - 1] : null;
-    lib.appendJsonl(input, 'merges.jsonl', {
+    const rows = readJsonl(path.join(lib.logDir(input), 'merges.jsonl'));
+    const mine = (r) => forgeOf(r) === m.forge && String(r.pr) === String(pr);
+    const open = openQueued(rows).filter(mine);
+    // The latest open queued line; failing that the latest queued line, so a
+    // reconcile that already resolved it makes this cancellation a no-op (same id).
+    const all = rows.filter((r) => r.outcome === 'auto-merge-queued' && mine(r));
+    const q = open.length ? open[open.length - 1] : (all.length ? all[all.length - 1] : null);
+    const rec = {
       ...base(input, tool),
       command: sanitizeCommand(cmd).slice(0, 300),
       pr: String(pr),
@@ -352,10 +410,15 @@ function logMerges(input, tool = 'claude') {
       outcome: 'auto-merge-cancelled',
       cancelled_by: 'director',
       resolves_ts: q ? q.ts : null,
+      ...(q ? { resolution_id: `${forgeOf(q)}:${q.pr}:${q.ts}` } : {}),
       outcome_source: 'none',
       ...(m.forge === 'gitlab' ? { forge: 'gitlab' } : {}),
       chained,
-    });
+    };
+    // Same id as reconcile's resolution of this queued line, written under the
+    // same lock: whichever writer comes second adds nothing.
+    if (q) appendOnce(input, 'merges.jsonl', 'resolution_id', rec);
+    else lib.appendJsonl(input, 'merges.jsonl', rec);
   };
   // Only real `gh pr merge` / `glab mr merge` segments count, not the words
   // inside a quoted string.
@@ -449,6 +512,14 @@ function resolveQueuedMerges(input, { dryRun = false, run, limit = MAX_RESOLVE_P
     }
     if (!q) continue;
     const cli = forgeOf(q);
+    // A plain merge of the same PR after the queue: it is already logged as a
+    // merge line, so this resolution carries superseded_by_ts and is not counted again.
+    const direct = rows.find((r) => r.ts > q.ts && r.outcome === 'merged' && !r.resolves_ts && forgeOf(r) === cli && String(r.pr) === String(q.pr));
+    if (direct) {
+      if (append(q, { outcome: 'merged', merged_at: null, outcome_source: 'none', note: 'merged directly', superseded_by_ts: direct.ts })) out.resolved++;
+      out.lines.push(`${label}: merged directly (line ${direct.ts})`);
+      continue;
+    }
     if (budget <= 0) { out.skipped++; continue; }
     budget--;
     out.calls++;
@@ -549,6 +620,6 @@ function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
-  cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued,
+  cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
   ATTEMPT_REASONS, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

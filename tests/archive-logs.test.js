@@ -291,4 +291,7 @@ test('archive: warns about unresolved auto-merge-queued merges (offline), exit c
   eq(fs.existsSync(ghRan), false, 'the archive never calls the forge');
   const none = arch(project({ 'merges.jsonl': res }), ['m1', '--project', 'proj']);
   assert(!none.stdout.includes('unresolved'), 'nothing unresolved: no warning');
+  // An older queued line of a PR with a newer queued line is superseded: only the newer one counts.
+  const sup = arch(project({ 'merges.jsonl': [q('5', 'a1'), q('5', 'a2')].join('\n') }), ['m1', '--project', 'proj']);
+  assert(sup.stdout.includes('1 auto-merge-queued merges unresolved'), sup.stdout);
 });
