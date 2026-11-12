@@ -270,3 +270,73 @@ test('ci-turns: ci-wait.js --names and --once take PR numbers; flag values still
   nodeAssert.deepStrictEqual(r.ci.byPr, { 12: { turns: 1, contextTokens: 11 } });
   eq(r.ci.unattributed.turns, 0, 'attributed, not unattributed');
 });
+
+// ---- attribution: PR numbers come only from the CI part of a call ----
+test('ci-turns: a reconcile call followed by a STATUS sed edit and a `gh pr create --body` heredoc names no PR (Claude cw9 turn 21 shape)', () => {
+  const cmd = [
+    'cd /p; S=live-x',
+    'node "$P/scripts/reconcile-logs.js" --merges',
+    "sed -i 's/| in review | #55 |/| merged | #55 |/; s/| in review | #56 |/| merged | #56 |/' STATUS.md",
+    'gh pr create --base main --head milestone/$S --title "$S" --body "$(cat <<\'EOF\'',
+    'Milestone: #54 sum, #55 clamp, #56 slugify',
+    'Run gh pr checks 55 to see the checks.',
+    'Closes #28',
+    'EOF',
+    ')"',
+  ].join('\n');
+  nodeAssert.deepStrictEqual(T.ciKinds(cmd), ['reconcile-merges'], 'it is a reconcile turn');
+  nodeAssert.deepStrictEqual(T.prNumbers(cmd), [], 'and names no PR');
+  const r = T.parseClaudeStream([asst('m1', [bash('a', cmd, false)], usage(1, 100, 0))]);
+  eq(r.ci.turns, 1, 'one CI turn');
+  nodeAssert.deepStrictEqual(r.ci.byPr, {}, 'charged to no PR');
+  eq(r.ci.unattributed.turns, 1, 'unattributed');
+  // control: the same call with the PR given to a CI command does name it
+  nodeAssert.deepStrictEqual(T.prNumbers(`${cmd}\nnode ci-wait.js 55 --once`), ['55'], 'ci-wait.js 55 still names 55 and the body still adds nothing');
+});
+
+test('ci-turns: a Codex reconcile call that also reads a PR body (gh pr view --json title,body) names no PR (Codex after turn 42 shape)', () => {
+  const cmd = 'text(await tools.exec_command({cmd:"node C:/p/scripts/reconcile-logs.js --merges; git worktree list; gh pr view 43 --json title,body,commits",max_output_tokens:2500}));';
+  nodeAssert.deepStrictEqual(T.ciKinds(cmd), ['reconcile-merges']);
+  nodeAssert.deepStrictEqual(T.prNumbers(cmd), []);
+  // control: asking for the checks of the same PR does name it
+  nodeAssert.deepStrictEqual(T.prNumbers('text(await tools.exec_command({cmd:"gh pr view 43 --json headRefOid,statusCheckRollup",max_output_tokens:900}));'), ['43']);
+  nodeAssert.deepStrictEqual(T.prNumbers('gh pr checks 3 && gh pr view 4 --json title && gh pr merge 5 --squash --auto'), ['3', '5'], 'only CI segments name PRs');
+});
+
+test('ci-turns: quoted text, --body, .Replace(), sed, here-strings and echo never name a PR or count as CI', () => {
+  const none = [
+    'gh pr comment 9 --body "see gh pr checks 9"',
+    'gh pr comment 9 -b "ci-wait.js 9 --once"',
+    "(Get-Content STATUS.md -Raw).Replace('node reconcile-logs.js --merges','gh pr checks 9') | Set-Content STATUS.md",
+    "$t -replace 'gh pr checks 9','x'",
+    "sed -i 's/gh pr checks 9/x/' STATUS.md",
+    'echo "run gh pr checks 9"',
+    'Write-Host "ci-wait.js 9"',
+    "@'\ngh pr checks 9\nnode ci-wait.js 9\n'@ | Set-Content notes.md",
+    "cat > notes.md <<'EOF'\nnode reconcile-logs.js --merges\ngh pr checks 9\nEOF",
+    'text(await tools.exec_command({cmd:"gh pr comment 9 --body \\"gh pr checks 9\\"",max_output_tokens:500}));',
+  ];
+  for (const c of none) {
+    nodeAssert.deepStrictEqual(T.ciKinds(c), [], `not CI: ${c.slice(0, 50)}`);
+    nodeAssert.deepStrictEqual(T.prNumbers(c), [], `names no PR: ${c.slice(0, 50)}`);
+  }
+  eq(T.isWatch('gh pr comment 9 --body "gh pr checks 9 --watch"'), false, 'a --watch inside a body is not a watch');
+  eq(T.isWatch('gh pr checks 9 --watch'), true, 'control: a real watch');
+});
+
+test('ci-turns: a STATUS edit only is not a reconcile turn; the same call that ends with reconcile-logs.js --merges is (Codex cw9 turns 26 and 40 shape)', () => {
+  const edit = "(Get-Content STATUS.md -Raw).Replace('| 1 | in review | #57 |','| 2 | in review | #57 |').Replace('| 2 | in review | #59 |','| 2 | merged | #59 |').TrimEnd() | Set-Content STATUS.md -Encoding UTF8";
+  const run = 'node C:/cw6/32052/h/plugins/cache/agent-team/agent-team/0.6.0/scripts/reconcile-logs.js --merges';
+  nodeAssert.deepStrictEqual(T.ciKinds(edit), [], 'the edit alone is not about CI');
+  nodeAssert.deepStrictEqual(T.ciKinds(`${edit}\n${run}`), ['reconcile-merges'], 'with reconcile-logs.js --merges it runs, so it counts');
+  nodeAssert.deepStrictEqual(T.prNumbers(`${edit}\n${run}`), [], 'and still names no PR');
+  const wrapped = (c) => `text(await tools.exec_command({cmd:${JSON.stringify(c)},max_output_tokens:500}));`;
+  const customCall = (input) => ev('response_item', { type: 'custom_tool_call', name: 'exec', input, call_id: 'x' + Math.random() });
+  const r = T.parseCodexRollout([
+    ev('session_meta', { id: 's', source: 'exec' }),
+    customCall(wrapped(edit)), tokenCount(100, 100),                       // edit only
+    customCall(wrapped(`${edit}\n${run}`)), tokenCount(200, 300),         // edit, then reconcile
+  ]);
+  nodeAssert.deepStrictEqual(r.turns.map((t) => t.ci), [false, true]);
+  eq(r.ci.unattributed.turns, 1, 'the second turn is the one reconcile turn, tied to no PR');
+});

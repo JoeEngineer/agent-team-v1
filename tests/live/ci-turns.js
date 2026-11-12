@@ -50,33 +50,59 @@ const ALWAYS_BACKGROUND = new Set(['Monitor']);
 
 // Which CI patterns a command matches (labels). Empty when it is not about CI.
 function ciKinds(cmd) {
-  const s = String(cmd || '');
-  return CI_PATTERNS.filter(([, re]) => re.test(s)).map(([k]) => k);
+  const v = codeView(cmd);
+  return CI_PATTERNS.filter(([, re]) => re.test(v)).map(([k]) => k);
 }
-const isWatch = (cmd) => WATCH.test(String(cmd || ''));
+const isWatch = (cmd) => WATCH.test(codeView(cmd));
+
+// The command as it runs: text that is only data is removed first, so a PR number or a script
+// name inside it cannot count. Removed: heredoc bodies and PowerShell here-strings, the value of
+// --body/-b/--message/-m/--title/--notes, the script of sed, the arguments of .Replace(...) and
+// -replace, and whole echo/printf/Write-Host/Write-Output lines. A Codex exec call wraps the
+// command in a JS string, so a literal \n there is a line break and \" is a quote.
+const STR = String.raw`(?:"(?:[^"\\]|\\.)*"|'[^']*')`;
+const OPT_VALUE = new RegExp(String.raw`(--body|--message|--title|--notes|--description|-b|-m|-t)(\s+|=)${STR}`, 'g');
+const SED_SCRIPT = new RegExp(String.raw`(\bsed\b[^\n]*?\s)${STR}`, 'g');
+const PS_REPLACE_METHOD = new RegExp(String.raw`\.Replace\(\s*${STR}\s*(?:,\s*${STR}\s*)?\)`, 'gi');
+const PS_REPLACE_OP = new RegExp(String.raw`(-i?c?replace\s+)${STR}(?:\s*,\s*${STR})?`, 'gi');
+function codeView(cmd) {
+  let s = String(cmd || '').replace(/\\r?\\n/g, '\n').replace(/\\"/g, '"');
+  s = s.replace(/(<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3(?!\w))/g, '$1$4');   // heredoc body
+  s = s.replace(/@(['"])\r?\n[\s\S]*?\r?\n\1@/g, "@''@");                                   // PowerShell here-string
+  s = s.replace(OPT_VALUE, '$1$2""').replace(SED_SCRIPT, '$1""').replace(PS_REPLACE_METHOD, '.Replace()').replace(PS_REPLACE_OP, '$1""');
+  return s.split('\n').filter((l) => !/^\s*(?:echo|printf|Write-Host|Write-Output)\b/i.test(l)).join('\n');
+}
+// The pieces of a command that run one after the other.
+const segmentsOf = (view) => view.split(/&&|\|\||[;|\n]/);
 
 // Flags that take no value, so a number after them is a PR number (ci-wait.js --once 12, --names 12).
 const BOOL_FLAGS = new Set(['--names', '--allow-none', '--auto', '--auto-merge', '--squash', '--merge', '--rebase', '--delete-branch', '--admin',
   '--once', '--watch', '--fail-fast', '--required', '--web', '--disable-auto', '--no-delete-branch']);
-// PR numbers a command names: `gh pr <sub> 12`, `glab mr <sub> 12`, `ci-wait.js 12 13`.
+// PR numbers a command names, taken only from the segments that are about CI (a segment that
+// matches one of CI_PATTERNS): `gh pr checks|merge|view|status 12`, `glab mr merge|view|checks 12`,
+// `ci-wait.js 12 13`. A `gh pr create --body "...#4, #5"`, a `gh pr view 43 --json title,body`, a
+// sed or .Replace edit of STATUS.md or a heredoc names none, even when the same call also runs
+// a CI command.
 function prNumbers(cmd) {
-  const s = String(cmd || '');
   const out = new Set();
-  const re = /\bgh(?:\.exe)?\s+pr\s+[\w-]+|\bglab(?:\.exe)?\s+mr\s+[\w-]+|\bci-wait\.js\b/g;
-  let m;
-  while ((m = re.exec(s))) {
-    // The command ends at a separator, or at a closing quote that sits in code (cmd:"gh pr checks 12",).
-    const rest = s.slice(m.index + m[0].length).split(/&&|\|\||[;|\n]|["'`](?=[,)}\]])/)[0];
-    // Tokens may sit inside quotes or code (a Codex exec call wraps the command in JS).
-    const toks = rest.trim().split(/\s+/).map((t) => t.replace(/^["'`]+|["'`,);]+$/g, '')).filter(Boolean);
-    toks.forEach((t, i) => {
-      const num = /^#?(\d{1,7})$/.exec(t);
-      if (!num) return;
-      const prev = toks[i - 1];
-      // A flag's value (--json x, --deadline 540) is not a PR number; a boolean flag's follower is.
-      if (prev && /^-/.test(prev) && !prev.includes('=') && !BOOL_FLAGS.has(prev)) return;
-      out.add(num[1]);
-    });
+  for (const seg of segmentsOf(codeView(cmd))) {
+    if (!CI_PATTERNS.some(([, re]) => re.test(seg))) continue;
+    const re = /\bgh(?:\.exe)?\s+pr\s+(?:checks|merge|view|status)\b|\bglab(?:\.exe)?\s+mr\s+(?:merge|view|checks)\b|\bci-wait\.js\b/g;
+    let m;
+    while ((m = re.exec(seg))) {
+      // The command ends at a closing quote that sits in code (cmd:"gh pr checks 12",).
+      const rest = seg.slice(m.index + m[0].length).split(/["'`](?=[,)}\]])/)[0];
+      // Tokens may sit inside quotes or code (a Codex exec call wraps the command in JS).
+      const toks = rest.trim().split(/\s+/).map((t) => t.replace(/^["'`]+|["'`,);]+$/g, '')).filter(Boolean);
+      toks.forEach((t, i) => {
+        const num = /^#?(\d{1,7})$/.exec(t);
+        if (!num) return;
+        const prev = toks[i - 1];
+        // A flag's value (--json x, --deadline 540) is not a PR number; a boolean flag's follower is.
+        if (prev && /^-/.test(prev) && !prev.includes('=') && !BOOL_FLAGS.has(prev)) return;
+        out.add(num[1]);
+      });
+    }
   }
   return [...out];
 }
@@ -326,7 +352,7 @@ function isDirectorRollout(objs) {
 }
 
 module.exports = {
-  CI_PATTERNS, isBackgroundCommand, ciKinds, isWatch, prNumbers, commandOf, ctxTokens, toObjects,
+  CI_PATTERNS, codeView, isBackgroundCommand, ciKinds, isWatch, prNumbers, commandOf, ctxTokens, toObjects,
   milestoneJsonIn, milestoneJsonInEvent, directorText, hooksActiveIn,
   summarize, parseClaudeStream, parseCodexRollout, isDirectorRollout,
 };

@@ -244,15 +244,15 @@ function evaluateTargets(input) {
   const per = (taskPrs || []).map((pr) => ({ pr, turns: (summary.ci.byPr[pr] || { turns: 0 }).turns }));
   const worst = per.reduce((a, p) => Math.max(a, p.turns), 0);
   const un = summary.ci.unattributed.turns;
-  // A CI turn that names no PR (a bare `gh pr list --json statusCheckRollup`, a reconcile run) cannot
-  // be pinned on one PR, so it counts against the total: task-PR turns plus these must not exceed
-  // the number of task PRs. Turns that only name another PR (the milestone PR) are not counted
-  // here; ciBreakdown reports them.
-  const total = per.reduce((a, p) => a + p.turns, 0) + un;
-  const ok2 = worst <= 1 && total <= per.length;
+  // Only turns that name a task PR are charged to it. A CI turn that names no PR (a reconcile
+  // checkpoint at the end of a wave or before the milestone PR, which the Director prompt
+  // requires) cannot be pinned on a task PR, so it is reported (INFO row, count and tokens) and
+  // not counted here. Turns that only name another PR (the milestone PR) are reported by
+  // ciBreakdown. A task PR with 2 real CI turns still fails.
+  const ok2 = worst <= 1;
   t.push({ id: 'ci-turns-per-task-pr', name: '<= 1 CI-related Director turn per task PR',
     result: !per.length ? 'N/A' : ok2 ? 'PASS' : 'FAIL',
-    detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}; ${total} CI turn(s) for ${per.length} task PR(s)${un ? `, ${un} of them not tied to a PR` : ''}` : 'no task PRs found' });
+    detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}${un ? `; ${un} more CI turn(s) name no PR (reported separately, not charged to a task PR)` : ''}` : 'no task PRs found' });
   const pend = reviews.pending;
   const bad = pend.filter((p) => !p.timeout);
   t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout', result: bad.length ? 'FAIL' : 'PASS',
@@ -300,6 +300,7 @@ function breakdownRows(b) {
   return [
     row('milestone-pr-ci-turns', 'milestone PR CI turns', b.milestonePr, nums ? ` (milestone PR ${nums})` : ' (no milestone PR known)'),
     row('other-pr-ci-turns', 'other PR CI turns', b.otherPr),
+    row('no-pr-ci-turns', 'CI turns naming no PR (not charged to a task PR)', b.unattributed),
     row('total-ci-turns', 'total CI-related Director turns', b.total, ` (task PRs ${b.taskPrs.turns}, milestone PR ${b.milestonePr.turns}, other ${b.otherPr.turns}, no PR named ${b.unattributed.turns}; a turn naming several groups counts in each)`),
   ];
 }

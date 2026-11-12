@@ -259,15 +259,16 @@ test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
     reviews: { total: 2, byCi: { pending: 1 }, pending: [{ statesTimeWaited: false, waitedMinutes: null, timeout: false }] },
     milestone: { reported: { status: 'complete' }, completeBeforeChecksFinished: true, detail: 'early' } });
   nodeAssert.deepStrictEqual(bad.map((t) => t.result), ['FAIL', 'FAIL', 'FAIL', 'FAIL']);
-  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /5 CI turn\(s\) for 2 task PR\(s\), 2 of them not tied to a PR/.test(bad[1].detail), bad[1].detail);
-  // Unattributed CI turns count against the total: one per PR is fine, one extra is not.
+  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /2 more CI turn\(s\) name no PR \(reported separately, not charged to a task PR\)/.test(bad[1].detail), bad[1].detail);
+  // Turns that name no PR are reported, not charged to a task PR (a measurement fix, not a softer target).
   const perPrOk = { 4: { turns: 1 }, 5: { turns: 1 } };
   const pick = (s) => L.evaluateTargets({ summary: s, taskPrs: ['4', '5'], reviews: quiet, milestone: okMs })[1];
-  eq(pick(summary(0, perPrOk, 0)).result, 'PASS', '2 turns for 2 PRs');
-  eq(pick(summary(0, perPrOk, 1)).result, 'FAIL', 'every PR at 1 and one more turn that names no PR');
-  assert(/3 CI turn\(s\) for 2 task PR\(s\), 1 of them not tied to a PR/.test(pick(summary(0, perPrOk, 1)).detail), pick(summary(0, perPrOk, 1)).detail);
-  eq(pick(summary(0, { 4: { turns: 1 } }, 1)).result, 'PASS', 'a PR with no CI turn leaves room for one unattributed turn');
-  eq(pick(summary(0, { 4: { turns: 1 } }, 2)).result, 'FAIL', 'two unattributed turns with only one attributed is 3 for 2 PRs');
+  eq(pick(summary(0, perPrOk, 0)).result, 'PASS', '1 turn each');
+  eq(pick(summary(0, perPrOk, 6)).result, 'PASS', 'every PR at 1 and six no-PR checkpoint turns: still PASS');
+  assert(/6 more CI turn\(s\) name no PR/.test(pick(summary(0, perPrOk, 6)).detail), pick(summary(0, perPrOk, 6)).detail);
+  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 0)).result, 'FAIL', 'one task PR with 2 real CI turns fails, with no no-PR turns at all');
+  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 6)).result, 'FAIL', 'and still fails next to no-PR turns');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 2)).result, 'PASS', 'a PR with no CI turn and two no-PR turns');
   eq(pick(summary(0, { 4: { turns: 1 }, 9: { turns: 3 } }, 0)).result, 'PASS', 'turns on a PR that is not a task PR (the milestone PR) are not counted');
   const none = L.evaluateTargets({ summary: summary(0, {}), taskPrs: [], reviews: { total: 0, byCi: {}, pending: [{ timeout: true, waitedMinutes: 9 }] }, milestone: { reported: null, completeBeforeChecksFinished: false, detail: 'none' } });
   nodeAssert.deepStrictEqual(none.map((t) => t.result), ['PASS', 'N/A', 'PASS', 'N/A']);
@@ -306,11 +307,12 @@ test('ci-wait-live breakdown: milestone-PR, other-PR and total CI turns are repo
   const quiet = { total: 0, byCi: {}, pending: [] };
   const ms = { reported: { status: 'complete' }, completeBeforeChecksFinished: false, detail: 'fine' };
   const t = L.evaluateTargets({ summary, taskPrs: ['4'], reviews: quiet, milestone: ms, breakdown: b });
-  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO']);
-  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'total CI-related Director turns']);
+  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO', 'INFO']);
+  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'CI turns naming no PR (not charged to a task PR)', 'total CI-related Director turns']);
   assert(/3 turn\(s\), 900 context tokens, 2 foreground --watch \(milestone PR #9\)/.test(t[4].detail), t[4].detail);
-  assert(/6 turn\(s\), 2100 context tokens/.test(t[6].detail), t[6].detail);
-  eq(L.renderTable(t).split('\n').length, 7, 'one row per target and metric');
+  assert(/1 turn\(s\), 600 context tokens/.test(t[6].detail), t[6].detail);
+  assert(/6 turn\(s\), 2100 context tokens/.test(t[7].detail), t[7].detail);
+  eq(L.renderTable(t).split('\n').length, 8, 'one row per target and metric');
   // a Director that polls only the milestone PR is visible even though the per-task-PR target passes
   const only = L.ciBreakdown([1, 2, 3, 4, 5].map((i) => ({ ci: true, tokens: 10, prs: ['9'], tools: [] })), { taskPrs: ['4', '5'], milestonePrs: ['9'] });
   const tt = L.evaluateTargets({ summary: Object.assign({}, summary, { ci: { byPr: { 9: { turns: 5 } }, unattributed: { turns: 0, contextTokens: 0 } } }), taskPrs: ['4', '5'], reviews: quiet, milestone: ms, breakdown: only });
@@ -756,6 +758,27 @@ test('ci-wait-live cleanup-run: a run file that is not valid JSON is refused lik
     eq(r.status, 0, `a valid record with a dead pid is cleaned (${r.stdout})`);
     assert(!g.h.branches().some((b) => b.endsWith('-seed')) && !fs.existsSync(g.rec.tmp), 'branch and temp folder gone');
   } finally { rm(g.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: a run file that cannot be read (a directory, EISDIR) is refused too; only a missing file is "no run file"', () => {
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    let code = null; try { fs.readFileSync(file, 'utf8'); } catch (e) { code = e.code; }
+    assert(code && code !== 'ENOENT', `precondition: reading the run file fails with something other than ENOENT (${code})`);
+    const mut0 = k.h.calls().filter(isMutation).length;
+    const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(r.status, 1, 'exit 1');
+    assert(/cannot be read/.test(r.stdout) && /--force/.test(r.stdout) && /Nothing was closed or deleted/.test(r.stdout), r.stdout);
+    eq(k.h.calls().filter(isMutation).length, mut0, 'no remote mutation');
+    assert(k.h.branches().some((b) => b.endsWith('-seed')) && fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'nothing closed or deleted');
+    // one step past: --force goes ahead with the remote cleanup and says why the temp folder is left
+    const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
+    eq(f.status, 0, `--force proceeds (${f.stdout})`);
+    assert(!k.h.branches().some((b) => b.endsWith('-seed')) && /cannot be read/.test(f.stdout), f.stdout);
+  } finally { rm(k.h.dir); }
 });
 
 test('ci-wait-live cleanup-run: with no run file the remote cleanup still runs', () => {

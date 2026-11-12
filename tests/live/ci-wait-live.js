@@ -156,7 +156,13 @@ function liveRunRefusal(opts, runPrefix) {
   const file = path.join(outDirOf(opts), L.runFileName(runPrefix));
   let rec = null;
   let text;
-  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { return null; }   // no run file: nothing to protect
+  // Only a missing file means "no run to protect". Any other read error (a directory, no permission,
+  // a locked file) is a file that is there and cannot be read: treated like an unknown pid.
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
+    if (e && e.code === 'ENOENT') return null;
+    if (opts.force) return null;
+    return `the run file for ${runPrefix} cannot be read (${(e && e.code) || (e && e.message)}), so it cannot be told whether the run is still in flight`;
+  }
   // A file that is there but cannot be read as a run record is treated like an unknown pid.
   try { rec = JSON.parse(text); } catch (e) { rec = null; }
   if (opts.force) return null;
@@ -174,8 +180,8 @@ function cleanupRecordedTemp(opts, runPrefix, { dryRun } = {}) {
   const file = path.join(outDirOf(opts), L.runFileName(runPrefix));
   let rec = null;
   let unreadable = false;
-  try { rec = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { unreadable = !!e && e.code !== 'ENOENT'; }
-  if (!rec && unreadable) { log(`run file ${file} is not valid JSON: its temp folder, if any, was left alone and must be deleted by hand`); return { ok: true, found: true, unreadable: true }; }
+  try { rec = JSON.parse(fs.readFileSync(file, 'utf8')); unreadable = !rec || typeof rec !== 'object' || Array.isArray(rec); } catch (e) { unreadable = !!e && e.code !== 'ENOENT'; }
+  if (unreadable) { log(`run file ${file} is not valid JSON or cannot be read: its temp folder, if any, was left alone and must be deleted by hand`); return { ok: true, found: true, unreadable: true }; }
   if (!rec) { log(`no run file for ${runPrefix} in ${outDirOf(opts)} (pass --out-dir if the run used one): its temp folder, if any, must be deleted by hand`); return { ok: true, found: false }; }
   if (rec.run !== runPrefix) { log(`run file ${file} is for another run; temp folder left alone`); return { ok: false, found: true }; }
   if (!fs.existsSync(rec.tmp)) { log(`temp folder ${rec.tmp} is already gone`); if (!dryRun) fs.rmSync(file, { force: true }); return { ok: true, found: true, gone: true }; }

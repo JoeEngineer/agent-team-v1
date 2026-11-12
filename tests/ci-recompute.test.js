@@ -62,6 +62,51 @@ test('ci-recompute: empty and unparseable input give zeros, not a crash', () => 
   eq(r.targets[1].result, 'N/A', 'no task PRs: the per-PR target is N/A');
 });
 
+test('ci-recompute compare: lists exactly the numbers that differ from the run report, and nothing when they match', () => {
+  const r = R.recompute(claude, { taskPrs: ['7'], milestonePrs: ['9'] });
+  const same = {
+    metrics: { turns: 4, contextTokens: 1004, watch: { foreground: 1, background: 0 },
+      ci: { turns: 3, contextTokens: 603, startedByNotification: 0, unattributed: { turns: 0, contextTokens: 0 }, byPr: { 7: { turns: 3 } } } },
+    targets: [{ id: 'no-foreground-watch', result: 'FAIL' }, { id: 'ci-turns-per-task-pr', result: 'FAIL' }],
+  };
+  nodeAssert.deepStrictEqual(R.compare(r, same), [], 'identical: no differences');
+  // an old parser's report: one more CI turn on PR 7, one fewer no-PR turn, and the target was FAIL where it is now PASS
+  const old = JSON.parse(JSON.stringify(same));
+  old.metrics.ci.byPr[7].turns = 4;
+  old.metrics.ci.unattributed.turns = 1;
+  old.targets[1].result = 'PASS';
+  nodeAssert.deepStrictEqual(R.compare(r, old), [
+    { field: 'ci.unattributed.turns', original: 1, recomputed: 0 },
+    { field: 'ci.byPr.7.turns', original: 4, recomputed: 3 },
+    { field: 'target ci-turns-per-task-pr', original: 'PASS', recomputed: 'FAIL' },
+  ]);
+  // boundary: an empty or partial report is "original: null", not a crash
+  const empty = R.compare(r, {});
+  assert(empty.some((d) => d.field === 'turns' && d.original === null && d.recomputed === 4), 'missing fields show as null');
+  eq(R.compare(r, null).length > 0, true, 'a null report does not throw');
+});
+
+test('ci-recompute CLI --compare: prints only the differences, exit 0; an unreadable report or a missing value exits 2', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw7c-'));
+  try {
+    const t = path.join(dir, 'x.transcript.jsonl');
+    fs.writeFileSync(t, claude);
+    const rep = path.join(dir, 'orig.json');
+    fs.writeFileSync(rep, JSON.stringify({ taskPrs: [{ number: 7 }], milestonePr: { number: 9 },
+      metrics: { turns: 5, contextTokens: 1004, watch: { foreground: 1, background: 0 }, ci: { turns: 3, contextTokens: 603, unattributed: { turns: 0, contextTokens: 0 }, byPr: { 7: { turns: 3 } } } } }));
+    const script = path.join(__dirname, 'live', 'ci-recompute.js');
+    const run = (args) => spawnSync(process.execPath, [script, ...args], { encoding: 'utf8', timeout: 30000 });
+    const c = run([t, '--compare', rep]);
+    eq(c.status, 0, c.stderr);
+    const j = JSON.parse(c.stdout);
+    eq(j.compare.same, false, 'not the same');
+    nodeAssert.deepStrictEqual(j.compare.differences.filter((d) => d.field === 'turns'), [{ field: 'turns', original: 5, recomputed: 4 }], 'the one changed number is listed');
+    assert(!('turns' in j) && !('ciTurns' in j), 'only the comparison is printed');
+    eq(run([t, '--compare', path.join(dir, 'missing.json')]).status, 2, 'unreadable report: exit 2');
+    eq(run([t, '--compare']).status, 2, 'no value: exit 2');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('ci-recompute CLI: reads the PR numbers from the report next to the transcript, flags override, bad usage exits 2', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cw7-'));
   try {
