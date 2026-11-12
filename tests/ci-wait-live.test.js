@@ -250,7 +250,10 @@ test('ci-wait-live milestone: "complete" printed before the checks finished is f
 });
 
 test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
-  const summary = (fg, byPr, unattributed) => ({ watch: { foreground: fg, background: 1 }, ci: { byPr, unattributed: { turns: unattributed || 0, contextTokens: 0 } } });
+  // reads: no-PR CI turns that are real CI looks; reconcile: no-PR reconcile-only checkpoints
+  const summary = (fg, byPr, reads, reconcile) => ({ watch: { foreground: fg, background: 1 }, ci: { byPr,
+    unattributed: { turns: (reads || 0) + (reconcile || 0), contextTokens: 0 },
+    noPr: { reconcile: { turns: reconcile || 0, contextTokens: 0 }, reads: { turns: reads || 0, contextTokens: 0 } } } });
   const quiet = { total: 3, byCi: { green: 3 }, pending: [] };
   const okMs = { reported: { status: 'complete' }, completeBeforeChecksFinished: false, detail: 'fine' };
   const good = L.evaluateTargets({ summary: summary(0, { 4: { turns: 1 }, 5: { turns: 1 } }), taskPrs: ['4', '5'], reviews: quiet, milestone: okMs });
@@ -259,15 +262,22 @@ test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
     reviews: { total: 2, byCi: { pending: 1 }, pending: [{ statesTimeWaited: false, waitedMinutes: null, timeout: false }] },
     milestone: { reported: { status: 'complete' }, completeBeforeChecksFinished: true, detail: 'early' } });
   nodeAssert.deepStrictEqual(bad.map((t) => t.result), ['FAIL', 'FAIL', 'FAIL', 'FAIL']);
-  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /5 CI turn\(s\) for 2 task PR\(s\), 2 of them not tied to a PR/.test(bad[1].detail), bad[1].detail);
-  // Unattributed CI turns count against the total: one per PR is fine, one extra is not.
+  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /2 unattributed CI read\(s\) name no PR and are charged to the total \(5 for 2 task PR\(s\)\)/.test(bad[1].detail), bad[1].detail);
+  // Reconcile-only no-PR turns are reported, not charged to a task PR. Other no-PR CI turns are real CI looks and are charged.
   const perPrOk = { 4: { turns: 1 }, 5: { turns: 1 } };
   const pick = (s) => L.evaluateTargets({ summary: s, taskPrs: ['4', '5'], reviews: quiet, milestone: okMs })[1];
-  eq(pick(summary(0, perPrOk, 0)).result, 'PASS', '2 turns for 2 PRs');
-  eq(pick(summary(0, perPrOk, 1)).result, 'FAIL', 'every PR at 1 and one more turn that names no PR');
-  assert(/3 CI turn\(s\) for 2 task PR\(s\), 1 of them not tied to a PR/.test(pick(summary(0, perPrOk, 1)).detail), pick(summary(0, perPrOk, 1)).detail);
-  eq(pick(summary(0, { 4: { turns: 1 } }, 1)).result, 'PASS', 'a PR with no CI turn leaves room for one unattributed turn');
-  eq(pick(summary(0, { 4: { turns: 1 } }, 2)).result, 'FAIL', 'two unattributed turns with only one attributed is 3 for 2 PRs');
+  eq(pick(summary(0, perPrOk, 0, 0)).result, 'PASS', '1 turn each');
+  eq(pick(summary(0, perPrOk, 0, 6)).result, 'PASS', 'every PR at 1 and six reconcile-only checkpoint turns: still PASS');
+  assert(/6 reconcile checkpoint\(s\) not charged/.test(pick(summary(0, perPrOk, 0, 6)).detail), pick(summary(0, perPrOk, 0, 6)).detail);
+  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 0, 0)).result, 'FAIL', 'one task PR with 2 real CI turns fails, with no no-PR turns at all');
+  eq(pick(summary(0, { 4: { turns: 2 }, 5: { turns: 1 } }, 0, 6)).result, 'FAIL', 'and still fails next to reconcile turns');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 0, 2)).result, 'PASS', 'a PR with no CI turn and two reconcile turns');
+  eq(pick(summary(0, perPrOk, 1, 0)).result, 'FAIL', 'every PR at 1 and one unattributed CI read (a loop poll): 3 for 2 PRs');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 1, 3)).result, 'PASS', 'one read leaves room when a PR has no turn; reconcile turns beside it do not count');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 2, 0)).result, 'FAIL', 'two unattributed reads with one attributed turn: 3 for 2 PRs');
+  // no split given (an older summary): every no-PR turn is treated as a read
+  const old = summary(0, perPrOk, 0, 0); old.ci.unattributed.turns = 1; delete old.ci.noPr;
+  eq(pick(old).result, 'FAIL', 'without the split a no-PR turn is charged');
   eq(pick(summary(0, { 4: { turns: 1 }, 9: { turns: 3 } }, 0)).result, 'PASS', 'turns on a PR that is not a task PR (the milestone PR) are not counted');
   const none = L.evaluateTargets({ summary: summary(0, {}), taskPrs: [], reviews: { total: 0, byCi: {}, pending: [{ timeout: true, waitedMinutes: 9 }] }, milestone: { reported: null, completeBeforeChecksFinished: false, detail: 'none' } });
   nodeAssert.deepStrictEqual(none.map((t) => t.result), ['PASS', 'N/A', 'PASS', 'N/A']);
@@ -306,11 +316,19 @@ test('ci-wait-live breakdown: milestone-PR, other-PR and total CI turns are repo
   const quiet = { total: 0, byCi: {}, pending: [] };
   const ms = { reported: { status: 'complete' }, completeBeforeChecksFinished: false, detail: 'fine' };
   const t = L.evaluateTargets({ summary, taskPrs: ['4'], reviews: quiet, milestone: ms, breakdown: b });
-  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO']);
-  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'total CI-related Director turns']);
+  nodeAssert.deepStrictEqual(t.map((x) => x.result), ['PASS', 'PASS', 'PASS', 'PASS', 'INFO', 'INFO', 'INFO', 'INFO', 'INFO']);
+  nodeAssert.deepStrictEqual(t.slice(4).map((x) => x.name), ['milestone PR CI turns', 'other PR CI turns', 'reconcile checkpoints (no PR, not charged to a task PR)', 'unattributed CI reads (no PR, charged to the task-PR total)', 'total CI-related Director turns']);
   assert(/3 turn\(s\), 900 context tokens, 2 foreground --watch \(milestone PR #9\)/.test(t[4].detail), t[4].detail);
-  assert(/6 turn\(s\), 2100 context tokens/.test(t[6].detail), t[6].detail);
-  eq(L.renderTable(t).split('\n').length, 7, 'one row per target and metric');
+  assert(/0 turn\(s\), 0 context tokens/.test(t[6].detail), `no reconcile turn here: ${t[6].detail}`);
+  assert(/1 turn\(s\), 600 context tokens/.test(t[7].detail), t[7].detail);
+  assert(/6 turn\(s\), 2100 context tokens/.test(t[8].detail), t[8].detail);
+  eq(L.renderTable(t).split('\n').length, 9, 'one row per target and metric');
+  // the no-PR split: a reconcile-only turn versus a turn with any other CI kind
+  const rt = (kinds) => ({ ci: true, tokens: 10, prs: [], tools: [{ kinds, watch: false, background: false }] });
+  const split = L.ciBreakdown([rt(['reconcile-merges']), rt(['reconcile-merges']), rt(['status-check-rollup']), rt(['reconcile-merges', 'pr-checks']), rt(['pr-checks'])], { taskPrs: ['4'], milestonePrs: [] });
+  eq(split.reconcile.turns, 2, 'reconcile-only turns');
+  eq(split.unattributedReads.turns, 3, 'a rollup read, reconcile plus a check, and a check are reads');
+  eq(split.unattributed.turns, 5, 'the total of no-PR turns is unchanged');
   // a Director that polls only the milestone PR is visible even though the per-task-PR target passes
   const only = L.ciBreakdown([1, 2, 3, 4, 5].map((i) => ({ ci: true, tokens: 10, prs: ['9'], tools: [] })), { taskPrs: ['4', '5'], milestonePrs: ['9'] });
   const tt = L.evaluateTargets({ summary: Object.assign({}, summary, { ci: { byPr: { 9: { turns: 5 } }, unattributed: { turns: 0, contextTokens: 0 } } }), taskPrs: ['4', '5'], reviews: quiet, milestone: ms, breakdown: only });
@@ -715,6 +733,67 @@ test('ci-wait-live cleanup-run: a run file with a missing or invalid pid needs -
     const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
     eq(f.status, 0, `--force proceeds (${f.stdout})`);
     assert(!fs.existsSync(k.rec.tmp) && !k.h.branches().some((b) => b.endsWith('-seed')), 'temp folder and remote branch cleaned with --force');
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: a run file that is not valid JSON is refused like an unknown pid, and touches nothing', () => {
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    const mut0 = k.h.calls().filter(isMutation).length;
+    for (const bad of ['{"run": "truncated', '', 'null', '[]', '42']) {
+      fs.writeFileSync(file, bad);
+      // precondition: the file is there and is not a run record
+      let rec; try { rec = JSON.parse(bad); } catch (e) { rec = undefined; }
+      assert(fs.existsSync(file) && (rec === undefined || rec === null || typeof rec !== 'object' || Array.isArray(rec)), `precondition: ${JSON.stringify(bad)} is not a run record`);
+      const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+      eq(r.status, 1, `${JSON.stringify(bad)}: exit 1`);
+      assert(/not valid JSON/.test(r.stdout) && /--force/.test(r.stdout) && /Nothing was closed or deleted/.test(r.stdout), r.stdout);
+      eq(k.h.calls().filter(isMutation).length, mut0, 'no remote mutation');
+      assert(k.h.branches().some((b) => b.endsWith('-seed')), 'the remote branch is still there');
+      assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')) && fs.existsSync(file), 'nothing deleted, run file kept');
+    }
+    // one step past: a dry run reports it too, and still nothing changed
+    fs.writeFileSync(file, '{"run": "truncated');
+    const dry = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--dry-run']);
+    eq(dry.status, 1, 'a dry run reports the refusal');
+    eq(k.h.calls().filter(isMutation).length, mut0, 'still no mutation after the dry run');
+    // --force goes ahead with the remote cleanup and leaves the temp folder for the user
+    const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
+    eq(f.status, 0, `--force proceeds (${f.stdout})`);
+    assert(!k.h.branches().some((b) => b.endsWith('-seed')), '--force runs the remote cleanup');
+    assert(/not valid JSON/.test(f.stdout) && !/no run file/.test(f.stdout), f.stdout);
+    assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'the temp folder is left for the user (nothing says where it is)');
+  } finally { rm(k.h.dir); }
+  // recovery control: a valid record whose pid is gone is cleaned normally
+  const g = keptRun();
+  try {
+    const gone = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(g.h.outDir, g.runFile), JSON.stringify(Object.assign({}, g.rec, { pid: Number(gone.stdout) })));
+    const r = harness(g.h, ['--repo', 'o/r', '--cleanup-run', g.run, '--out-dir', g.h.outDir]);
+    eq(r.status, 0, `a valid record with a dead pid is cleaned (${r.stdout})`);
+    assert(!g.h.branches().some((b) => b.endsWith('-seed')) && !fs.existsSync(g.rec.tmp), 'branch and temp folder gone');
+  } finally { rm(g.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: a run file that cannot be read (a directory, EISDIR) is refused too; only a missing file is "no run file"', () => {
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    fs.rmSync(file);
+    fs.mkdirSync(file);
+    let code = null; try { fs.readFileSync(file, 'utf8'); } catch (e) { code = e.code; }
+    assert(code && code !== 'ENOENT', `precondition: reading the run file fails with something other than ENOENT (${code})`);
+    const mut0 = k.h.calls().filter(isMutation).length;
+    const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(r.status, 1, 'exit 1');
+    assert(/cannot be read/.test(r.stdout) && /--force/.test(r.stdout) && /Nothing was closed or deleted/.test(r.stdout), r.stdout);
+    eq(k.h.calls().filter(isMutation).length, mut0, 'no remote mutation');
+    assert(k.h.branches().some((b) => b.endsWith('-seed')) && fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'nothing closed or deleted');
+    // one step past: --force goes ahead with the remote cleanup and says why the temp folder is left
+    const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
+    eq(f.status, 0, `--force proceeds (${f.stdout})`);
+    assert(!k.h.branches().some((b) => b.endsWith('-seed')) && /cannot be read/.test(f.stdout), f.stdout);
   } finally { rm(k.h.dir); }
 });
 
