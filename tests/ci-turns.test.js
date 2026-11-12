@@ -409,3 +409,52 @@ test('ci-turns: a no-PR turn is reconcile-only or a CI read; a loop poll is a re
   eq(pick(rollup)[1].result, 'FAIL', 'a statusCheckRollup read is charged');
   eq(pick(mk([asst('m3', [bash('c', 'node reconcile-logs.js --merges; gh pr checks 9', false)], usage(1, 300, 0))]))[1].result, 'PASS', 'a turn that names another PR (9) is not a no-PR turn');
 });
+
+// Codex wraps the command in a JS string in the saved transcript, so a line break is the two
+// characters backslash and n (or backslash-r-backslash-n), not a real newline.
+const codexJs = (cmd) => `text(await tools.exec_command({cmd:"${cmd}",max_output_tokens:500}));`;
+
+test('ci-turns: a Codex command with a backslash-n line break after a print, a heredoc or a here-string keeps its real CI call', () => {
+  const real = [
+    ['echo ok\\ngh pr checks 5', 'echo then a call on the next line'],
+    ['Write-Host x\\nnode ci-wait.js 5 --once', 'Write-Host then ci-wait'],
+    ['bash -s <<EOF\\ngh pr checks 5\\nEOF', 'heredoc fed to bash'],
+    ["$c=@'\\ngh pr checks 5\\n'@\\nInvoke-Expression $c", 'here-string run by Invoke-Expression'],
+    ['echo ok\\r\\ngh pr checks 5', 'carriage return + line feed'],
+    ['echo ok\\rgh pr checks 5', 'lone carriage return'],
+    ['printf x\\n\\ngh pr checks 5\\n', 'blank line, trailing line break'],
+  ];
+  for (const [cmd, why] of real) {
+    const c = codexJs(cmd);
+    assert(c.includes('\\n') || c.includes('\\r'), `the saved shape has a literal backslash escape (${why})`);
+    assert(!c.includes('\n') && !c.includes('\r'), `and no real line break (${why})`);
+    nodeAssert.deepStrictEqual(T.ciKinds(c).length > 0, true, `counts as CI: ${why}`);
+    nodeAssert.deepStrictEqual(T.prNumbers(c), ['5'], `names PR 5: ${why}`);
+  }
+  // controls: the same words only printed, or kept as data, are not CI
+  nodeAssert.deepStrictEqual(T.ciKinds(codexJs('echo gh pr checks 5')), [], 'control: only printed');
+  nodeAssert.deepStrictEqual(T.prNumbers(codexJs('echo gh pr checks 5')), [], 'control: names no PR');
+  nodeAssert.deepStrictEqual(T.ciKinds(codexJs('echo ok\\necho gh pr checks 5')), [], 'control: a second print line is still a print');
+  nodeAssert.deepStrictEqual(T.ciKinds(codexJs("cat > run.sh <<'EOF'\\ngh pr checks 5\\nEOF")), [], 'control: a heredoc into a file is data');
+  nodeAssert.deepStrictEqual(T.ciKinds(codexJs("$n=@'\\ngh pr checks 5\\n'@\\nSet-Content notes.md $n")), [], 'control: a here-string into a file is data');
+  // a \n inside a quoted printf/sed argument becomes a line break inside the quotes: the text stays text
+  nodeAssert.deepStrictEqual(T.ciKinds(codexJs("printf 'a\\ngh pr checks 5\\n'")), [], 'control: \\n inside a quoted printf argument is still text');
+});
+
+test('ci-turns: a heredoc whose interpreter comes after a pipe on the opening line is interpreter-fed', () => {
+  for (const c of ['cat <<EOF | bash\ngh pr checks 5\nEOF', "cat <<'EOF' | sh\ngh pr checks 5\nEOF", 'cat <<EOF | pwsh\ngh pr checks 5\nEOF',
+    'cat <<EOF | bash -s\ngh pr checks 5\nEOF', codexJs('cat <<EOF | bash\\ngh pr checks 5\\nEOF')]) {
+    nodeAssert.deepStrictEqual(T.prNumbers(c), ['5'], `names PR 5: ${c.slice(0, 40)}`);
+  }
+  // controls: a pipe to a non-interpreter, or a file name that only looks like one, stays data
+  nodeAssert.deepStrictEqual(T.ciKinds('cat <<EOF | tee notes.md\ngh pr checks 5\nEOF'), []);
+  nodeAssert.deepStrictEqual(T.ciKinds('cat <<EOF | tee run.sh\ngh pr checks 5\nEOF'), []);
+  nodeAssert.deepStrictEqual(T.ciKinds('cat <<EOF | grep sh\ngh pr checks 5\nEOF'), [], 'sh as an argument is not an interpreter');
+});
+
+test('ci-turns: a here-string run through bash -c $c or a script block is recognised', () => {
+  nodeAssert.deepStrictEqual(T.prNumbers("$c=@'\ngh pr checks 5\n'@\nbash -c $c"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers("$c=@'\ngh pr checks 5\n'@\n& ([scriptblock]::Create($c))"), ['5']);
+  nodeAssert.deepStrictEqual(T.prNumbers(codexJs("$c=@'\\ngh pr checks 5\\n'@\\n& ([scriptblock]::Create($c))")), ['5']);
+  nodeAssert.deepStrictEqual(T.ciKinds("$c=@'\ngh pr checks 5\n'@\nSet-Content notes.md $c"), [], 'control: written to a file');
+});

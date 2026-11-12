@@ -70,7 +70,13 @@ const SED_SCRIPT = new RegExp(String.raw`(\bsed\b[^\n;&|]*?\s)${STR}`, 'g');
 const PS_REPLACE_METHOD = new RegExp(String.raw`\.Replace\(\s*${STR}\s*(?:,\s*${STR}\s*)?\)`, 'gi');
 const PS_REPLACE_OP = new RegExp(String.raw`(-i?c?replace\s+)${STR}(?:\s*,\s*${STR})?`, 'gi');
 const INTERPRETER_BEFORE = /(?<![\w.-])(?:bash|sh|zsh|pwsh|powershell|node|python3?|Invoke-Expression|iex)\b/i;
-const INTERPRETER_AFTER = /\bInvoke-Expression\b|\biex\b|\bpwsh\b|\bpowershell\b|\|\s*(?:node|python3?|bash|sh|zsh)\b/i;
+// An interpreter that reads a here-string elsewhere in the call: Invoke-Expression/iex, pwsh, a pipe
+// into a shell, `bash -c $c`, or a script block built from it (& ([scriptblock]::Create($c))).
+// Known gap: `& $c`-style calls through some other variable or alias are not recognised, so a
+// here-string run that way is dropped as data (an under-count); say so rather than guess.
+const INTERPRETER_AFTER = /\bInvoke-Expression\b|\biex\b|\bpwsh\b|\bpowershell\b|\|\s*(?:node|python3?|bash|sh|zsh)\b|\b(?:bash|sh|zsh)\s+-c\b|\[scriptblock\]::Create\b/i;
+// An interpreter that a heredoc is piped into on its opening line: `cat <<EOF | bash`.
+const INTERPRETER_PIPED = /\|\s*(?:bash|sh|zsh|pwsh|powershell|node|python3?)\b/i;
 const PRINT_CMD = /(^|[;&|\n{(]|["'`])[ \t]*(?:echo|printf|Write-Host|Write-Output)\b/gi;
 // Index of the ")" that closes the "(" at i (quotes respected); s.length when there is none.
 function closeParen(s, i) {
@@ -109,11 +115,16 @@ function stripPrint(s) {
   return out + s.slice(last);
 }
 function codeView(cmd) {
-  let s = String(cmd || '').replace(/\\r?\\n/g, '\n').replace(/\\"/g, '"');
-  // heredoc body: kept when the line that opens it runs an interpreter (bash <<EOF)
-  s = s.replace(/(<<-?[ \t]*(['"]?)(\w+)\2[^\n]*\n)[\s\S]*?(\n[ \t]*\3(?!\w))/g, (all, head, q, tag, tail, off, str) => {
+  // A Codex exec call wraps the command in a JS string, so a line break there is the two characters
+  // backslash and n (or \r\n, or a lone \r). Turn each into a real line break. In a real bash or
+  // PowerShell command the same two characters can be text (a literal \n in a sed or printf
+  // argument); treating that as a line break only splits more, which is the safe direction: inside
+  // quotes the text stays quoted and is still dropped as text, outside quotes it can only over-count.
+  let s = String(cmd || '').replace(/\\r\\n|\\n|\\r/g, '\n').replace(/\\"/g, '"');
+  // heredoc body: kept when the line that opens it runs an interpreter (bash <<EOF, cat <<EOF | bash)
+  s = s.replace(/(<<-?[ \t]*(['"]?)(\w+)\2([^\n]*)\n)[\s\S]*?(\n[ \t]*\3(?!\w))/g, (all, head, q, tag, rest, tail, off, str) => {
     const pre = str.slice(str.lastIndexOf('\n', off) + 1, off);
-    return INTERPRETER_BEFORE.test(pre) ? all : head + tail;
+    return INTERPRETER_BEFORE.test(pre) || INTERPRETER_PIPED.test(rest) ? all : head + tail;
   });
   // PowerShell here-string: kept when an interpreter reads it elsewhere in the call
   s = s.replace(/@(['"])\r?\n[\s\S]*?\r?\n\1@/g, (all, q, off, str) => (INTERPRETER_AFTER.test(str.slice(0, off) + str.slice(off + all.length)) ? all : "@''@"));
