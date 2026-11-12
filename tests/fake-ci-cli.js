@@ -8,8 +8,9 @@
 //
 // routes: { <key>: response | [response, ...] }. A list plays in order and the
 // last entry repeats. A response is a string (stdout), { err: 'stderr text' } (the
-// call fails), or { hang: true } (the call never returns; with a timeout it is
-// killed). Keys: view:<n> (falls back to view), rules, protection, repo, project,
+// call fails), { hang: true } (the call never returns; with a timeout it is
+// killed), or { sleep: ms, then: response } (as a script: wait ms, then answer;
+// in process the wait is skipped). Keys: view:<n> (falls back to view), rules, protection, repo, project,
 // jobs. A call with no route fails loudly, so a test can't pass on a typo.
 'use strict';
 
@@ -52,7 +53,8 @@ class Playback {
   runner() {
     return (forge, args, cwd, timeout) => {
       this.calls.push({ forge, key: keyOf(args), args, timeout });
-      const r = this.next(args);
+      let r = this.next(args);
+      if (r && r.sleep !== undefined) r = r.then;
       if (r && r.hang) {
         const e = new Error(`spawnSync gh ETIMEDOUT`);
         e.code = 'ETIMEDOUT'; e.killed = true; e.signal = 'SIGKILL';
@@ -76,8 +78,12 @@ if (require.main === module) {
   const counts = fs.existsSync(stateFile) ? JSON.parse(fs.readFileSync(stateFile, 'utf8')) : {};
   const args = process.argv.slice(2);
   if (process.env.FAKE_CI_LOG) fs.appendFileSync(process.env.FAKE_CI_LOG, `${JSON.stringify(args)}\n`);
-  const r = new Playback(routes, counts).next(args);
+  let r = new Playback(routes, counts).next(args);
   fs.writeFileSync(stateFile, JSON.stringify(counts));
+  if (r && r.sleep !== undefined) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, r.sleep);
+    r = r.then;
+  }
   if (r && r.hang) {
     if (process.env.FAKE_CI_PID) fs.appendFileSync(process.env.FAKE_CI_PID, `${process.pid}\n`);
     setInterval(() => {}, 1000);

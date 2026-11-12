@@ -92,7 +92,7 @@ node "<plugin root>/scripts/ci-wait.js" <n> --queue-check --sha <head_sha> && gl
 ```
 
 The queue-check reads the base's required checks live and exits 0 only when the head matches, nothing is red and the PR is queueable (GitHub: a non-empty required list, every one of which the head runs; GitLab: "Pipelines must succeed" on). On exit 0 set the state to `queued` in `STATUS.md` and move on. The checkpoints below follow it up. Any other exit queues nothing:
-- Exit 5 (not queueable: no required checks, a required check the head doesn't run, or on GitLab "Pipelines must succeed" off): don't queue. Use the fallback below (background wait on Claude, reviewer followup on Codex) and say why in `STATUS.md`.
+- Exit 5 (not queueable: the request is not open, no required checks, a required check the head doesn't run, or on GitLab "Pipelines must succeed" off or no pipeline on the MR head; `queue_reason` says which): don't queue. Use the fallback below (background wait on Claude, reviewer followup on Codex) and say why in `STATUS.md`.
 - Exit 1 (red): "Red CI" below.
 - Exit 4 (head moved): "Commits pushed after the review" above.
 - Exit 2 (the helper can't tell): ask the user.
@@ -116,13 +116,16 @@ Red CI, whether from the reviewer, the merge-call gate (exit 1), a checkpoint or
 ### Queued PRs: checkpoints
 
 Run `node "<plugin root>/scripts/reconcile-logs.js" --merges` only when `STATUS.md` has a `queued` row: before the next merge, at the end of a wave, and before opening the milestone PR. With nothing queued, skip it (decision 0017). One call covers every queued PR. It prints one line per PR: merged, auto-merge-cancelled, closed, still queued (with its CI state), or head moved.
+- `WARNING: PR <n> merged at <X>, not the reviewed <Y>: check it`: the PR merged at a head nobody reviewed. It is not a clean merge. Set the state to `merged (head moved)` in `STATUS.md`, tell the user which commits merged unreviewed (`git log <Y>..<X>`), and don't build on it until they decide.
+- `no queued merges (N merge lines in <path>)`: nothing is waiting; remove any stale `queued` row from `STATUS.md`.
+- `no merges.jsonl at <path>; hooks may be off`: no merge was ever logged here, so queued merges can't be tracked. Tell the user the hooks may be off (the session's first line should say `agent-team hooks: active`), and check each `queued` PR with `gh pr view <n> --json state,autoMergeRequest` meanwhile.
 - Merged: set the state to `merged` in `STATUS.md`. `--delete-branch` may do nothing with `--auto` (unconfirmed), so if the PR's `task/*` branch still exists, delete it (`git push origin --delete task/<ID>`; merged task branches are allowed), and post the comment "Merged by the Director after reviewer approval (task <ID>, attempt <a>)." on the PR.
 - Still queued: nothing to do until the next checkpoint.
 - Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: the cancel row in `gitlab.md`), then send it back to the implementer with the failing check names ("Red CI").
 - Head moved: disable auto-merge at once, then follow "Commits pushed after the review".
 - Closed: ask the user.
 
-Before any push to a queued PR (a send-back or a fold-in), disable auto-merge first (`gh pr merge <n> --disable-auto`; GitLab: the cancel row in `gitlab.md`). GitHub keeps auto-merge on when someone with write access pushes.
+Before any push to a queued PR (a send-back or a fold-in), disable auto-merge first (`gh pr merge <n> --disable-auto`; GitLab: the cancel row in `gitlab.md`). GitHub keeps auto-merge on when someone with write access pushes. The merge logger asks the forge after the cancel. If it reports `auto-merge may still be on for PR <n>` (still on, the forge couldn't answer, or "not checked" because the hook ran out of time), don't push or send the work back yet: run the check it names (`gh pr view <n> --json autoMergeRequest`, which must show `null`; GitLab: `merge_when_pipeline_succeeds` false), and cancel again if needed.
 
 ## The milestone PR
 

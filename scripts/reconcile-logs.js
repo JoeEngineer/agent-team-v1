@@ -356,9 +356,18 @@ function reconcile({ dryRun = false } = {}) {
 }
 
 // Resolve queued auto-merges against the forge (one short line per PR).
-function reconcileMerges({ dryRun = false } = {}) {
+// explain (--merges): with nothing to resolve, say why, so "nothing queued"
+// and "no log at all" don't both look like empty output.
+function reconcileMerges({ dryRun = false, explain = false } = {}) {
   const r = resolveQueuedMerges({}, { dryRun });
-  for (const l of r.lines) console.log(`${dryRun ? '[dry run] ' : ''}${l}`);
+  const pre = dryRun ? '[dry run] ' : '';
+  for (const l of r.lines) console.log(`${pre}${l}`);
+  if (explain && !r.open) {
+    if (!r.exists) {
+      console.log(`${pre}no merges.jsonl at ${r.file}; hooks may be off`);
+      console.error('reconcile-logs: no merge has been logged in this project; if merges were made, check that the agent-team hooks are on (the SessionStart line says "agent-team hooks: active")');
+    } else console.log(`${pre}no queued merges (${r.total} merge line${r.total === 1 ? '' : 's'} in ${r.file})`);
+  }
   return r;
 }
 
@@ -366,7 +375,7 @@ function reconcileMerges({ dryRun = false } = {}) {
 function main(argv) {
   const dryRun = argv.includes('--dry-run');
   // --merges: only the auto-merge step (fast: no transcripts are read).
-  if (argv.includes('--merges')) { reconcileMerges({ dryRun }); return 0; }
+  if (argv.includes('--merges')) { reconcileMerges({ dryRun, explain: true }); return 0; }
   const s = reconcile({ dryRun });
   if (s.codex.checked) {
     console.log(`${dryRun ? '[dry run] ' : ''}Codex: ${s.codex.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ${s.codex.present} already present, ${s.codex.pending} pending`);

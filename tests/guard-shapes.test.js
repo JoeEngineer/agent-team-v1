@@ -101,6 +101,67 @@ test('push --all is blocked while a protected branch exists locally', () => {
   eq(guard('git push origin task/T-9', dir).stdout, '', 'a named task branch still goes through');
 });
 
+// Review of #103: git takes any unambiguous prefix of a long option, and
+// `--opt=value`. The guard matched the full words only, so `--mirr` and `--del`
+// (which a git 2.51.2 dry run showed deleting remote branches) got through.
+console.log('guard.js: abbreviated git options');
+
+const ABBREVIATED_PUSH = [
+  ['--force-w (force-with-lease)', 'git push --force-w origin task/x', /force-push/],
+  ['--force-with=ref (=value form)', 'git push --force-with=task/x origin task/x', /force-push/],
+  ['--force-i (force-if-includes)', 'git push --force-i origin task/x', /force-push/],
+  ['--forc', 'git push --forc origin task/x', /force-push/],
+  ['--mirr', 'git push --mirr origin', /--mirror/],
+  ['--m', 'git push --m origin', /--mirror/],
+  ['--pru', "git push --pru origin 'refs/heads/*'", /--prune/],
+  ['--del of a milestone branch', 'git push --del origin milestone/x', /deleting branch "milestone\/x"/],
+  ['--de of a milestone branch', 'git push origin --de milestone/x', /deleting branch "milestone\/x"/],
+  ['-vd (a short cluster with d) of a milestone branch', 'git push -vd origin milestone/x', /deleting branch "milestone\/x"/],
+];
+for (const [name, cmd, why] of ABBREVIATED_PUSH) {
+  for (const [shell, wrap] of [['sh', (c) => `git status && ${c} && echo done`], ['PowerShell', (c) => `git status; if ($LASTEXITCODE -eq 0) { ${c} }`]]) {
+    test(`blocks abbreviated git push ${name} (${shell} chain)`, () => {
+      const r = guard(wrap(cmd));
+      assert(denied(r), `expected a deny for ${JSON.stringify(wrap(cmd))}, got ${JSON.stringify(r.stdout)}`);
+      assert(why.test(JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason), r.stdout);
+    });
+  }
+}
+
+test('abbreviated --all / --branches (--al, --br) are blocked while a protected branch exists locally', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-all-'));
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: dir });
+  git('init', '-q', '-b', 'main');
+  git('commit', '-q', '--allow-empty', '-m', 'init');
+  git('switch', '-q', '-c', 'task/T-9');
+  for (const cmd of ['git push --al origin', 'git push --branc origin', 'git status; if ($LASTEXITCODE -eq 0) { git push --al origin }']) {
+    assert(denied(guard(cmd, dir)), `${cmd} with a local main`);
+  }
+  eq(guard('git push --atomic origin task/T-9', dir).stdout, '', '--atomic is not --all');
+});
+
+test('harmless long options and their abbreviations still pass: --verbose, --v, --follow-tags, --fol, --no-force-with-lease, --dry-run, --set-upstream', () => {
+  for (const cmd of ['git push --verbose origin task/x', 'git push --v origin task/x', 'git push --follow-tags origin task/x', 'git push --fol origin task/x',
+    'git push --no-force-with-lease origin task/x', 'git push --dry-run origin task/x', 'git push --set-up origin task/x', 'git push -u origin task/x', 'git push -- origin task/x']) {
+    const r = guard(cmd);
+    eq(r.stdout, '', `no decision for ${cmd}`);
+  }
+  // A short cluster with d, on a task branch: deleting a task branch is allowed.
+  eq(guard('git push -vd origin task/x').stdout, '', 'deleting a task branch with -vd is allowed');
+});
+
+test('git add: abbreviations of --all, --no-ignore-removal, and whole-tree pathspecs are blocked while worktrees are unignored', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.claude', 'worktrees', 'agent-x'), { recursive: true });
+  for (const cmd of ['git add --al', 'git add --a', 'git add --all=true', 'git add --no-ignore-removal', 'git add --no-ign', 'git add ./', 'git add .\\', 'git add :/', 'git add :/.',
+    'git add ":(top)"', "git add '*'", 'git add -vA', 'git add -- .', 'git status; if ($LASTEXITCODE -eq 0) { git add --al }']) {
+    assert(denied(guard(cmd, dir)), `expected a deny for ${cmd}`);
+  }
+  for (const cmd of ['git add --verbose STATUS.md', 'git add -v docs/', 'git add ./docs', 'git add --no-all STATUS.md', 'git add -u']) {
+    eq(guard(cmd, dir).stdout, '', `no decision for ${cmd}`);
+  }
+});
+
 test('segments: braces, parentheses and continuations', () => {
   eq(JSON.stringify(lib.segments('(cd a && git push origin main)')), JSON.stringify([['cd', 'a'], ['git', 'push', 'origin', 'main']]), 'subshell');
   eq(JSON.stringify(lib.segments('{ git status; }')), JSON.stringify([['git', 'status']]), 'block braces dropped');
