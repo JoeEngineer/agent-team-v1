@@ -14,7 +14,8 @@
 // `eval` are checked too. `$(…)` inside a double-quoted string is not.
 //   - creating or deleting releases
 //   - `git add -A` / `git add .` while unignored agent worktrees exist
-//   - a merge whose target bash and PowerShell read differently (`gh pr merge 7>out`)
+//   - a redirection that bash, PowerShell and cmd read differently (`7>out`,
+//     `""5>out`, `5&>out`, `>out\ 5`), in any command that runs git, gh or glab
 // This is a guardrail against mistakes, not a sandbox: a determined command can evade
 // simple parsing. Server-side branch protection is the real enforcement.
 'use strict';
@@ -32,10 +33,11 @@ const isProtected = (b) => PROTECTED.includes(b);
 // Block by printing a PreToolUse "deny" decision as JSON and exiting 0.
 // Claude Code and Codex both honour this. Don't use exit code 2: Codex 0.166
 // ignores it and runs the command anyway (see docs/codex-mapping.md).
-function block(reason) {
+// `fix` replaces the "needs the user" line when the agent can fix the command itself.
+function block(reason, fix) {
   const message =
     `agent-team guard blocked this command: ${reason}\n` +
-    'This needs the user. Ask them to run it or to change the rule in the project\'s instructions file (CLAUDE.md / AGENTS.md) or guard settings.';
+    (fix || 'This needs the user. Ask them to run it or to change the rule in the project\'s instructions file (CLAUDE.md / AGENTS.md) or guard settings.');
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -140,14 +142,9 @@ function checkGlabMrMerge(args, cwd) {
 
 // Ask the forge for the request's base (target) branch; block when it is
 // protected or unknown.
-// Lookups are cached for the run, so checking a second reading of the same
-// segment (see main) doesn't ask the forge twice about the same request.
-const infoCache = new Map();
 function requireUnprotectedBase(which, target, repo, cwd) {
   const what = `${forge.noun(which)} ${target || '(current branch)'}`;
-  const key = JSON.stringify([which, target, repo, cwd]);
-  if (!infoCache.has(key)) infoCache.set(key, forge.requestInfo(which, { target, repo }, cwd));
-  const info = infoCache.get(key);
+  const info = forge.requestInfo(which, { target, repo }, cwd);
   if (!info) block(`could not confirm the base branch of ${what} — refusing to merge blind`);
   if (!info.base) block(`could not confirm the base branch of ${what}`);
   if (isProtected(info.base)) block(`${what} targets protected branch "${info.base}"; only the user merges into it`);
@@ -326,20 +323,18 @@ function main() {
   const cmd = input.tool_input && input.tool_input.command;
   if (typeof cmd !== 'string' || !/\b(git|gh|glab)(\.exe)?\b/.test(cmd)) return;
   const cwd = input.cwd || lib.projectDir(input);
-  for (const seg of lib.allSegments(cmd)) {
-    // A word glued to `>` (`7>out`, `main>out`) means one thing in bash and
-    // another in PowerShell, and the guard can't tell which shell runs the
-    // command. If that changes which request is merged, refuse; otherwise check
-    // every reading, so a push or API call that only one shell would make is
-    // still checked.
-    const amb = lib.ambiguousMerge(seg);
-    if (amb) {
-      block(`the merge target depends on the shell: bash merges ${amb.sh}, PowerShell merges ${amb.ps}. ` +
-        'A word glued to the front of `>` is read differently by each shell; put a space before `>`, or quote the word');
-    }
-    checkSegment(seg, cwd);
-    if (seg.readings) for (const reading of [seg.readings.sh, seg.readings.ps]) checkSegment(reading, cwd);
+  const segs = lib.allSegments(cmd);
+  // A redirection the shells read differently (see lib.segments) means the
+  // guard can't know which request, branch or endpoint the command names, so
+  // it refuses before any lookup instead of checking one reading.
+  if (segs.unsure.length) {
+    const { text, why } = segs.unsure[0];
+    block(why === 'glued'
+      ? `in \`${text}\` the word glued to the front of the redirection is a stream number to one shell and part of an argument to another, so the guard can't tell what this command merges or pushes`
+      : `the backslash in the redirection target \`${text}\` escapes the next character in bash but not in PowerShell, so the guard can't tell what this command merges or pushes`,
+    'Rewrite it and run it again: put a space before each redirection (`gh pr merge 5 >out.txt`), glue only a stream number 1-6 to it (`2>&1`, `2>/dev/null`), and quote file names that need a backslash.');
   }
+  for (const seg of segs) checkSegment(seg, cwd);
 }
 
 main();

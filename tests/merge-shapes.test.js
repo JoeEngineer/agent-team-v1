@@ -46,7 +46,7 @@ console.log('lib.segments: redirections');
 test('segments: redirections are not arguments and do not break the segment', () => {
   const seg = (cmd) => JSON.stringify(lib.segments(cmd));
   const squash = JSON.stringify([['gh', 'pr', 'merge', '--squash']]);
-  for (const redirect of ['2>&1', '>&2', '1>&2', '&>out.log', '&>>out.log', '2>/dev/null', '2>$null', '*>&1', '>out.txt', '> out.txt',
+  for (const redirect of ['2>&1', '>&2', '1>&2', '&>out.log', '&>>out.log', '2>/dev/null', '2>$null', '>out.txt', '> out.txt',
     '>>out.txt', '2>>out.txt', '1> out.txt', '>|out.txt', '>"out file.txt"', '2>&1 >/dev/null']) {
     eq(seg(`gh pr merge --squash ${redirect}`), squash, `redirect ${redirect}`);
   }
@@ -55,11 +55,12 @@ test('segments: redirections are not arguments and do not break the segment', ()
   eq(seg('gh pr merge 5 >out.txt; git push origin main'), JSON.stringify([['gh', 'pr', 'merge', '5'], ['git', 'push', 'origin', 'main']]), '; after the redirect target');
 });
 
-test('segments: only a bare glued number is a file descriptor', () => {
+test('segments: only a bare glued number is a file descriptor (bash reading)', () => {
   eq(JSON.stringify(lib.segments('echo a2>f')), JSON.stringify([['echo', 'a2']]), 'a2> keeps a2');
   eq(JSON.stringify(lib.segments('echo "2">f')), JSON.stringify([['echo', '2']]), 'a quoted 2 is an argument');
   eq(JSON.stringify(lib.segments('git push origin main>out.txt')), JSON.stringify([['git', 'push', 'origin', 'main']]), 'branch glued to >');
   eq(JSON.stringify(lib.segments('gh pr merge 2 >out.txt')), JSON.stringify([['gh', 'pr', 'merge', '2']]), 'a spaced 2 is an argument');
+  eq(lib.segments('gh pr merge 2 >out.txt').unsure.length, 0, 'a spaced 2: nothing unsure');
 });
 
 test('segments: a command substitution after > is still read', () => {
@@ -79,69 +80,82 @@ test('findMerges: the target is the number, or null when only a redirect follows
   eq(t('glab mr merge 8 --yes 2>&1'), 'gitlab:8', 'glab 8');
 });
 
-// Review of 05d4cb1: `&>` takes no file descriptor, so a number glued to it is
-// the argument. On 05d4cb1 these gave target null (the current branch).
-test('findMerges: a number glued to `&>` / `&>>` is the target', () => {
+// Review of 05d4cb1: `&>` takes no file descriptor, so in bash a number glued to
+// it is the argument. The segments hold that reading (the merge logger uses it);
+// the command is still marked unsure, so the guard refuses it (see below).
+test('findMerges: a number glued to `&>` / `&>>` is the target in bash\'s reading', () => {
   const t = (cmd) => lib.findMerges(cmd).map((m) => `${m.forge}:${m.target}`).join(',');
   eq(t('gh pr merge 5&>/dev/null'), 'github:5', 'gh 5&>/dev/null');
   eq(t('gh pr merge 5&>>f'), 'github:5', 'gh 5&>>f');
   eq(t('gh pr merge 5 &>f'), 'github:5', 'gh 5 &>f (spaced)');
   eq(t('gh pr merge 12&>f'), 'github:12', 'gh 12&>f (multi-digit)');
   eq(t('glab mr merge 8&>/dev/null'), 'gitlab:8', 'glab 8&>/dev/null');
-  eq(JSON.stringify(lib.segments('gh pr merge 5&>f').readings), undefined, 'one reading: every shell agrees');
+  eq(JSON.stringify(lib.allSegments('gh pr merge 5&>f').unsure), JSON.stringify([{ text: '5&>', why: 'glued' }]), 'glued to &>: unsure');
+  eq(lib.allSegments('gh pr merge 5 &>f').unsure.length, 0, 'spaced &>: nothing unsure');
 });
 
-test('segments: a glued 1-6 is a stream number in every shell; a quoted word is an argument', () => {
+test('segments: a glued 1-6 before `>` is a stream number in every shell, and nothing is unsure', () => {
   const merge = JSON.stringify([['gh', 'pr', 'merge']]);
-  for (const redirect of ['1>f', '2>&1', '5>>f', '5>&1', '6>f', '3>&1']) {
+  for (const redirect of ['1>f', '2>&1', '5>>f', '5>&1', '6>f', '3>&1', '2>$null', '2>/dev/null', '1>&2']) {
     const segs = lib.segments(`gh pr merge ${redirect}`);
     eq(JSON.stringify(segs), merge, `${redirect} dropped`);
-    eq(segs[0].readings, undefined, `${redirect}: one reading`);
+    eq(segs.unsure.length, 0, `${redirect}: nothing unsure`);
   }
-  const quoted = lib.segments('gh pr merge "7">out');
-  eq(JSON.stringify(quoted), JSON.stringify([['gh', 'pr', 'merge', '7']]), 'a quoted 7 is an argument');
-  eq(quoted[0].readings, undefined, 'quoted: one reading');
 });
 
-test('segments: any other word glued to `>` gets a bash and a PowerShell reading', () => {
-  const r = (cmd) => {
-    const [seg] = lib.segments(cmd);
-    assert(seg.readings, `${cmd}: has readings`);
-    return JSON.stringify({ seg, sh: seg.readings.sh, ps: seg.readings.ps });
-  };
+test('segments: any other glued word is unsure, read from its raw text', () => {
+  // [command, bash's reading kept in the segment, the unsure text]
   const m = ['gh', 'pr', 'merge'];
-  const want = (seg, sh, ps) => JSON.stringify({ seg, sh, ps });
-  // Bash: a file descriptor. PowerShell (only streams 1-6 and *): one literal argument.
-  eq(r('gh pr merge 7>out'), want(m, m, [...m, '7>out']), '7>out');
-  eq(r('gh pr merge 12>out'), want(m, m, [...m, '12>out']), '12>out');
-  eq(r('gh pr merge 0>out'), want(m, m, [...m, '0>out']), '0>out');
-  eq(r('gh pr merge 7>>f'), want(m, m, [...m, '7>>f']), '7>>f');
-  eq(r('gh pr merge 12>&1'), want(m, m, [...m, '12>&1']), '12>&1');
-  eq(r('gh pr merge 7> out'), want(m, m, [...m, '7>', 'out']), '7> out (PowerShell: two arguments)');
-  // Bash: an argument (a glob for *). PowerShell: a literal, or the * stream.
-  eq(r('gh pr merge feat>out'), want([...m, 'feat'], [...m, 'feat'], [...m, 'feat>out']), 'feat>out');
-  eq(r('gh pr merge x"7">f'), want([...m, 'x7'], [...m, 'x7'], [...m, 'x7>f']), 'partly quoted');
-  eq(r('gh pr merge --squash *>&1'), want([...m, '--squash'], [...m, '--squash', '*'], [...m, '--squash']), '*>&1');
-  // The rest of the line is still read in both.
-  eq(r('gh pr merge 7>out; git status'), want(m, m, [...m, '7>out']), 'first segment before ;');
+  const cases = [
+    ['gh pr merge 7>out', m, '7>'],
+    ['gh pr merge 12>out', m, '12>'],
+    ['gh pr merge 0>out', m, '0>'],
+    ['gh pr merge 7>>f', m, '7>>'],
+    ['gh pr merge 12>&1', m, '12>&'],
+    ['gh pr merge 7> out', m, '7>'],
+    ['gh pr merge feat>out', [...m, 'feat'], 'feat>'],
+    ['gh pr merge x"7">f', [...m, 'x7'], 'x"7">'],
+    ['gh pr merge "7">out', [...m, '7'], '"7">'],
+    ['gh pr merge ""5>f', [...m, '5'], '""5>'],
+    ["gh pr merge ''5>f", [...m, '5'], "''5>"],
+    ['gh pr merge 5"">f', [...m, '5'], '5"">'],
+    ["gh pr merge 5''>f", [...m, '5'], "5''>"],
+    ['gh pr merge \\5>f', [...m, '\\5'], '\\5>'],
+    ['gh pr merge 5\\>f', [...m, '5\\'], '5\\>'],
+    ['gh pr merge $x>f', [...m, '$x'], '$x>'],
+    ['gh pr merge ${x}>f', [...m, '${x}'], '${x}>'],
+    ['gh pr merge --squash *>&1', [...m, '--squash', '*'], '*>&'],
+    ['gh pr merge 5*>f', [...m, '5*'], '5*>'],
+    ['gh pr merge 5&>f', [...m, '5'], '5&>'],
+    ['gh pr merge {5>f', [...m, '5'], '{5>'],
+    // bash joins `5\` + newline + `2` into the fd 52; the raw text is not a lone digit
+    ['gh pr merge 5\\\n2>&1', [...m, '52'], '5\\\n2>&'],
+  ];
+  for (const [cmd, seg, text] of cases) {
+    const segs = lib.segments(cmd);
+    eq(JSON.stringify(segs[0]), JSON.stringify(seg), `${JSON.stringify(cmd)}: bash reading`);
+    eq(JSON.stringify(segs.unsure), JSON.stringify([{ text, why: 'glued' }]), `${JSON.stringify(cmd)}: unsure`);
+  }
+  // A continuation before the redirection is not part of the word.
+  eq(lib.segments('gh pr merge 5 --squash \\\n2>&1').unsure.length, 0, 'continuation, then 2>&1');
+  // The rest of the line is still read.
   eq(JSON.stringify(lib.segments('gh pr merge 7>out; git status')[1]), JSON.stringify(['git', 'status']), 'second segment');
 });
 
-test('ambiguousMerge: only when the readings name different requests', () => {
-  const a = (cmd) => JSON.stringify(lib.ambiguousMerge(lib.segments(cmd)[0]));
-  eq(a('gh pr merge 7>out'), JSON.stringify({ sh: 'PR (current branch)', ps: 'PR 7>out' }), '7>out');
-  eq(a('gh pr merge 12>out'), JSON.stringify({ sh: 'PR (current branch)', ps: 'PR 12>out' }), '12>out');
-  eq(a('gh pr merge --squash *>&1'), JSON.stringify({ sh: 'PR *', ps: 'PR (current branch)' }), '*>&1');
-  eq(a('gh pr merge -R o/r feat>out'), JSON.stringify({ sh: 'PR feat in o/r', ps: 'PR feat>out in o/r' }), 'with a repo');
-  eq(a('glab mr merge 7>out'), JSON.stringify({ sh: 'MR (current branch)', ps: 'MR 7>out' }), 'glab');
-  eq(a('gh>out pr merge 5'), JSON.stringify({ sh: 'PR 5', ps: 'no merge' }), 'a glued command word');
-  // The target comes first, so the glued word can't change it.
-  eq(a('gh pr merge 5 7>out'), 'null', '5 then 7>out');
-  eq(a('gh pr merge 5 *>&1'), 'null', '5 then *>&1');
-  eq(a('gh pr merge 5 12>&1'), 'null', '5 then 12>&1');
-  eq(a('gh pr merge 7 2>&1'), 'null', 'one reading');
-  eq(a('echo 7>out'), 'null', 'no merge in any reading');
-  eq(lib.ambiguousMerge(undefined), null, 'no segment');
+test('segments: a backslash at the end of a redirection target is unsure', () => {
+  // Bash: the target is "out 5" and the merge is the current branch's. PowerShell: PR 5.
+  const segs = lib.segments('gh pr merge >out\\ 5');
+  eq(JSON.stringify(segs.unsure), JSON.stringify([{ text: '>out\\', why: 'escape' }]), '>out\\ 5');
+  eq(JSON.stringify(lib.segments('gh pr merge --squash >a\\&b 5').unsure), JSON.stringify([{ text: '>a\\', why: 'escape' }]), '>a\\&b');
+  eq(JSON.stringify(lib.segments('gh pr merge 5 >a\\"b c"').unsure), JSON.stringify([{ text: '>a\\"b c"', why: 'escape' }]), 'backslash before a quote');
+  eq(lib.segments('gh pr merge 5 2>C:\\tmp\\out.txt').unsure.length, 0, 'a Windows path is fine');
+});
+
+test('allSegments: unsure covers nested shells and redirection-only segments', () => {
+  eq(JSON.stringify(lib.allSegments('bash -c "gh pr merge 7>f"').unsure), JSON.stringify([{ text: '7>', why: 'glued' }]), 'inside bash -c');
+  eq(JSON.stringify(lib.allSegments('powershell -Command gh pr merge 7>f').unsure.map((u) => u.text)), JSON.stringify(['7>']), 'outer line');
+  eq(JSON.stringify(lib.allSegments('7>out; gh pr merge 5').unsure), JSON.stringify([{ text: '7>', why: 'glued' }]), 'a segment with no words');
+  eq(lib.allSegments('bash -c "gh pr merge 5 2>&1"').unsure.length, 0, 'nested 2>&1 is fine');
 });
 
 console.log('merge shapes: findMerges on chained calls');
@@ -325,25 +339,36 @@ test('guard: a redirect does not hide a later push to main', () => {
   assert(r.denied && r.reason.includes('push to protected branch "main"'), `push denied: ${r.reason}`);
 });
 
-console.log('guard.js: numbers glued to a redirection');
+console.log('guard.js: words glued to a redirection');
 
-// Review of 05d4cb1 finding 1: on 05d4cb1 these asked about the current branch
-// (lookup without a number), so a main-based PR 5 passed when the current branch's PR was on a milestone.
-for (const cmd of ['gh pr merge 5&>/dev/null', 'gh pr merge 5&>>f', 'gh pr merge 5 &>f', 'gh pr merge 5&>f']) {
-  test(`guard: \`${cmd}\` asks about PR 5`, () => {
-    const bad = guard(cmd, fakeGh(pr(5, 'main')));
-    eq(bad.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5');
-    assert(bad.denied && bad.reason.includes('PR 5 targets protected branch "main"'), `main denied: ${bad.reason}`);
-    const ok = guard(cmd, fakeGh(pr(5, 'milestone/auth')));
-    eq(ok.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5');
-    assert(!ok.denied, `milestone allowed: ${ok.reason}`);
-  });
+// A word glued to a redirection, other than a lone 1-6 before `>`, makes the
+// guard refuse before any lookup. The fake would allow (milestone base), so a
+// deny comes from the redirection, and no lookup means nothing was checked
+// against a request the shell might not merge.
+function deniedBeforeLookup(cmd, text) {
+  const fake = /(^|&& )glab /.test(cmd) ? fakeGlab(mr(5, 'opened', 'milestone/auth')) : fakeGh(pr(5, 'milestone/auth'));
+  const r = guard(cmd, fake);
+  assert(r.denied, `${cmd}: should deny`);
+  eq(r.lookups.length, 0, `${cmd}: no lookup`);
+  if (text) assert(r.reason.includes(`\`${text}\``), `${cmd}: names ${JSON.stringify(text)}: ${r.reason}`);
+  assert(r.reason.includes('put a space before each redirection'), `${cmd}: how to fix: ${r.reason}`);
+  assert(!r.reason.includes('This needs the user'), `${cmd}: the agent can fix this itself: ${r.reason}`);
+  return r;
 }
 
-test('guard: `glab mr merge 8&>/dev/null` asks about MR 8', () => {
-  const bad = guard('glab mr merge 8&>/dev/null', fakeGlab(mr(8, 'opened', 'main')));
-  eq(bad.lookups.join('|'), GL_VIEW(8), 'asked glab about MR 8');
-  assert(bad.denied && bad.reason.includes('MR 8 targets protected branch "main"'), `main denied: ${bad.reason}`);
+// Review of 05d4cb1 finding 1: on 05d4cb1 these asked about the current branch.
+// Bash merges PR 5 (`&>` takes no number). They are refused like any glued word.
+for (const cmd of ['gh pr merge 5&>/dev/null', 'gh pr merge 5&>>f', 'gh pr merge 5&>f', 'glab mr merge 8&>/dev/null']) {
+  test(`guard: \`${cmd}\` is denied before any lookup`, () => { deniedBeforeLookup(cmd, cmd.match(/\S+&>>?/)[0]); });
+}
+
+test('guard: `gh pr merge 5 &>f` (spaced) asks about PR 5', () => {
+  const bad = guard('gh pr merge 5 &>f', fakeGh(pr(5, 'main')));
+  eq(bad.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5');
+  assert(bad.denied && bad.reason.includes('PR 5 targets protected branch "main"'), `main denied: ${bad.reason}`);
+  const ok = guard('gh pr merge 5 &>f', fakeGh(pr(5, 'milestone/auth')));
+  eq(ok.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5');
+  assert(!ok.denied, `milestone allowed: ${ok.reason}`);
 });
 
 // A lone 1-6 glued to `>`, `>>` or `>&` is a stream number in bash, PowerShell and cmd alike.
@@ -358,36 +383,48 @@ for (const redirect of ['2>&1', '5>>f', '5>&1', '1>out']) {
   });
 }
 
-// Finding 3: bash reads `7>out` as fd 7, PowerShell as the argument "7>out" (only
-// streams 1-6 and * redirect). The guard can't tell which shell runs it, so it
-// refuses rather than check one request while the shell merges another.
-const AMBIGUOUS = [
-  ['gh pr merge 7>out', 'bash merges PR (current branch), PowerShell merges PR 7>out'],
-  ['gh pr merge 12>out', 'bash merges PR (current branch), PowerShell merges PR 12>out'],
-  ['gh pr merge 0>out', 'bash merges PR (current branch), PowerShell merges PR 0>out'],
-  ['gh pr merge 7>>out', 'bash merges PR (current branch), PowerShell merges PR 7>>out'],
-  ['gh pr merge 12>&1', 'bash merges PR (current branch), PowerShell merges PR 12>&1'],
-  ['gh pr merge 7> out', 'bash merges PR (current branch), PowerShell merges PR 7>'],
-  ['gh pr merge --squash *>&1', 'bash merges PR *, PowerShell merges PR (current branch)'],
-  ['gh pr merge feat>out', 'bash merges PR feat, PowerShell merges PR feat>out'],
-  ['glab mr merge 7>out', 'bash merges MR (current branch), PowerShell merges MR 7>out'],
-  ['node ci-wait.js 5 --once && gh pr merge 7>out && gh pr comment 5 -b ok', 'bash merges PR (current branch), PowerShell merges PR 7>out'],
+// Review of cd12c29: a word mixing quotes and a digit was dropped as a file
+// descriptor, so `""5>f` and `5"">f` asked about the current branch while bash
+// merges PR 5. The rest are the shapes cd12c29 refused or checked in two readings.
+const GLUED = [
+  ['gh pr merge ""5>f', '""5>'],
+  ["gh pr merge ''5>f", "''5>"],
+  ['gh pr merge 5"">f', '5"">'],
+  ['gh pr merge "5">f', '"5">'],
+  ['gh pr merge 5\\>f', '5\\>'],
+  ['gh pr merge $x>f', '$x>'],
+  ['gh pr merge ${x}>f', '${x}>'],
+  ['gh pr merge 7>out', '7>'],
+  ['gh pr merge 12>out', '12>'],
+  ['gh pr merge 0>out', '0>'],
+  ['gh pr merge 7>>out', '7>>'],
+  ['gh pr merge 12>&1', '12>&'],
+  ['gh pr merge 7> out', '7>'],
+  ['gh pr merge --squash *>&1', '*>&'],
+  ['gh pr merge feat>out', 'feat>'],
+  ['glab mr merge 7>out', '7>'],
+  ['node ci-wait.js 5 --once && gh pr merge 7>out && gh pr comment 5 -b ok', '7>'],
+  ['gh pr merge 5 7>out', '7>'],
+  ['gh pr merge 5 12>&1', '12>&'],
+  ['gh pr merge 5 --squash *>&1', '*>&'],
+  ['bash -c "gh pr merge 7>out"', '7>'],
 ];
-for (const [cmd, readings] of AMBIGUOUS) {
-  test(`guard: \`${cmd}\` is denied: the target depends on the shell`, () => {
-    // The fake would allow (milestone base), so the deny comes from the ambiguity, before any lookup.
-    const fake = cmd.startsWith('glab') ? fakeGlab(mr(7, 'opened', 'milestone/auth')) : fakeGh(pr(7, 'milestone/auth'));
-    const r = guard(cmd, fake);
-    assert(r.denied, 'should deny');
-    assert(r.reason.includes(`the merge target depends on the shell: ${readings}.`), `reason: ${r.reason}`);
-    assert(r.reason.includes('put a space before `>`, or quote the word'), `how to fix: ${r.reason}`);
-    eq(r.lookups.length, 0, 'no lookup');
-  });
+for (const [cmd, text] of GLUED) {
+  test(`guard: \`${cmd}\` is denied before any lookup`, () => { deniedBeforeLookup(cmd, text); });
 }
 
-test('guard: written so both shells agree, the same merges are checked normally', () => {
-  // Recovery control for the ambiguous shapes above: a space or quotes make it one reading.
-  for (const [cmd, n] of [['gh pr merge 7 >out', 7], ['gh pr merge "7">out', 7], ['gh pr merge 7 2>&1', 7], ['gh pr merge 12 >out', 12]]) {
+test('guard: a backslash ending a redirection target is denied before any lookup', () => {
+  // Bash: target "out 5", the current branch's PR is merged. PowerShell: PR 5.
+  const r = deniedBeforeLookup('gh pr merge >out\\ 5', '>out\\');
+  assert(r.reason.includes('escapes the next character in bash'), `reason: ${r.reason}`);
+  // Bash: target "a&b" and PR 5. Read without the escape, `&` would end the merge segment.
+  deniedBeforeLookup('gh pr merge --squash >a\\&b 5', '>a\\');
+});
+
+test('guard: written with a space or a stream number 1-6, the same merges are checked normally', () => {
+  // Recovery control for the refused shapes above.
+  for (const [cmd, n] of [['gh pr merge 7 >out', 7], ['gh pr merge "7" >out', 7], ['gh pr merge 7 2>&1', 7], ['gh pr merge 12 >out', 12],
+    ['gh pr merge 5 --squash \\\n2>&1', 5], ['gh pr merge 5 2>C:\\tmp\\out.txt', 5]]) {
     const ok = guard(cmd, fakeGh(pr(n, 'milestone/auth')));
     eq(ok.lookups.join('|'), GH_VIEW(n), `${cmd}: asked about ${n}`);
     assert(!ok.denied, `${cmd}: milestone allowed: ${ok.reason}`);
@@ -397,29 +434,125 @@ test('guard: written so both shells agree, the same merges are checked normally'
   }
 });
 
-test('guard: a glued word after the target is not ambiguous, and is looked up once', () => {
-  for (const cmd of ['gh pr merge 5 7>out', 'gh pr merge 5 12>&1', 'gh pr merge 5 --squash *>&1']) {
-    const ok = guard(cmd, fakeGh(pr(5, 'milestone/auth')));
-    // Both readings are checked; the second reuses the first lookup.
-    eq(ok.lookups.join('|'), GH_VIEW(5), `${cmd}: asked about 5, once`);
-    assert(!ok.denied, `${cmd}: milestone allowed: ${ok.reason}`);
-    const bad = guard(cmd, fakeGh(pr(5, 'main')));
-    eq(bad.lookups.join('|'), GH_VIEW(5), `${cmd}: asked about 5, once`);
-    assert(bad.denied && bad.reason.includes('PR 5 targets protected branch "main"'), `${cmd}: main denied: ${bad.reason}`);
-  }
-});
-
-test('guard: a push only PowerShell would make (`7>x:main`) is checked too', () => {
+test('guard: a push with a glued redirection is denied; written plainly it is checked', () => {
   // Precondition: with stream 2 every shell reads a redirect and no refspec, and
   // the test folder has no protected current branch, so that is allowed.
   const control = guard('git push origin 2>x:main', {});
   assert(!control.denied, `2>x:main allowed: ${control.reason}`);
+  assert(!guard('git push origin task/T-1 2>&1', {}).denied, 'task push with 2>&1 allowed');
   // Bash: fd 7 to a file, no refspec. PowerShell: refspec "7>x:main", a push to main.
   const r = guard('git push origin 7>x:main', {});
-  assert(r.denied && r.reason.includes('push to protected branch "main"'), `7>x:main denied: ${r.reason}`);
-  const ok = guard('git push origin feat 7>x', {});
-  assert(!ok.denied, `feat 7>x allowed: ${ok.reason}`);
+  assert(r.denied && r.reason.includes('`7>`'), `7>x:main denied: ${r.reason}`);
+  const feat = guard('git push origin feat 7>x', {});
+  assert(feat.denied && feat.reason.includes('`7>`'), `feat 7>x denied: ${feat.reason}`);
 });
+
+test('guard: a glued redirection only matters in a command that runs git, gh or glab', () => {
+  eq(guard('echo a2>f', {}).denied, false, 'no git, gh or glab: not the guard\'s business');
+  // Deliberately refused too (the guard doesn't sort reads from writes here): rewrite with a space.
+  deniedBeforeLookup('gh pr view 5 --json number>out.json', 'number>');
+});
+
+console.log('guard.js: glued words x redirections x positions');
+
+// Every word shape crossed with every output redirection operator and with the
+// word's place relative to the PR number. For each case the test knows what
+// bash and PowerShell 5.1 pass to gh (checked against real bash and
+// powershell.exe), or that it can't say (a glob, a variable, an escape that
+// moves the operator, PowerShell's argument mode). The rule under test: the
+// guard never lets a merge through after looking up a PR that some shell's
+// reading would not merge, and never lets one through when a reading is
+// unknown. The forms the Director uses (a lone 1-6, a space before the
+// redirection) must still be checked normally, so the rule can't pass by
+// refusing everything.
+const WORDS = ['5', '1', '6', '0', '7', '12', '"5"', "'5'", '""5', "''5", '5""', "5''", '\\5', '5\\', '$x', '${x}', '-', 'feat', 'task/X', '*', 'x"7"'];
+const OPS = ['>', '>>', '>&1', '&>', '&>>', '>|', '*>'];
+const POSITIONS = {
+  target: (r) => `gh pr merge ${r}`,
+  before: (r) => `gh pr merge ${r} 9`,
+  after: (r) => `gh pr merge 9 ${r}`,
+};
+const UNKNOWN = 'unknown';
+const NORUN = 'norun'; // the shell rejects the line, so nothing is merged
+// The arguments bash passes for the glued word (none when it is a file descriptor).
+function bashWord(word, op) {
+  if (word.endsWith('\\') || word.includes('$') || word.includes('*') || op === '*>') return UNKNOWN;
+  const value = word.replace(/\\(.)/g, '$1').replace(/["']/g, '');
+  if (op.startsWith('&')) return [value]; // `&>` takes no number
+  return /^\d+$/.test(word) ? [] : [value];
+}
+// PowerShell 5.1 (and cmd): only a lone 1-6 before `>`, `>>` or `>&1` is
+// modelled; `N>|` doesn't parse. Anything else depends on argument mode.
+function psWord(word, op) {
+  if (!/^[1-6]$/.test(word)) return UNKNOWN;
+  if (['>', '>>', '>&1'].includes(op)) return [];
+  return op === '>|' ? NORUN : UNKNOWN;
+}
+function expectedTarget(reading, pos) {
+  if (reading === UNKNOWN || reading === NORUN) return reading;
+  const args = pos === 'target' ? reading : pos === 'before' ? [...reading, '9'] : ['9', ...reading];
+  return args.length ? args[0] : null;
+}
+const CROSS = [];
+for (const word of WORDS) {
+  for (const op of OPS) {
+    for (const [pos, line] of Object.entries(POSITIONS)) {
+      const redirect = `${word}${op}${op.endsWith('&1') ? '' : 'f'}`;
+      CROSS.push({ cmd: line(redirect), word, op, pos, sh: expectedTarget(bashWord(word, op), pos), ps: expectedTarget(psWord(word, op), pos) });
+    }
+  }
+}
+// The guard's verdict, given whether it denied and what it looked up.
+function checkVerdict(c, denied, lookedUp) {
+  if (denied) return;
+  for (const [shell, want] of [['bash', c.sh], ['PowerShell', c.ps]]) {
+    assert(want !== UNKNOWN, `${c.cmd}: allowed although the ${shell} reading is unknown`);
+    if (want !== NORUN) eq(lookedUp, want, `${c.cmd}: allowed after looking up a PR ${shell} would not merge`);
+  }
+}
+
+test(`cross: ${CROSS.length} cases, the verdict never trusts a reading a shell doesn't share`, () => {
+  let allowed = 0;
+  for (const c of CROSS) {
+    // What guard.js does: refuse when anything is unsure, else look up the merge target.
+    const segs = lib.allSegments(c.cmd);
+    const denied = segs.unsure.length > 0;
+    const [m] = lib.findMerges(c.cmd);
+    checkVerdict(c, denied, m.target);
+    if (!denied) allowed++;
+    // The Director's forms are checked, not refused.
+    if (/^[1-6]$/.test(c.word) && ['>', '>>', '>&1'].includes(c.op)) assert(!denied, `${c.cmd}: a stream 1-6 is refused`);
+  }
+  eq(allowed, 3 * 4 * 3, 'allowed: 1, 5 and 6 with >, >>, >&1 and >| in each position');
+});
+
+test('cross: the same cases, spaced, are read the same way by every shell and checked normally', () => {
+  for (const word of ['"5"', '""5', '5""', 'feat', '7', '12']) {
+    for (const op of ['>', '>>', '&>', '>|']) {
+      const cmd = `gh pr merge ${word} ${op}f`;
+      eq(lib.allSegments(cmd).unsure.length, 0, `${cmd}: nothing unsure`);
+      eq(lib.findMerges(cmd)[0].target, word.replace(/["']/g, ''), `${cmd}: target`);
+    }
+  }
+});
+
+// The real guard on a sample of the cross (each word shape with each operator,
+// the position rotating), so the check above can't drift from guard.js.
+const SAMPLE_WORDS = new Set(['5', '0', '7', '12', '"5"', '""5', '5""', '\\5', '5\\', '$x', 'feat', '*']);
+let rotate = 0;
+for (const word of SAMPLE_WORDS) {
+  for (const op of OPS) {
+    const pos = Object.keys(POSITIONS)[rotate++ % 3];
+    const c = CROSS.find((x) => x.word === word && x.op === op && x.pos === pos);
+    test(`cross (guard.js): \`${c.cmd}\``, () => {
+      const r = guard(c.cmd, fakeGh(pr(5, 'milestone/auth')));
+      if (r.denied) eq(r.lookups.length, 0, `${c.cmd}: denied before any lookup`);
+      else eq(r.lookups.length, 1, `${c.cmd}: one lookup`);
+      const lookedUp = r.denied ? undefined : r.lookups[0].replace(/^pr view ?/, '').replace(/ ?--json.*$/, '') || null;
+      checkVerdict(c, r.denied, lookedUp);
+    });
+  }
+}
 
 console.log('merge logging: chained and redirected merges');
 

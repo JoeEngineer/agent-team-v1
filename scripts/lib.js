@@ -229,56 +229,59 @@ function skipRedirectTarget(cmd, i) {
 // lines, `>` ends a token (`main>out.txt`), and the braces of a block
 // (`{git push}`) are dropped while `HEAD@{1}` and `${x}` keep theirs.
 // Output redirections are not arguments and do not end a segment: `>f`, `>>f`,
-// `N>f`, `N>&M`, `>&N`, `>&f`, `>|f`, `&>f`, `&>>f` (and PowerShell's `*>&1`)
-// are dropped along with their target, so `gh pr merge --squash 2>&1` has no
-// number, and `2>&1` is not a `2` followed by a `&` break and a `1`.
-// A word glued to the front of `>` is read the same way by every shell only
-// when it is a lone 1-6 (a stream number in bash, PowerShell 5.1 and cmd) or
-// fully quoted (`"7">f`: an argument everywhere). A word glued to `&>` is
-// always an argument (`5&>f`: bash's `&>` takes no number; PowerShell can't
-// parse it; cmd splits at `&`). Any other glued word is read two ways. Bash
-// reads 0, 7-9 or a multi-digit number as a file descriptor and any other word
-// as an argument. PowerShell keeps the whole `7>out` or `main>out` as one
-// argument, or `7>` plus `out` when a space follows, but reads `*>` as a
-// stream. Such a segment keeps the reading above (bash's, but `*>` dropped) and
-// also gets a non-enumerable `readings` property, { sh, ps }, with each shell's
-// token list, so a guard can check both. cmd's own reading (the last digit of
-// `a12>f` is a handle) only differs from bash's in segments that already have
-// `readings`.
+// `N>f`, `N>&M`, `>&N`, `>&f`, `>|f`, `&>f`, `&>>f` are dropped along with
+// their target, so `gh pr merge --squash 2>&1` has no number, and `2>&1` is not
+// a `2` followed by a `&` break and a `1`.
+//
+// Words glued to a redirection, and the invariant a guard relies on: a word
+// written right before a redirection operator, with no space (`2>&1`, `7>f`,
+// `""5>f`, `5&>f`, `main>f`), is dropped as a stream number only when its raw
+// text is exactly one digit 1-6 and the operator starts with `>`. That is the
+// one glued form every supported shell reads the same way: a file descriptor
+// in bash, a stream in PowerShell 5.1 (`N>f`, `N>>f`, `N>&1`; its other `N>&M`
+// and `N>|` forms don't parse, so nothing runs), a handle in cmd. Every other
+// glued word is read differently by some shell, or depends on rules this
+// parser doesn't model (quotes, escapes, variables, globs). Bash takes any
+// unquoted digit string as a file descriptor but a quoted, escaped or variable
+// word as an argument, `5\>f` as the argument `5>f`, and `*` as a glob;
+// PowerShell takes only 1-6 and `*`; cmd takes the last digit. Such a word is recorded in the
+// returned array's non-enumerable `unsure` list, and so is a redirection target
+// whose raw text ends in a backslash or has one before a quote (`>out\ 5`:
+// bash escapes the space and merges the current branch, PowerShell merges PR 5).
+// A guard must refuse a command whose `unsure` list is not empty instead of
+// checking any reading of it. The segments still hold bash's reading (an
+// unquoted glued number dropped as a file descriptor, any other glued word kept
+// as an argument) for callers such as the merge logger that only describe a
+// command that already ran.
 // Not read: `$(…)` inside a double-quoted string.
 function segments(cmd) {
   const out = [];
-  // cur: the reading returned; sh / ps: bash's and PowerShell's, which differ
-  // from cur only after a glued word read two ways (split).
-  let cur = [], sh = [], ps = [], split = false;
-  let tok = '', quote = null, hasTok = false, bare = false;
+  const unsure = []; // { text, why } for each redirection the shells read differently
+  let cur = [], tok = '', quote = null, hasTok = false;
+  // Where the current raw word starts in cmd (-1: between words). The glued-word
+  // check reads the raw text, quotes and backslashes included, so `""5`, `5""`,
+  // `\5` and `{5` never pass for the digit 5.
+  let wordStart = -1;
   const heredocs = []; // delimiters waiting for the end of the current line
-  const pushTok = () => { if (hasTok) { cur.push(tok); sh.push(tok); ps.push(tok); } tok = ''; hasTok = false; bare = false; };
-  const pushSeg = () => {
-    pushTok();
-    if (cur.length) {
-      if (split) Object.defineProperty(cur, 'readings', { value: { sh, ps }, enumerable: false });
-      out.push(cur);
-    }
-    cur = []; sh = []; ps = []; split = false;
-  };
+  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; wordStart = -1; };
+  const pushSeg = () => { pushTok(); if (cur.length) out.push(cur); cur = []; };
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i];
     if (quote) {
       if (c === quote) quote = null; else tok += c;
       continue;
     }
-    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
     if (c === '\\' || c === '`') {
       // Line continuation (sh: backslash, PowerShell: backtick).
       const nl = cmd[i + 1] === '\n' ? 1 : (cmd[i + 1] === '\r' && cmd[i + 2] === '\n' ? 2 : 0);
       if (nl) { i += nl; continue; }
       if (c === '`') { pushSeg(); continue; }
     }
+    if (wordStart < 0 && !/[\s;&|()>]/.test(c)) wordStart = i;
+    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
     if (c === '(' || c === ')') { pushSeg(); continue; }
     if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
-      // A redirection: the operator, then its target, dropped. What a word glued
-      // to the front means depends on the shell (see above).
+      // A redirection: the operator, then its target, dropped.
       let j = i + (c === '&' ? 2 : 1);
       if (cmd[j] === '>') j++;
       if (cmd[j] === '&' || cmd[j] === '|') j++;
@@ -286,22 +289,14 @@ function segments(cmd) {
       let k = j;
       while (cmd[k] === ' ' || cmd[k] === '\t') k++;
       const end = skipRedirectTarget(cmd, k);
-      if (!hasTok || c === '&' || !bare) {
-        pushTok(); // nothing glued, `&>` (no number), or a quoted word (an argument)
-      } else if (/^[1-6]$/.test(tok)) {
-        tok = ''; hasTok = false; bare = false; // a stream number in every shell
-      } else {
-        const fd = /^\d+$/.test(tok);
-        const star = tok === '*';
-        if (!fd && !star) cur.push(tok);
-        if (!fd) sh.push(tok);
-        if (!star) {
-          if (k === j) ps.push(tok + cmd.slice(i, end));
-          else ps.push(tok + op, cmd.slice(k, end).replace(/["']/g, ''));
-        }
-        split = true;
-        tok = ''; hasTok = false; bare = false;
-      }
+      const glued = wordStart < 0 ? '' : cmd.slice(wordStart, i);
+      if (glued && !(c === '>' && /^[1-6]$/.test(glued))) unsure.push({ text: glued + op, why: 'glued' });
+      // Bash's reading: an unquoted number before `>` is a file descriptor;
+      // `&>` takes none, so a word before it is an argument.
+      if (c === '>' && /^\d+$/.test(glued)) { tok = ''; hasTok = false; }
+      pushTok();
+      const target = cmd.slice(k, end);
+      if (/\\(?:["']|$)/.test(target)) unsure.push({ text: op + target, why: 'escape' });
       i = end - 1;
       continue;
     }
@@ -338,9 +333,10 @@ function segments(cmd) {
     }
     if (c === '\n' || c === ';' || c === '|' || c === '&') { pushSeg(); continue; }
     if (/\s/.test(c)) { pushTok(); continue; }
-    tok += c; hasTok = true; bare = true;
+    tok += c; hasTok = true;
   }
   pushSeg();
+  Object.defineProperty(out, 'unsure', { value: unsure, enumerable: false });
   return out;
 }
 
@@ -367,13 +363,23 @@ function nestedCommands(tokens) {
 }
 
 // segments(cmd), plus the segments of any command string passed to another
-// shell (see nestedCommands), a few levels deep.
+// shell (see nestedCommands), a few levels deep. The `unsure` list (see
+// segments) covers the nested commands too.
 function allSegments(cmd, depth = 0) {
   const out = [];
-  for (const seg of segments(cmd || '')) {
+  const segs = segments(cmd || '');
+  const unsure = [...segs.unsure];
+  for (const seg of segs) {
     out.push(seg);
-    if (depth < 3) for (const inner of nestedCommands(seg)) out.push(...allSegments(inner, depth + 1));
+    if (depth < 3) {
+      for (const inner of nestedCommands(seg)) {
+        const nested = allSegments(inner, depth + 1);
+        out.push(...nested);
+        unsure.push(...nested.unsure);
+      }
+    }
   }
+  Object.defineProperty(out, 'unsure', { value: unsure, enumerable: false });
   return out;
 }
 
@@ -490,24 +496,6 @@ function segmentMerges(seg) {
   return out;
 }
 
-// For a segment that bash and PowerShell read differently (segments' `readings`):
-// null when every reading merges the same requests (forge, target, repo), else
-// { sh, ps }, a description of what each shell would merge, such as
-// "PR (current branch)" or "PR 7>out". A guard can't tell which shell runs the
-// command, so a disagreement means it can't tell which request to check.
-function ambiguousMerge(seg) {
-  const r = seg && seg.readings;
-  if (!r) return null;
-  const key = (tokens) => JSON.stringify(segmentMerges(tokens).map((m) => [m.forge, m.target, m.repo]));
-  const keys = new Set([key(seg), key(r.sh), key(r.ps)]);
-  if (keys.size === 1) return null;
-  const noun = (f) => (f === 'gitlab' ? 'MR' : 'PR');
-  const show = (tokens) => segmentMerges(tokens)
-    .map((m) => `${noun(m.forge)} ${m.target === null ? '(current branch)' : m.target}${m.repo ? ` in ${m.repo}` : ''}`)
-    .join(', ') || 'no merge';
-  return { sh: show(r.sh), ps: show(r.ps) };
-}
-
 // Which tool sent this hook event: 'claude' (default) or 'codex'.
 const CODEX_ONLY_TOOLS = new Set(['send_input', 'resume_agent', 'followup_task', 'wait_agent', 'close_agent', 'list_agents', 'apply_patch']);
 function detectTool(input, env = process.env) {
@@ -524,5 +512,5 @@ module.exports = {
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
-  glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges, ambiguousMerge,
+  glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,
 };
