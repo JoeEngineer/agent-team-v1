@@ -270,7 +270,7 @@ function evaluateTargets(input) {
     detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}${reads ? `; ${reads} unattributed CI read(s) name no PR and are charged to the total (${charged} for ${per.length} task PR(s))` : ''}${np.reconcile.turns ? `; ${np.reconcile.turns} reconcile checkpoint(s) not charged` : ''}` : 'no task PRs found' });
   const pend = reviews.pending;
   const bad = pend.filter((p) => !p.timeout && !p.blockingNotWaited);
-  t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout', result: bad.length ? 'FAIL' : 'PASS',
+  t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout or a marked blocking review', result: bad.length ? 'FAIL' : 'PASS',
     detail: pend.length ? `${pend.length} pending review(s): ${pend.map((p) => (p.blockingNotWaited && !p.timeout ? `${p.verdict}, marked not waited` : p.waitedMinutes == null ? 'no wait time stated' : `waited ${p.waitedMinutes.toFixed(1)} min`)).join(', ')}` : `no pending reviews (${reviews.total} reviews)` });
   t.push({ id: 'not-complete-before-checks', name: 'not "complete" before the milestone PR checks finished',
     result: !milestone.reported ? 'N/A' : milestone.completeBeforeChecksFinished ? 'FAIL' : 'PASS', detail: milestone.detail });

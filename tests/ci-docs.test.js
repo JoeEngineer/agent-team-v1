@@ -261,6 +261,22 @@ test('reviewer.md: a blocking verdict with pending CI starts summary with the no
   assert(rv.includes('with `summary` starting with the `not waited:` marker'), 'pending definition');
 });
 
+test('director docs: backticks balance on every line outside fenced code blocks', () => {
+  const odd = (text) => {
+    const bad = [];
+    let fenced = false;
+    text.split('\n').forEach((l, i) => {
+      if (/^\s*```/.test(l)) { fenced = !fenced; return; }
+      if (!fenced && ((l.match(/`/g) || []).length % 2)) bad.push(i + 1);
+    });
+    return bad;
+  };
+  for (const f of ['SKILL.md', 'references/merging.md', 'references/gitlab.md', 'references/codex.md']) {
+    eq(odd(read('skills/director/' + f)).join(','), '', `${f}: lines with an odd number of backticks`);
+  }
+  eq(odd('a `b` c\n(1)`nothing is queued (when `x` row)').join(','), '2', 'detector flags a stray backtick');
+});
+
 test('plugin manifests are 0.6.0', () => {
   eq(JSON.parse(read('plugin.json')).version, '0.6.0', 'plugin.json version');
   eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '0.6.0', '.claude-plugin/plugin.json version');

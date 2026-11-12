@@ -169,7 +169,7 @@ The first-PR step now fits in one turn on both tools. Claude cw9 turn 16 is `ci-
 
 The six no-PR turns in Codex cw9 (turns 26, 33, 40, 47, 63, 83) are all `reconcile-logs.js --merges` checkpoints, several bundled with STATUS edits. That is more than the prompt requires (it asks for one at the end of a wave and one before the milestone PR). They cost 405,327 context tokens, 49% of Codex's CI tokens in that run. They are not a target miss, but they are the largest remaining CI-related spend, and at least two of them (turns 26 and 40) printed nothing, so nothing was queued. Worth a look in a later task.
 
-### Codex cw9, "reviewer pending only on timeout": the documented blocking-review case (PASS with decision 0017)
+### Codex cw9, "reviewer pending only on timeout or a marked blocking review": the documented blocking-review case (PASS with decision 0017)
 
 The pending review is the first review of task `-3` (slugify), PR #59, head `d68bde5` (the first head of #59; the second round approved head `fe5d56c`, which is the one merged). The reviewer's `review-json` (in the Director transcript and in `reviews.jsonl`) says:
 
