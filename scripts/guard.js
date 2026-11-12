@@ -167,11 +167,30 @@ function checkGlabMrMerge(args, cwd) {
   requireUnprotectedBase('gitlab', target, repo, cwd);
 }
 
+// The guard hook times out after 30 s (hooks/hooks.json), and a hook that times
+// out does not block: the command runs unguarded. So every forge lookup in one
+// guard run shares LOOKUP_BUDGET_MS (20 s), each call limited to
+// min(LOOKUP_MS, time left), and a lookup with under MIN_LOOKUP_MS left is not
+// started: the command is denied instead. AGENT_TEAM_GUARD_BUDGET_MS can only
+// lower the budget (tests); it never raises it.
+const LOOKUP_MS = 20000;
+const LOOKUP_BUDGET_MS = Math.min(20000, Number(process.env.AGENT_TEAM_GUARD_BUDGET_MS) || 20000);
+const MIN_LOOKUP_MS = 500;
+const lookupDeadline = Date.now() + LOOKUP_BUDGET_MS;
+
 // Ask the forge for the request's base (target) branch; block when it is
-// protected or unknown.
+// protected or unknown, or when there is no time left to ask (fail closed).
 function requireUnprotectedBase(which, target, repo, cwd) {
   const what = `${forge.noun(which)} ${target || '(current branch)'}`;
-  const info = forge.requestInfo(which, { target, repo }, cwd);
+  const left = lookupDeadline - Date.now();
+  if (left < MIN_LOOKUP_MS) {
+    const check = which === 'gitlab'
+      ? ['glab mr view', target, repo ? `--repo ${repo}` : '', '--output json'].filter(Boolean).join(' ') + ' (target_branch)'
+      : ['gh pr view', target, repo ? `--repo ${repo}` : '', '--json baseRefName'].filter(Boolean).join(' ');
+    block(`couldn't confirm the base of ${what} in time (the guard's ${Math.round(LOOKUP_BUDGET_MS / 100) / 10} s for forge lookups ran out before this one)`,
+      `Retry the command, or check the base with \`${check}\`.`);
+  }
+  const info = forge.requestInfo(which, { target, repo }, cwd, Math.min(LOOKUP_MS, left));
   if (!info) block(`could not confirm the base branch of ${what} — refusing to merge blind`);
   if (!info.base) block(`could not confirm the base branch of ${what}`);
   if (isProtected(info.base)) block(`${what} targets protected branch "${info.base}"; only the user merges into it`);

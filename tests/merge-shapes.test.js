@@ -306,6 +306,68 @@ test('guard: a flag that only starts with --admin is not --admin (no false block
   assert(!r.denied, `should allow: ${r.reason}`);
 });
 
+// Review of #103 (follow-up): each base lookup had its own 20 s limit and the
+// guard hook times out at 30 s, and a timed-out hook does not block. Two slow
+// lookups in one chain could let a merge into a protected base through. All
+// lookups of one guard run now share a 20 s budget; an exhausted budget denies.
+const FAKE_CI = path.join(__dirname, 'fake-ci-cli.js');
+function guardCi(command, routes, env = {}) {
+  const dir = fs.mkdtempSync(path.join(require('os').tmpdir(), 'agent-team-guard-ci-'));
+  fs.writeFileSync(path.join(dir, 'routes.json'), JSON.stringify(routes));
+  const log = path.join(dir, 'calls.log');
+  const t0 = Date.now();
+  const r = run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: proj }, proj, {
+    AGENT_TEAM_FAKE_GH: FAKE_CI, AGENT_TEAM_FAKE_GLAB: FAKE_CI, FAKE_CI_ROUTES: path.join(dir, 'routes.json'),
+    FAKE_CI_STATE: path.join(dir, 'state.json'), FAKE_CI_LOG: log, ...env,
+  });
+  const elapsed = Date.now() - t0;
+  let out = {};
+  try { out = JSON.parse(r.stdout).hookSpecificOutput || {}; } catch { /* allowed */ }
+  const lookups = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l).join(' ')) : [];
+  return { denied: out.permissionDecision === 'deny', reason: out.permissionDecisionReason || '', elapsed, lookups, status: r.status };
+}
+const TWO_MERGES = 'gh pr merge 5 --squash && gh pr merge 6 --squash';
+
+test('guard budget: first lookup slow (succeeds), second hangs: denied for PR 6 inside the budget (5 s budget)', () => {
+  const r = guardCi(TWO_MERGES, { 'view:5': { sleep: 2500, then: pr(5, 'milestone/auth') }, 'view:6': { hang: true } }, { AGENT_TEAM_GUARD_BUDGET_MS: '5000' });
+  eq(r.lookups.join('|'), `${GH_VIEW(5)}|${GH_VIEW(6)}`, 'precondition: PR 5 was confirmed, then PR 6 was asked');
+  assert(r.denied, 'should deny');
+  assert(r.reason.includes('could not confirm the base branch of PR 6'), r.reason);
+  assert(r.elapsed < 5000 + 2000, `took ${r.elapsed} ms for a 5 s budget`);
+});
+
+test('guard budget (the real 20 s): first lookup slow, second hangs: denied by about 20 s, well before the 30 s hook timeout; the env var cannot raise the budget', () => {
+  const r = guardCi(TWO_MERGES, { 'view:5': { sleep: 12000, then: pr(5, 'milestone/auth') }, 'view:6': { hang: true } }, { AGENT_TEAM_GUARD_BUDGET_MS: '999999' });
+  eq(r.lookups.length, 2, 'precondition: both lookups ran');
+  assert(r.denied && r.reason.includes('could not confirm the base branch of PR 6'), r.reason);
+  // Each call alone is capped at 20 s, so without the shared budget this run took 12 + 20 = 32 s.
+  assert(r.elapsed < 23000, `took ${r.elapsed} ms; the hook is killed at 30 s`);
+});
+
+test('guard budget: no time left before a lookup -> denied without asking, naming the check to run (gh and glab)', () => {
+  const gh = guardCi('gh pr merge 5 --squash', { 'view:5': pr(5, 'milestone/auth') }, { AGENT_TEAM_GUARD_BUDGET_MS: '1' });
+  eq(gh.lookups.length, 0, 'no lookup started');
+  assert(gh.denied, 'an exhausted budget never allows');
+  assert(gh.reason.includes("couldn't confirm the base of PR 5 in time"), gh.reason);
+  assert(gh.reason.includes('Retry the command, or check the base with `gh pr view 5 --json baseRefName`'), gh.reason);
+  const gl = guardCi('glab mr merge 7 -R grp/app --yes', { 'view:7': mr(7, 'opened', 'milestone/auth') }, { AGENT_TEAM_GUARD_BUDGET_MS: '1' });
+  assert(gl.denied && gl.reason.includes('`glab mr view 7 --repo grp/app --output json (target_branch)`'), gl.reason);
+  eq(gl.lookups.length, 0, 'glab: no lookup started');
+});
+
+test('guard budget: a single slow but successful lookup is still allowed into a milestone base (default budget); a hanging lookup into main is denied', () => {
+  const ok = guardCi('gh pr merge 5 --squash', { 'view:5': { sleep: 2500, then: pr(5, 'milestone/auth') } });
+  eq(ok.lookups.join('|'), GH_VIEW(5), 'asked about PR 5');
+  assert(!ok.denied, `should allow: ${ok.reason}`);
+  assert(ok.elapsed >= 2500, `precondition: the lookup really was slow (${ok.elapsed} ms)`);
+  const slowMain = guardCi('gh pr merge 5 --squash', { 'view:5': { sleep: 2500, then: pr(5, 'main') } });
+  assert(slowMain.denied && slowMain.reason.includes('protected branch "main"'), `slow lookup into main: ${slowMain.reason}`);
+  const hang = guardCi('gh pr merge 5 --squash', { 'view:5': { hang: true } }, { AGENT_TEAM_GUARD_BUDGET_MS: '3000' });
+  eq(hang.lookups.length, 1, 'precondition: the lookup was started');
+  assert(hang.denied && hang.reason.includes('could not confirm the base branch of PR 5'), hang.reason);
+  assert(hang.elapsed < 3000 + 2000, `took ${hang.elapsed} ms`);
+});
+
 test('guard: GraphQL auto-merge mutations are still denied', () => {
   const gh = guard("gh api graphql -f query='mutation { enablePullRequestAutoMerge(input: {pullRequestId: \"x\"}) { clientMutationId } }'", fakeGh(pr(5, 'milestone/auth')));
   assert(gh.denied && gh.reason.includes('enablePullRequestAutoMerge'), `gh graphql: denied=${gh.denied} ${gh.reason}`);
