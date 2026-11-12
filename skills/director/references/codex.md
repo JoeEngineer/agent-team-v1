@@ -103,6 +103,18 @@ codex exec -C <worktree> -m <model> -c model_reasoning_effort=<effort> --sandbox
 
 Get `<model>` from `node "<plugin root>/scripts/models.js" resolve <tier> --tool codex`.
 
+## Merging and CI
+
+Codex has no background shell that wakes the Director, so the Claude fallback (a background `ci-wait.js`) doesn't exist here. When auto-merge isn't usable and the reviewer reported `ci: pending`, send a followup to the same reviewer ("wait again and report ci", `kind=followup`, same attempt, logged first like any followup). Say in `STATUS.md` why auto-merge wasn't used, and set the state to `waiting CI` until the reviewer reports. Then act on its report as `merging.md` says ("Reviewer reported `ci: pending`"): green runs the merge call; still pending means tell the user, with no further wait.
+
+The reviewer waits for CI in one blocking shell call: pass the shell tool's timeout parameter (e.g. `timeout_ms`, if it has one) set to 600000 ms.
+
+On Windows the merge call is the PowerShell 5.1 form from `merging.md` ("The merge call"):
+
+```
+node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)." } }
+```
+
 ## Reviews
 
 When hooks are active, the hook logs `review-json` from `SubagentStop`. When hooks are off, log each verdict yourself with `log-event.js review`. Never both, or the log gets duplicate review lines.

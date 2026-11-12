@@ -55,6 +55,7 @@ Add the ones that apply. Agents don't know these on their own.
 - **Worktree base** (every worktree task): "Your worktree starts on `origin/HEAD` (usually `main`), not on the milestone. First run `git fetch origin && git checkout -b <branch> origin/<base>`, and confirm with `git merge-base --is-ancestor origin/<base> HEAD`."
 - **Docker** (any task that starts containers, networks or volumes): "Use the compose project / name prefix `<task-id>-<role>` (e.g. `iv9-impl`, `iv9-rev`) for everything you create, and remove only what you created." If the task must use fixed names (e.g. ones the README documents), say so; the Director doesn't run it alongside other Docker tasks. For a reviewer, add the exact-SHA result of any memory-heavy suite that already passed ("2 GiB acceptance passed on `<sha>`"), so it can cite that instead of running it again.
 - **CI artifacts** (a task that adds or changes a job that uploads artifacts): "Upload only on `push` to `main` or `milestone/**`, not on pull requests. Set `retention-days: 1`. Don't upload from test or integration jobs."
+- **CI wait** (every review task): "CI wait: `node "<absolute plugin root>/scripts/ci-wait.js" <n> --sha <head_sha>`, after your review work; shell timeout 600000 ms; at most two calls." Use the real absolute path and PR number.
 - **Scratch files** (reviewers, and anyone building or running things outside their branch): "Put scratch worktrees, venvs and compose projects under your scratchpad or `/tmp`, never in the main checkout."
 
 ## Review tasks

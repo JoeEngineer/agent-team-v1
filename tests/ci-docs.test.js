@@ -110,8 +110,12 @@ test('team-init: states the rules, the names step, the ask-the-user step and the
 });
 
 test('gitlab-mapping: CI wait, auto-merge and cancel rows', () => {
-  assert(MAPPING.includes('`node scripts/ci-wait.js <n>`') && MAPPING.includes('`head_pipeline.status`'), 'CI wait row');
-  assert(MAPPING.includes('`glab mr merge <n> --auto-merge --sha <sha>'), 'auto-merge row');
+  assert(MAPPING.includes('`node scripts/ci-wait.js <n> --sha <sha>`') && MAPPING.includes('`head_pipeline.status`'), 'CI wait row');
+  assert(MAPPING.includes('| CI gate (first in the merge call) | `node scripts/ci-wait.js <n> --once --sha <sha>` |'), 'CI gate row');
+  assert(MAPPING.includes('`glab mr merge <n> --squash --remove-source-branch --yes --sha <sha>`'), 'glab merge row with --sha');
+  assert(MAPPING.includes('`gh pr merge <n> --squash --delete-branch --match-head-commit <sha>`'), 'gh merge row with --match-head-commit');
+  assert(MAPPING.includes('untested against a live instance'), 'cancel row caveat');
+  assert(MAPPING.includes('| Queue merge after CI | `gh pr merge <n> --auto --squash --delete-branch --match-head-commit <sha>` | `glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <sha>` |'), 'auto-merge row');
   assert(MAPPING.includes('`glab api -X POST projects/:id/merge_requests/<n>/cancel_merge_when_pipeline_succeeds`'), 'cancel row');
 });
 
