@@ -18,14 +18,14 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-4 | Reviewer and Director prompts | implementer | large (opus) / high | 4 | merged | #85 | #91 |
 | CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
-| CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 1 | in progress | #95 | |
-| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | | planned | #88 | |
+| CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | fold-in | #95 | #96 |
+| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | in progress | #88 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
 Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → final review.
 
-Live runs (CW-7): the Director starts the four harness runs as background commands (each takes 20–40 min, longer than an agent's foreground shell cap). The headless Directors use the large tier on both tools (Claude `opus`, Codex `gpt-6.1-sol`) in every run, so before/after compare the same model. A CW-7 implementer analyses the JSON reports and writes the before/after report. Baseline runs (0.5.0, commit 0205ab8) start once CW-8 is merged; the after runs start once CW-4 is merged.
+Live runs (CW-7): the Director starts the four harness runs as background commands (each takes 20–40 min, longer than an agent's foreground shell cap). The headless Directors use the large tier on both tools (Claude `opus`, Codex `gpt-6.1-sol`) in every run, so before/after compare the same model. A CW-7 implementer analyses the JSON reports and writes the before/after report. Baseline runs (0.5.0, commit 0205ab8) start once CW-8 is merged; the after runs start once CW-4 is merged. Baseline runs started 2026-11-12 03:04 UTC (runs live-20261112t030358-claude-a684 and live-20261112t030359-codex-def4), harness at CW-8 head 5f9153f. Baselines done: Claude 6 CI turns / 469k tokens, 4 foreground --watch, 5/5 reviews pending; Codex 13 CI turns / 760k tokens, 5 pending reviews, reported complete while a check was running.
 
 Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier (record 0013). Overrides: CW-2 effort high, CW-4 tier medium (record 0013).
 
@@ -47,7 +47,7 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 
 ## Needs the user
 
-- Delete the leftover temp folder `C:\cw6\38888` from an aborted harness run (its PR and branch were cleaned up; the safety check blocked the Director's removal).
+- Scratch repo: the `protect-milestones` ruleset has "Restrict deletions" on, so the harness can't delete each run's `milestone/live-…` branch (the guard rightly blocks the Director from deleting it too). Either turn that rule off on the scratch repo, or delete the leftover `milestone/live-*` branches by hand after CW-7. They are harmless meanwhile.
 
 ## Scratch repo
 
