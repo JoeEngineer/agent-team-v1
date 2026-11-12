@@ -36,7 +36,7 @@ test('README: the scripts list names ci-wait.js with --once and --names, and rec
 test('README: How it works describes the reviewer wait, the one-call merge and the completion rule', () => {
   assert(README.includes('the reviewer waits for CI with `scripts/ci-wait.js` after its review'), 'reviewer wait');
   assert(README.includes('the CI gate, then the merge, then the PR comment'), 'one-call merge order');
-  assert(README.includes('queues auto-merge instead'), 'auto-merge queue');
+  assert(README.includes('it queues auto-merge when the `milestone/*` ruleset names its required checks and the repo allows auto-merge'), 'auto-merge queue condition');
   assert(README.includes('`reconcile-logs.js --merges` at checkpoints'), 'checkpoint reconcile');
   assert(README.includes('reported complete only after its PR\'s checks finish green'), 'completion rule');
 });
@@ -65,8 +65,23 @@ test('README: branch protection says names come after one CI run, empty list enf
   assert(README.includes('The Director never changes rulesets: it asks you'), 'director asks, never changes');
 });
 
-test('README: the changelog has the 0.6.0 entry', () => {
-  assert(/## Changelog\n\n- \*\*0\.6\.0 \(ci-wait\):\*\*/.test(README), '0.6.0 changelog entry');
+test('README: no Changelog heading; the 0.6.0 notes are version-tagged bullets in Limits and known gaps', () => {
+  assert(!README.includes('## Changelog'), 'a Changelog heading must not exist (the README tags versions inline)');
+  const limits = README.slice(README.indexOf('## Limits and known gaps'), README.indexOf('## License'));
+  assert(/^- \*\*CI waits and merges \(0\.6\.0\):\*\*/m.test(limits), '0.6.0 CI bullet in Limits');
+  assert(/^- \*\*Required check names and auto-merge setup \(0\.6\.0\):\*\*/m.test(limits), '0.6.0 setup bullet in Limits');
+});
+
+test('README: auto-merge is queued only with named checks and an allowed repo setting; Claude and Codex fallbacks named', () => {
+  assert(README.includes('queues auto-merge when the `milestone/*` ruleset names its required checks and the repo allows auto-merge; otherwise it waits for CI in a background check (Claude) or asks the reviewer to wait again (Codex)'), 'How it works condition');
+  assert(README.includes('Without this setting it waits for CI in a background check instead (Claude), or asks the reviewer to wait again (Codex).'), 'Protect-branches fallback');
+});
+
+test('README and team-init agree: names go to milestone/* and protect-main; GitLab label is Set to auto-merge', () => {
+  assert(README.includes('Add them to the `milestone/*` ruleset and to `protect-main`'), 'README names targets');
+  assert(SKILL.includes('add those names as required status checks to the `milestone/*` ruleset and to `protect-main`'), 'team-init names targets');
+  assert(README.includes('(**Set to auto-merge**, set per MR)'), 'GitLab label');
+  assert(!README.includes('Merge when pipeline succeeds**'), 'outdated GitLab label gone');
 });
 
 test('README and SKILL: every required_status_checks JSON example has a placeholder context, never an empty list', () => {

@@ -46,7 +46,7 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
 - **GitHub or GitLab:** works with GitHub and with GitLab, including self-hosted GitLab. On GitLab the Director uses `glab` and merge requests; see [GitLab](#gitlab), `skills/director/references/gitlab.md`, and [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md) for the full mapping and what's verified.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
-- **CI waits:** the reviewer waits for CI with `scripts/ci-wait.js` after its review. The Director then merges in one call: the CI gate, then the merge, then the PR comment, each running only if the one before succeeded. If CI is still pending, it queues auto-merge instead, and it checks queued merges with `reconcile-logs.js --merges` at checkpoints. A milestone is reported complete only after its PR's checks finish green.
+- **CI waits:** the reviewer waits for CI with `scripts/ci-wait.js` after its review. The Director then merges in one call: the CI gate, then the merge, then the PR comment, each running only if the one before succeeded. If CI is still pending, it queues auto-merge when the `milestone/*` ruleset names its required checks and the repo allows auto-merge; otherwise it waits for CI in a background check (Claude) or asks the reviewer to wait again (Codex). It checks queued merges with `reconcile-logs.js --merges` at checkpoints. A milestone is reported complete only after its PR's checks finish green.
 - **Without the helper:** `gh pr checks <n> --required` is a quick check, and `gh pr checks <n> --watch --fail-fast --interval 30` waits until the checks finish. The watch has no deadline of its own, and `--required` can fail when the base has no required checks. On GitLab, read `head_pipeline.status` from `glab mr view <n> --output json`.
 - **Script commands:** run them from the project root with the plugin path, `node "<plugin root>/scripts/…"`, as `team-init` does. The commands below are written relative to the plugin root.
 - **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
@@ -215,7 +215,7 @@ A required status check is the name of a CI job, and the name exists only after 
 
 Get the names from the first CI run with `node "<plugin root>/scripts/ci-wait.js" --names <n>` or `gh pr checks <n> --json name`. Add them to the `milestone/*` ruleset and to `protect-main`, with the bypass list still empty. The Director never changes rulesets: it asks you, and records the names in STATUS.md.
 
-**Auto-merge:** turn on **Settings → General → Pull Requests → Allow auto-merge**. The Director queues a merge with auto-merge only when CI is still pending and the ruleset names its required checks. Without this setting it waits for CI in a background check instead. The Director asks you to turn it on; it doesn't change the setting itself.
+**Auto-merge:** turn on **Settings → General → Pull Requests → Allow auto-merge**. The Director queues a merge with auto-merge only when CI is still pending and the ruleset names its required checks. Without this setting it waits for CI in a background check instead (Claude), or asks the reviewer to wait again (Codex). The Director asks you to turn it on; it doesn't change the setting itself.
 
 ### On GitLab
 
@@ -226,7 +226,7 @@ GitLab's equivalent of rulesets is **protected branches** (Settings → Reposito
 | `main` (protected by default) | Maintainers | **No one** | Off | Every change reaches `main` through an MR. GitLab protects the default branch already; change "Allowed to push and merge" to No one. |
 | `milestone/*` (wildcard) | Developers + Maintainers | Developers + Maintainers | **Off** | The Director pushes and merges here on its own; force pushes would rewrite reviewed work. |
 
-The Director acts through *your* `glab` login. If you're a maintainer, so is it, so server rules can't tell you apart: the guard hook is what stops it merging into `main`, as on GitHub. Once you have CI, turn on **Pipelines must succeed** in Settings → Merge requests. Without it, a merge can go through before the pipeline finishes. The Director queues a merge with auto-merge (**Merge when pipeline succeeds**, set per MR) only when CI is still pending, and this setting is what makes the queued merge wait for green. The Director asks you to turn it on; it doesn't change it itself.
+The Director acts through *your* `glab` login. If you're a maintainer, so is it, so server rules can't tell you apart: the guard hook is what stops it merging into `main`, as on GitHub. Once you have CI, turn on **Pipelines must succeed** in Settings → Merge requests. Without it, a merge can go through before the pipeline finishes. The Director queues a merge with auto-merge (**Set to auto-merge**, set per MR) only when CI is still pending, and this setting is what makes the queued merge wait for green. The Director asks you to turn it on; it doesn't change it itself.
 
 The CI names come from the head pipeline's jobs, which exist only after CI has run once. Read them with `node "<plugin root>/scripts/ci-wait.js" --names <n>`. GitLab has no per-job list to fill in: **Pipelines must succeed** covers the whole pipeline.
 
@@ -317,11 +317,9 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 - **CI waits are capped by the shell:** Claude's foreground shell stops at 10 minutes, so the reviewer waits for CI in at most two calls (about 9 and 6 minutes, roughly 15 in all). Codex has no background shell that wakes the Director, so without auto-merge a pending PR costs a reviewer re-wait, which is two more Director turns for that PR.
 - **Queued auto-merge and new pushes:** whether GitHub enforces the expected head SHA at the moment a queued auto-merge fires is untested. So the Director disables auto-merge before any push to a queued PR.
 - **Unreadable required checks:** `ci-wait.js` reports `unknown` (exit 2) when the token can't read the required checks. Classic branch protection needs admin rights, so a token without them gets a 403 there. The Director then asks you, and doesn't merge on a guess.
+- **CI waits and merges (0.6.0):** `scripts/ci-wait.js` waits for CI on GitHub and GitLab with its own deadline, and reports `unknown` rather than guessing when required checks can't be read. The Director gates each merge on CI in one call, or queues auto-merge when CI is pending and the setup allows it. `reconcile-logs.js --merges` checks queued merges at checkpoints.
+- **Required check names and auto-merge setup (0.6.0):** the setup docs cover required check names (they exist only after CI has run once) and the auto-merge settings. The Director never changes repository settings or rulesets; it asks you.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.
-
-## Changelog
-
-- **0.6.0 (ci-wait):** CI waiting. `scripts/ci-wait.js` waits for CI on GitHub and GitLab with its own deadline, and reports `unknown` rather than guessing when required checks can't be read. The Director gates each merge on CI in one call, or queues auto-merge when CI is pending. `reconcile-logs.js --merges` checks queued merges. Setup docs now cover required check names (added after the first CI run) and the auto-merge settings.
 
 ## License
 

@@ -34,7 +34,7 @@ Required checks and auto-merge are not set up here. They come after the first CI
 Run these in a milestone, once CI has run at least once on one of its PRs. The Director never changes repository settings, rulesets or branch protection; it asks me.
 
 1. **Required check names.** Required status checks on the `milestone/*` ruleset need real check names, and a name exists only after CI has run once. Turning the rule on with an empty list enforces nothing. Read the names with `node "<plugin root>/scripts/ci-wait.js" --names <n>` (or `gh pr checks <n> --json name` on GitHub; on GitLab, the head pipeline's job names). The helper prints `checks` (what the head runs) and, on GitHub, `required` (what the base requires): `[]` means nothing is required, and `null` means the list couldn't be read. On GitLab `required` is always `null`.
-2. **Ask me** to add those names to the `milestone/*` ruleset as required status checks, with the bypass list still empty. Show the rule with a placeholder name, never an empty list:
+2. **Ask me** to add those names as required status checks to the `milestone/*` ruleset and to `protect-main`, with the bypass list still empty. Show the rule with a placeholder name, never an empty list:
 
    ```json
    { "type": "required_status_checks", "parameters": {
