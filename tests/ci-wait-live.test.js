@@ -294,7 +294,13 @@ test('ci-wait-live breakdown: milestone-PR, other-PR and total CI turns are repo
   // boundaries: no turns, no milestone PR known
   nodeAssert.deepStrictEqual(L.ciBreakdown([], { taskPrs: [], milestonePrs: [] }).total, { turns: 0, contextTokens: 0, foregroundWatch: 0 });
   eq(L.ciBreakdown(turns, { taskPrs: ['4'], milestonePrs: [] }).milestonePr.turns, 0, 'without a known milestone PR its turns land in other');
-  eq(L.ciBreakdown(turns, { taskPrs: ['4'], milestonePrs: [] }).otherPr.turns, 3, 'PR 9 (x2, not with a task PR) and 77 are "other"');
+  eq(L.ciBreakdown(turns, { taskPrs: ['4'], milestonePrs: [] }).otherPr.turns, 4, 'PR 9 (x3, one next to task PR 4) and 77 are "other"');
+  // a turn naming a task PR and another PR counts under task and other
+  const mixed = L.ciBreakdown([{ ci: true, tokens: 7, prs: ['4', '77'], tools: [] }, { ci: true, tokens: 5, prs: ['9', '77'], tools: [] }, { ci: true, tokens: 3, prs: ['4', '9'], tools: [] }], { taskPrs: ['4'], milestonePrs: ['9'] });
+  nodeAssert.deepStrictEqual(mixed.taskPrs, { turns: 2, contextTokens: 10, foregroundWatch: 0 });
+  nodeAssert.deepStrictEqual(mixed.milestonePr, { turns: 2, contextTokens: 8, foregroundWatch: 0 });
+  nodeAssert.deepStrictEqual(mixed.otherPr, { turns: 2, contextTokens: 12, foregroundWatch: 0 }, '4+77 and 9+77 count as other; 4+9 does not');
+  eq(mixed.total.turns, 3, 'total still counts each turn once');
   // evaluateTargets: three INFO rows appended, the four real targets unchanged, one row each in the table
   const summary = { watch: { foreground: 0, background: 0 }, ci: { byPr: { 4: { turns: 1 } }, unattributed: { turns: 0, contextTokens: 0 } } };
   const quiet = { total: 0, byCi: {}, pending: [] };
@@ -665,16 +671,61 @@ test('ci-wait-live cleanup-run: a recorded pid that is still alive is refused un
     try {
       assert(child.pid && L.pidAlive(child.pid), 'precondition: the recorded pid is alive');
       fs.writeFileSync(file, JSON.stringify(Object.assign({}, k.rec, { pid: child.pid })));
+      const mut0 = k.h.calls().filter(isMutation).length;      // the seed run's own PR close
+      assert(k.h.branches().some((b) => b.endsWith('-seed')), 'precondition: the seed branch is on the remote');
       const dry = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--dry-run']);
       eq(dry.status, 1, 'a dry run reports the refusal too');
       const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
       eq(r.status, 1, 'exit 1 while the pid is alive');
       assert(/still alive/.test(r.stdout) && /--force/.test(r.stdout), r.stdout);
+      eq(k.h.calls().filter(isMutation).length, mut0, 'no pr close, issue close or branch DELETE call was made');
+      assert(k.h.branches().some((b) => b.endsWith('-seed')), 'the remote branch is still there');
       assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')) && fs.existsSync(file), 'nothing deleted, run file kept');
       const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
       eq(f.status, 0, `--force deletes (${f.stdout})`);
+      assert(!k.h.branches().some((b) => b.endsWith('-seed')), '--force also runs the remote cleanup');
       assert(!fs.existsSync(k.rec.tmp), 'deleted with --force');
     } finally { child.kill(); }
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: a run file with a missing or invalid pid needs --force, and touches nothing remote', () => {
+  eq(L.pidState(undefined), 'unknown', 'missing');
+  eq(L.pidState(null), 'unknown', 'null');
+  eq(L.pidState('abc'), 'unknown', 'not a number');
+  eq(L.pidState(-4), 'unknown', 'negative');
+  eq(L.pidState(1.5), 'unknown', 'not an integer');
+  eq(L.pidState(process.pid), 'alive', 'alive');
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    const mut0 = k.h.calls().filter(isMutation).length;
+    for (const bad of [undefined, 'abc', 0]) {
+      const rec = Object.assign({}, k.rec); if (bad === undefined) delete rec.pid; else rec.pid = bad;
+      fs.writeFileSync(file, JSON.stringify(rec));
+      assert(L.pidState(rec.pid) === 'unknown', 'precondition: the pid reads as unknown');
+      const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+      eq(r.status, 1, `pid ${JSON.stringify(bad)}: exit 1`);
+      assert(/no valid pid/.test(r.stdout) && /--force/.test(r.stdout), r.stdout);
+      eq(k.h.calls().filter(isMutation).length, mut0, 'no remote mutation');
+      assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'nothing deleted');
+    }
+    const dry = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--dry-run']);
+    eq(dry.status, 1, 'a dry run reports it too');
+    const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
+    eq(f.status, 0, `--force proceeds (${f.stdout})`);
+    assert(!fs.existsSync(k.rec.tmp) && !k.h.branches().some((b) => b.endsWith('-seed')), 'temp folder and remote branch cleaned with --force');
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run: with no run file the remote cleanup still runs', () => {
+  const k = keptRun();
+  try {
+    fs.rmSync(path.join(k.h.outDir, k.runFile));
+    assert(k.h.branches().some((b) => b.endsWith('-seed')), 'precondition: the seed branch exists');
+    const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(r.status, 0, `exit 0 (${r.stdout})`);
+    assert(/no run file/.test(r.stdout) && !k.h.branches().some((b) => b.endsWith('-seed')), 'branch deleted, temp folder left to the user');
   } finally { rm(k.h.dir); }
 });
 

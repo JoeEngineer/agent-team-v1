@@ -268,7 +268,7 @@ function evaluateTargets(input) {
 // turns: the transcript turns ({ tokens, ci, prs: [..], tools: [{ watch, background }] }).
 // A CI turn is counted under every group it belongs to: "task" when it names a task PR,
 // "milestone" when it names the milestone PR (even together with a task PR, so batching the two
-// cannot hide milestone polling), "other" when it names PRs but neither of those, "unattributed"
+// cannot hide milestone polling), "other" when it names any PR that is neither a task PR nor the milestone PR (even next to one that is), "unattributed"
 // when it names no PR. total is every CI turn once. No pass or fail.
 function ciBreakdown(turns, { taskPrs, milestonePrs } = {}) {
   const task = new Set((taskPrs || []).map(String));
@@ -288,7 +288,7 @@ function ciBreakdown(turns, { taskPrs, milestonePrs } = {}) {
     const isMs = prs.some((p) => ms.has(p));
     if (isTask) add(g.taskPrs, t);
     if (isMs) add(g.milestonePr, t);
-    if (!isTask && !isMs) add(g.otherPr, t);
+    if (prs.some((p) => !task.has(p) && !ms.has(p))) add(g.otherPr, t);
   }
   g.milestonePrNumbers = [...ms];
   return g;
@@ -404,6 +404,12 @@ function deletableTemp(tmp, base, entries, expectedBase) {
   return (entries || []).every((e) => e === 'h' || e === 'p');
 }
 // True when a process with this pid exists (signal 0 only checks; EPERM means it exists).
+// 'alive', 'dead' or 'unknown' (a missing or invalid pid: the guard must not fail open on it).
+function pidState(pid) {
+  const n = Number(pid);
+  if (pid == null || pid === '' || !Number.isInteger(n) || n <= 0) return 'unknown';
+  return pidAlive(n) ? 'alive' : 'dead';
+}
 function pidAlive(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return false;
@@ -412,7 +418,7 @@ function pidAlive(pid) {
 const runFileName = (run) => `ci-wait-${run}.run.json`;
 
 module.exports = {
-  CLOCK_TOLERANCE_S, deletableTemp, expectedTempBase, pidAlive, runFileName, ciBreakdown, breakdownRows,
+  CLOCK_TOLERANCE_S, deletableTemp, expectedTempBase, pidAlive, pidState, runFileName, ciBreakdown, breakdownRows,
   CHECK_NAME, TOOLS, TIMEOUT_MIN, USAGE, RUN_RE,
   parseArgs, runPrefix, ownsBranch, selectCleanup,
   evaluatePreflight, requiredChecksIn, rulesetSteps,

@@ -153,6 +153,17 @@ const outDirOf = (opts) => (opts.outDir ? path.resolve(opts.outDir) : path.join(
 // --cleanup-run: also delete the run's temp folder (it may hold a copied Codex auth.json) when the
 // run file written at its start says where it was. Refuses anything that is not <base>/<digits>
 // holding only h/ and p/.
+// Read before any remote action: a run whose recorded pid is alive (or unknown, so it cannot be told)
+// may still be in flight, so --cleanup-run refuses everything unless --force. null when fine or no run file.
+function liveRunRefusal(opts, runPrefix) {
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(path.join(outDirOf(opts), L.runFileName(runPrefix)), 'utf8')); } catch (e) { return null; }
+  if (!rec || rec.run !== runPrefix || opts.force) return null;
+  const st = L.pidState(rec.pid);
+  if (st === 'alive') return `process ${rec.pid} (recorded for ${runPrefix}) is still alive, so the run may still be in flight`;
+  if (st === 'unknown') return `the run file for ${runPrefix} has no valid pid (${JSON.stringify(rec.pid)}), so it cannot be told whether the run is still in flight`;
+  return null;
+}
 function cleanupRecordedTemp(opts, runPrefix, { dryRun } = {}) {
   const file = path.join(outDirOf(opts), L.runFileName(runPrefix));
   let rec = null;
@@ -165,7 +176,6 @@ function cleanupRecordedTemp(opts, runPrefix, { dryRun } = {}) {
   if (!L.deletableTemp(rec.tmp, rec.base, entries, L.expectedTempBase())) { log(`refusing to delete ${rec.tmp}: it is not a harness temp folder (<${L.expectedTempBase()}>/<pid> holding only h and p; the run file must record that base)`); return { ok: false, found: true, refused: true }; }
   const bad = linkInTemp(path.resolve(rec.tmp));
   if (bad) { log(`refusing to delete ${rec.tmp}: ${bad} is a link or not a directory`); return { ok: false, found: true, refused: true }; }
-  if (L.pidAlive(rec.pid) && !opts.force) { log(`refusing to delete ${rec.tmp}: process ${rec.pid} (recorded for this run) is still alive, so the run may still be in flight. Stop it first, or pass --force if that pid is not the harness any more`); return { ok: false, found: true, refused: true, alive: true }; }
   if (dryRun) { log(`(dry run) would delete the temp folder ${rec.tmp}`); return { ok: true, found: true, dryRun: true }; }
   try { fs.rmSync(rec.tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch (e) { log(`could not delete ${rec.tmp}: ${e.message}`); return { ok: false, found: true }; }
   try { fs.rmdirSync(rec.base); } catch (e) { /* not empty or gone */ }
@@ -375,6 +385,8 @@ async function main() {
   if (opts.cleanupRun) {
     const head = gh(['api', `repos/${opts.repo}`, '--jq', '.default_branch']);
     if (ok(head) && head.stdout.trim()) S.defaultBranch = head.stdout.trim();
+    const live = liveRunRefusal(opts, opts.cleanupRun);
+    if (live) { log(`refusing to clean up ${opts.cleanupRun}: ${live}. Nothing was closed or deleted. Stop the run first, or pass --force if that pid is not the harness any more`); return 1; }
     const r = cleanupRemote(opts, opts.cleanupRun, { dryRun: opts.dryRun });
     const t = cleanupRecordedTemp(opts, opts.cleanupRun, { dryRun: opts.dryRun });
     return r.ok && t.ok ? 0 : 1;
