@@ -14,10 +14,10 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-0 | Breakdown | architect | large (opus) / high | 1 | done | #81 | |
 | CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | merged | #82 | #90 |
 | CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | merged | #83 | #89 |
-| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 2 | fold-in | #84 | #94 |
-| CW-4 | Reviewer and Director prompts | implementer | medium (sonnet) / high | 2 | in review | #85 | #91 |
-| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | in review | #86 | #93 |
-| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | fold-in | #87 | #92 |
+| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 2 | merged | #84 | #94 |
+| CW-4 | Reviewer and Director prompts | implementer | large (opus) / high | 3 | changes requested | #85 | #91 |
+| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
+| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | in review | #87 | #92 |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | | planned | #88 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
@@ -56,3 +56,4 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - Guard over-block: a read-only `gh api graphql` query that names `branchProtectionRules` is refused as "changing branch protection".
 - CW-2 (0015) refuses harmless glued redirections in git/gh/glab commands (`git diff>x`); the message says to add a space.
 - Merge lines record no repo, so a PR merged with `-R other/repo` is reconciled against the current repo (CW-3).
+- CW-3 review minors: tests/ci-wait.test.js ~842 recovery control still uses `--call-timeout 1` (same slow-runner flake class); `mergeGates` logs `gh-checks` when both gates precede a merge (cosmetic).
