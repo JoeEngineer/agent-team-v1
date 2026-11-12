@@ -20,7 +20,7 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
 | CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | merged | #95 | #96 |
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | approved; fold-in after the CW-9 re-run | #88 | #97 |
-| CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 1 | in review | #98 | #99 |
+| CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | fold-in | #98 | #99 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
