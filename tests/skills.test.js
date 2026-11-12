@@ -71,6 +71,35 @@ test('Codex guidance distinguishes same-settings followups from changed-settings
   assert(codex.includes('`--dry-run` previews reconciliation and does not mutate'));
 });
 
+test('Director CI guidance: one gated merge call, disable auto-merge before pushes, milestone-close CI rule', () => {
+  const dir = path.join(skillsDir, 'director');
+  const merging = fs.readFileSync(path.join(dir, 'references', 'merging.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(dir, 'SKILL.md'), 'utf8');
+  assert(merging.includes('Merge in ONE call holding exactly three things: the CI gate, the merge and the comment'));
+  assert(merging.includes('ci-wait.js" <n> --once --sha <head_sha> && gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha> && gh pr comment <n>'));
+  assert(merging.includes('if ($LASTEXITCODE -eq 0)'));
+  assert(merging.includes('In sh never join with a bare `;`'));
+  assert(!merging.includes('in a Bash call of its own'), 'stale call-of-its-own rule');
+  assert(merging.includes('disable auto-merge first'));
+  assert(merging.includes('--disable-auto'));
+  assert(merging.includes('reconcile-logs.js" --merges'));
+  assert(skill.includes('Before any push to a queued PR, disable auto-merge first'));
+  assert(skill.includes('report "complete" only on green'));
+  assert(merging.includes('report "complete" only on green'));
+  assert(skill.includes('ask the user; don\'t merge'));
+});
+
+test('--watch appears in no Director file; the reviewer has it only as a fallback', () => {
+  const files = walk(path.join(skillsDir, 'director'));
+  assert(files.length > 0, 'no Director files scanned');
+  for (const f of files) assert(!fs.readFileSync(f, 'utf8').includes('--watch'), `--watch in ${f}`);
+  const reviewer = fs.readFileSync(path.join(ROOT, 'agents', 'reviewer.md'), 'utf8');
+  assert(reviewer.includes('ci-wait.js" <n> --sha <head_sha>'));
+  assert(reviewer.includes('"head_sha"'));
+  assert(reviewer.includes('timeout: 600000'));
+  assert(reviewer.includes('gh pr checks <n> --watch --fail-fast --interval 30'));
+});
+
 test('Codex mapping and Coach guidance separate requested from observed settings', () => {
   const mapping = fs.readFileSync(path.join(ROOT, 'docs', 'codex-mapping.md'), 'utf8');
   const coach = fs.readFileSync(path.join(ROOT, 'agents', 'coach.md'), 'utf8');
