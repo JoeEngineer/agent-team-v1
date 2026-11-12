@@ -2,7 +2,7 @@
 // PreToolUse guard for Bash/PowerShell commands. Blocks actions the Director is
 // not authorized to take on its own:
 //   - merging a PR whose base is a protected branch (default: main, master)
-//   - `gh pr merge --admin`
+//   - `gh pr merge --admin` (also `--admin=<any value>`)
 //   - force-pushes, pushes to protected branches, deleting protected/milestone branches
 //     (also `--mirror`, `--prune`, and `--all` while a protected branch exists locally)
 //   - changing branch protection / rulesets; deleting, archiving or editing the repo
@@ -129,12 +129,19 @@ function checkGitAdd(args, cwd) {
   }
 }
 
+// gh parses flags with pflag, so a boolean flag also takes a value glued on
+// with `=` (`--admin=true`, `--admin=1`). Any `=` form counts as the flag, even
+// `=false`: the guard refuses rather than parse the value.
+const isAdminFlag = (a) => /^--admin(?:=|$)/.test(a);
+
 function checkGhPrMerge(args, cwd) {
-  if (args.includes('--admin')) block('`gh pr merge --admin` bypasses branch protection');
+  if (args.some(isAdminFlag)) block('`gh pr merge --admin` bypasses branch protection');
   const { target, repo } = lib.prMergeTarget(args);
   requireUnprotectedBase('github', target, repo, cwd);
 }
 
+// `glab mr merge` has no flag that bypasses protection (no --admin), so only
+// the target branch is checked.
 function checkGlabMrMerge(args, cwd) {
   const { target, repo } = lib.mrMergeTarget(args);
   requireUnprotectedBase('gitlab', target, repo, cwd);

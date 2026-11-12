@@ -165,6 +165,11 @@ const PS_GH = 'node "C:\\p\\scripts\\ci-wait.js" 5 --once --sha abc; if ($LASTEX
 const SH_GL = 'node "/p/scripts/ci-wait.js" 5 --once --sha abc && glab mr merge 5 --squash --remove-source-branch --yes --sha abc && glab mr note 5 -m "Merged by Director"';
 const PS_GL = 'node "C:\\p\\scripts\\ci-wait.js" 5 --once --sha abc; if ($LASTEXITCODE -eq 0) { glab mr merge 5 --squash --remove-source-branch --yes --sha abc; if ($LASTEXITCODE -eq 0) { glab mr note 5 -m "Merged by Director" } }';
 const SH_GH_AUTO = 'node "/p/scripts/ci-wait.js" 5 --once --sha abc && gh pr merge 5 --auto --squash --delete-branch --match-head-commit abc && gh pr comment 5 -b "Queued by Director"';
+// The queue call of decision 0018: a live --queue-check, then the --auto queue.
+const SH_GH_QUEUE = 'node "/p/scripts/ci-wait.js" 5 --queue-check --sha abc && gh pr merge 5 --auto --squash --delete-branch --match-head-commit abc';
+const PS_GH_QUEUE = 'node "C:\\p\\scripts\\ci-wait.js" 5 --queue-check --sha abc; if ($LASTEXITCODE -eq 0) { gh pr merge 5 --auto --squash --delete-branch --match-head-commit abc }';
+const SH_GL_QUEUE = 'node "/p/scripts/ci-wait.js" 5 --queue-check --sha abc && glab mr merge 5 --auto-merge --squash --remove-source-branch --yes --sha abc';
+const PS_GL_QUEUE = 'node "C:\\p\\scripts\\ci-wait.js" 5 --queue-check --sha abc; if ($LASTEXITCODE -eq 0) { glab mr merge 5 --auto-merge --squash --remove-source-branch --yes --sha abc }';
 
 const chains = [
   ['sh gh', SH_GH, 'github'],
@@ -172,6 +177,10 @@ const chains = [
   ['sh glab', SH_GL, 'gitlab'],
   ['PowerShell glab', PS_GL, 'gitlab'],
   ['sh gh with --auto', SH_GH_AUTO, 'github'],
+  ['sh gh --queue-check', SH_GH_QUEUE, 'github'],
+  ['PowerShell gh --queue-check', PS_GH_QUEUE, 'github'],
+  ['sh glab --queue-check', SH_GL_QUEUE, 'gitlab'],
+  ['PowerShell glab --queue-check', PS_GL_QUEUE, 'gitlab'],
 ];
 for (const [name, cmd, forgeName] of chains) {
   test(`findMerges: ${name} chain has exactly one merge, target 5`, () => {
@@ -252,6 +261,49 @@ test('guard: --admin is denied on any base, before any lookup', () => {
   eq(r.lookups.length, 0, 'no lookup, the flag alone decides');
   const chained = guard('node ci-wait.js 5 --once && gh pr merge 5 --admin --squash', fakeGh(pr(5, 'milestone/auth')));
   assert(chained.denied && chained.reason.includes('--admin'), `chained --admin: ${chained.reason}`);
+});
+
+// Final review C1: gh reads boolean flags with pflag, so `--admin=true` and
+// `--admin=1` are --admin. Before the fix only the bare word was matched.
+const ADMIN_FORMS = ['--admin=true', '--admin=1', '--admin=TRUE', '--admin=false', '--admin='];
+for (const form of ADMIN_FORMS) {
+  for (const base of ['milestone/auth', 'main']) {
+    test(`guard: gh pr merge 5 ${form} is denied into ${base}, before any lookup`, () => {
+      const r = guard(`gh pr merge 5 ${form} --squash`, fakeGh(pr(5, base)));
+      assert(r.denied, `should deny ${form} into ${base}`);
+      assert(r.reason.includes('`gh pr merge --admin` bypasses branch protection'), `reason: ${r.reason}`);
+      eq(r.lookups.length, 0, 'no lookup, the flag alone decides');
+    });
+  }
+}
+
+test('guard: --admin=true with --auto, and in sh and PowerShell gate chains, is denied into a milestone base and main', () => {
+  const cmds = [
+    'gh pr merge 5 --auto --admin=true --squash',
+    'node "/p/scripts/ci-wait.js" 5 --once --sha abc && gh pr merge 5 --admin=true --squash --match-head-commit abc',
+    'node "/p/scripts/ci-wait.js" 5 --queue-check --sha abc && gh pr merge 5 --auto --admin=1 --squash --match-head-commit abc',
+    'node "C:\\p\\scripts\\ci-wait.js" 5 --once --sha abc; if ($LASTEXITCODE -eq 0) { gh pr merge 5 --admin=true --squash --match-head-commit abc }',
+    'node "C:\\p\\scripts\\ci-wait.js" 5 --queue-check --sha abc; if ($LASTEXITCODE -eq 0) { gh pr merge 5 --auto --admin=true --squash --match-head-commit abc }',
+  ];
+  for (const cmd of cmds) {
+    for (const base of ['milestone/auth', 'main']) {
+      const r = guard(cmd, fakeGh(pr(5, base)));
+      assert(r.denied && r.reason.includes('--admin'), `${base}: ${cmd}: denied=${r.denied} ${r.reason}`);
+      eq(r.lookups.length, 0, `no lookup: ${cmd}`);
+    }
+  }
+  // Control: the same chains without --admin are allowed into the milestone (so the
+  // denial above is the flag's, not the chain's).
+  const plain = guard(cmds[2].replace(' --admin=1', ''), fakeGh(pr(5, 'milestone/auth')));
+  eq(plain.lookups.join('|'), GH_VIEW(5), 'control: asked gh about PR 5');
+  assert(!plain.denied, `control allowed: ${plain.reason}`);
+});
+
+test('guard: a flag that only starts with --admin is not --admin (no false block)', () => {
+  const r = guard('gh pr merge 5 --squash --administrator-note x', fakeGh(pr(5, 'milestone/auth')));
+  // gh would reject the unknown flag; the guard only checks the base.
+  eq(r.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5');
+  assert(!r.denied, `should allow: ${r.reason}`);
 });
 
 test('guard: GraphQL auto-merge mutations are still denied', () => {
@@ -702,4 +754,61 @@ test('merge log: a --names call alone logs no merge', () => {
   const p = tmpProject();
   logMerge(p, 'node "/p/scripts/ci-wait.js" --names 36', fakeGh('{"number":36,"state":"OPEN","autoMergeRequest":null}'));
   eq(readLog(p, 'merges.jsonl').length, 0, 'no merge line');
+});
+
+console.log('queue-check: the auto-merge queue call (decision 0018)');
+
+test('merge log: each --queue-check queue chain (sh, PowerShell; gh, glab) logs one auto-merge-queued line with match_head and gate ci-wait-queue', () => {
+  const cases = [[SH_GH_QUEUE, 'github'], [PS_GH_QUEUE, 'github'], [SH_GL_QUEUE, 'gitlab'], [PS_GL_QUEUE, 'gitlab']];
+  for (const [cmd, which] of cases) {
+    const p = tmpProject();
+    const file = path.join(p, 'args.jsonl');
+    const env = which === 'gitlab'
+      ? fakeGlab(JSON.stringify({ iid: 5, state: 'opened', target_branch: 'milestone/auth', merge_when_pipeline_succeeds: true }), 0, { FAKE_GH_ARGS: file })
+      : fakeGh(pr(5, 'milestone/auth', { autoMergeRequest: { mergeMethod: 'SQUASH' } }), 0, { FAKE_GH_ARGS: file });
+    const r = logMerge(p, cmd, env);
+    eq(calls(file).map((a) => a.join(' ')).join('|'), which === 'gitlab' ? GL_VIEW(5) : GH_VIEW(5), `${cmd}: asked about 5, once`);
+    const lines = readLog(p, 'merges.jsonl');
+    eq(lines.length, 1, `${cmd}: one line`);
+    eq(lines[0].outcome, 'auto-merge-queued', 'outcome');
+    eq(lines[0].auto, true, 'auto');
+    eq(lines[0].match_head, 'abc', 'match_head');
+    eq(lines[0].gate, 'ci-wait-queue', 'gate');
+    eq(lines[0].gate_ignored, undefined, 'not ignored on a queue call');
+    eq(lines[0].pr, '5', 'pr');
+    eq(r.stdout, '', 'no warning for the queue call');
+  }
+});
+
+test('merge log: --queue-check is not a green gate for a direct merge: no gate, gate_ignored, and a warning to the Director', () => {
+  const p = tmpProject();
+  const merged = fakeGh('{"number":5,"state":"MERGED","autoMergeRequest":null,"baseRefName":"milestone/auth"}');
+  const r = logMerge(p, 'node "/p/scripts/ci-wait.js" 5 --queue-check --sha abc && gh pr merge 5 --squash --match-head-commit abc', merged);
+  const [line] = readLog(p, 'merges.jsonl');
+  eq(line.outcome, 'merged', 'precondition: the direct merge ran and merged');
+  eq(line.gate, undefined, 'no gate');
+  eq(line.gate_ignored, 'ci-wait-queue', 'gate_ignored');
+  const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  assert(/merged directly after `ci-wait\.js --queue-check`.*not a green gate/.test(ctx), ctx);
+  // Control: the same direct merge behind --once keeps its ci-wait gate and says nothing.
+  const p2 = tmpProject();
+  const r2 = logMerge(p2, 'node "/p/scripts/ci-wait.js" 5 --once --sha abc && gh pr merge 5 --squash --match-head-commit abc', merged);
+  eq(readLog(p2, 'merges.jsonl')[0].gate, 'ci-wait', 'control: --once is a gate');
+  eq(r2.stdout, '', 'control: no message');
+});
+
+test('merge log: pflag forms --auto=true / --auto=false and glab --auto-merge=f are read as gh and glab read them', () => {
+  const p = tmpProject();
+  const queuedGh = fakeGh(pr(5, 'milestone/auth', { autoMergeRequest: { mergeMethod: 'SQUASH' } }));
+  logMerge(p, 'gh pr merge 5 --auto=true --squash --match-head-commit abc', queuedGh);
+  logMerge(p, 'gh pr merge 5 --auto=false --squash --match-head-commit abc', fakeGh(pr(5, 'milestone/auth', { state: 'MERGED' })));
+  logMerge(p, 'gh pr merge 5 --auto --auto=0 --squash', fakeGh(pr(5, 'milestone/auth', { state: 'MERGED' })));
+  logMerge(p, 'glab mr merge 6 --auto-merge=f --sha abc', fakeGlab(JSON.stringify({ iid: 6, state: 'merged', target_branch: 'milestone/auth' })));
+  logMerge(p, 'glab mr merge 6 --auto-merge=TRUE --sha abc', fakeGlab(JSON.stringify({ iid: 6, state: 'opened', target_branch: 'milestone/auth', merge_when_pipeline_succeeds: true })));
+  const [a, b, c, d, e] = readLog(p, 'merges.jsonl');
+  eq(a.auto, true, '--auto=true is auto'); eq(a.match_head, 'abc', '--auto=true pins match_head');
+  eq(b.auto, undefined, '--auto=false is not auto'); eq(b.match_head, undefined, 'no match_head');
+  eq(c.auto, undefined, 'the last --auto wins');
+  eq(d.auto, undefined, 'glab --auto-merge=f is not auto');
+  eq(e.auto, true, 'glab --auto-merge=TRUE is auto'); eq(e.match_head, 'abc', 'glab match_head');
 });

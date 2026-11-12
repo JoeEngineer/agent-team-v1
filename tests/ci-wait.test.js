@@ -379,7 +379,7 @@ test('required checks: the lookup targets the base branch, url-encoded, with pla
   const r = exec(['7'], gh(pr([ok('b')], { base: 'milestone/ci-wait' })));
   const api = r.pb.calls.filter((c) => c.args[0] === 'api').map((c) => c.args);
   eq(JSON.stringify(api), JSON.stringify([
-    ['api', 'repos/{owner}/{repo}/rules/branches/milestone%2Fci-wait'],
+    ['api', 'repos/{owner}/{repo}/rules/branches/milestone%2Fci-wait?per_page=100'],
     ['api', 'repos/{owner}/{repo}/branches/milestone%2Fci-wait/protection/required_status_checks'],
   ]), 'api calls');
   eq(JSON.stringify(r.pb.calls[0].args), JSON.stringify(['pr', 'view', '7', '--json', 'headRefOid,baseRefName,state,statusCheckRollup']), 'pr view call');
@@ -530,15 +530,28 @@ test('--once --allow-none: none passes only with a matching --sha (the caller al
   assert(!/needs a matching --sha/.test(wait.rec.note), wait.rec.note);
 });
 
-test('--once: exit-code order is 2 > 4 > 1 > 8 > 3 > 0', () => {
-  eq(ciWait.worst([0, 3, 8, 1, 4, 2]), 2, 'unknown first');
-  eq(ciWait.worst([0, 3, 8, 1, 4]), 4, 'then head moved');
-  eq(ciWait.worst([0, 3, 8, 1]), 1, 'then red');
+test('--once: exit-code order is 2 > 4 > 1 > 5 > 8 > 3 > 0', () => {
+  eq(ciWait.worst([0, 3, 8, 5, 1, 4, 2]), 2, 'unknown first');
+  eq(ciWait.worst([0, 3, 8, 5, 1, 4]), 4, 'then head moved');
+  eq(ciWait.worst([0, 3, 8, 5, 1]), 1, 'then red');
+  eq(ciWait.worst([0, 3, 8, 5]), 5, 'then not queueable');
   eq(ciWait.worst([0, 3, 8]), 8, 'then pending');
   eq(ciWait.worst([0, 3]), 3, 'then none');
   eq(ciWait.worst([0]), 0, 'green');
-  eq(ciWait.worst([]), 0, 'nothing');
   eq(ciWait.worst([3, 2, 3]), 2, 'order does not matter');
+});
+
+// Final review minor (e): worst() returned 0 (green) for a code it didn't know.
+test('worst / exitOf: an unmapped code, an unmapped ci value or no code at all is 2 (unknown), never 0', () => {
+  eq(ciWait.worst([]), 2, 'no code: unknown');
+  eq(ciWait.worst([undefined]), 2, 'undefined code (an unmapped ci) is unknown');
+  eq(ciWait.worst([7]), 2, 'a code outside the list');
+  eq(ciWait.worst([0, 7]), 2, 'one unmapped code among greens');
+  eq(ciWait.exitOf({ ci: 'bogus', sha_matches: null }), 2, 'exitOf: unmapped ci');
+  eq(ciWait.exitOf({ ci: 'toString', sha_matches: null }), 2, 'exitOf: an Object.prototype name is not a ci value');
+  eq(ciWait.exitOf({ ci: 'green', sha_matches: null }), 0, 'control: green is still 0');
+  // The chain main() uses: an unmapped ci gives exitOf 2, and worst keeps it.
+  eq(ciWait.worst([ciWait.exitOf({ ci: 'bogus', sha_matches: null })]), 2, 'exitOf -> worst');
 });
 
 test('--once: a request that errors is unknown for that request only; the rest are still reported', () => {
@@ -633,7 +646,7 @@ test('--names (GitHub): head checks, required checks, auto_merge_allowed; read-o
   eq(r.rec.base, 'main', 'base');
   eq(JSON.stringify(r.pb.calls.map((c) => c.args)), JSON.stringify([
     ['pr', 'view', '7', '--json', 'headRefOid,baseRefName,state,statusCheckRollup'],
-    ['api', 'repos/{owner}/{repo}/rules/branches/main'],
+    ['api', 'repos/{owner}/{repo}/rules/branches/main?per_page=100'],
     ['api', 'repos/{owner}/{repo}/branches/main/protection/required_status_checks'],
     ['api', 'repos/{owner}/{repo}', '--jq', '.allow_auto_merge'],
   ]), 'exact calls');
@@ -684,6 +697,170 @@ test('--names (GitLab): job names of the head pipeline and the merge setting', (
   eq(JSON.stringify(nopipe.rec.checks), '[]', 'no jobs');
   assert(/no pipeline/.test(nopipe.rec.note), nopipe.rec.note);
   eq(nopipe.rec.only_allow_merge_if_pipeline_succeeds, null, 'setting not in the output');
+});
+
+// ---- --queue-check (decision 0018, final review M1) ------------------------
+// gh 2.103.2's `--auto` merges at once when the PR is mergeable and nothing is
+// required, so the queue call is gated on a live read of what the forge will
+// make the auto-merge wait for.
+console.log('ci-wait: --queue-check');
+
+const Q = (n = '7', sha = SHA) => [n, '--queue-check', '--sha', sha];
+const QUEUE_KEYS = [...REC_KEYS, 'queueable', 'queue_reason'];
+const keysOf = (rec) => JSON.stringify(Object.keys(rec));
+
+test('queue-check (GitHub): required checks present on the head and still pending -> exit 0, queueable, the --once line plus queueable and queue_reason', () => {
+  const r = exec(Q(), gh(pr([running('build'), ok('lint')]), { rules: rules('build') }));
+  eq(r.rec.ci, 'pending', 'precondition: CI is still pending');
+  eq(r.code, 0, 'exit');
+  eq(r.raw.length, 1, 'one line');
+  eq(keysOf(r.rec), JSON.stringify(QUEUE_KEYS), 'fields: the --once fields, then queueable, queue_reason');
+  eq(r.rec.queueable, true, 'queueable');
+  eq(r.rec.sha_matches, true, 'sha_matches');
+  eq(JSON.stringify(r.rec.required), '["build"]', 'required');
+  assert(/will wait for the required checks \(build\); CI is pending/.test(r.rec.queue_reason), r.rec.queue_reason);
+  eq(JSON.stringify(r.pb.calls.map((c) => c.key)), '["view:7","rules","protection"]', 'one view and the required lookup; no wait, no sleep');
+  eq(r.sleeps.length, 0, 'no sleep');
+  // Green required checks are queueable too (gh then merges at once, on green).
+  eq(exec(Q(), gh(pr([ok('build')]), { rules: rules('build') })).code, 0, 'green required -> 0');
+});
+
+test('queue-check (GitHub): nothing required -> exit 5 not queueable, with the reason; green or pending alike', () => {
+  for (const checks of [[ok('build')], [running('build')], []]) {
+    const r = exec(Q(), gh(pr(checks)));
+    eq(JSON.stringify(r.pb.calls.map((c) => c.key)), '["view:7","rules","protection"]', 'precondition: both required sources were read');
+    eq(r.code, 5, `exit for ${JSON.stringify(checks.map((c) => c.status))}`);
+    eq(r.rec.queueable, false, 'queueable');
+    assert(/no required checks on 'main', so gh pr merge --auto may merge at once without waiting for CI/.test(r.rec.queue_reason), r.rec.queue_reason);
+    assert(/not queueable: no required checks/.test(r.rec.note), r.rec.note);
+  }
+});
+
+test('queue-check (GitHub): a required check the head does not run -> exit 5, naming it; the others present do not help', () => {
+  const r = exec(Q(), gh(pr([running('build'), ok('lint')]), { rules: rules('build', 'deploy', 'e2e') }));
+  eq(JSON.stringify(r.rec.required), '["build","deploy","e2e"]', 'precondition: the required set was read');
+  eq(r.code, 5, 'exit');
+  eq(r.rec.queueable, false, 'queueable');
+  assert(/required checks deploy, e2e not run by the head/.test(r.rec.queue_reason), r.rec.queue_reason);
+  const one = exec(Q(), gh(pr([ok('lint')]), { rules: rules('build') }));
+  assert(/required check build not run by the head/.test(one.rec.queue_reason), one.rec.queue_reason);
+  eq(one.code, 5, 'single missing check');
+});
+
+test('queue-check (GitHub): red -> exit 1, before "not queueable"; a failing optional check alone is not red', () => {
+  const red = exec(Q(), gh(pr([bad('build'), running('lint')]), { rules: rules('build') }));
+  eq(red.code, 1, 'required check failed');
+  eq(red.rec.queueable, false, 'queueable');
+  assert(/CI is red \(build\)/.test(red.rec.queue_reason), red.rec.queue_reason);
+  const redNoneRequired = exec(Q(), gh(pr([bad('build')])));
+  eq(redNoneRequired.code, 1, 'red outranks "nothing required" (1 before 5)');
+  const optional = exec(Q(), gh(pr([running('build'), bad('docs')]), { rules: rules('build') }));
+  eq(optional.code, 0, 'optional failure: the queue still waits on the required check');
+});
+
+test('queue-check: the head moved -> exit 4, no required lookup and nothing after the view', () => {
+  const r = exec(Q('7', SHA2), gh(pr([running('build')]), { rules: rules('build') }));
+  eq(r.code, 4, 'exit');
+  eq(r.rec.sha_matches, false, 'sha_matches');
+  eq(r.rec.queueable, false, 'queueable');
+  assert(/head moved: expected c{40}, now a{40}/.test(r.rec.queue_reason), r.rec.queue_reason);
+  eq(JSON.stringify(r.pb.calls.map((c) => c.key)), '["view:7"]', 'one call, then stop');
+  const gl = exec(Q('12', SHA2), { view: mr('running') }, { forgeName: 'gitlab' });
+  eq(gl.code, 4, 'GitLab head moved');
+  eq(JSON.stringify(gl.pb.calls.map((c) => c.key)), '["view:12"]', 'GitLab: no settings call');
+});
+
+test('queue-check (GitHub): required checks unreadable (403, admin-only protection, a 502) -> exit 2, fail closed, never queueable', () => {
+  const cases = [
+    [{ rules: FORBIDDEN }, /rulesets: gh: Resource not accessible by integration \(HTTP 403\)/],
+    [{ rules: rules('build'), protection: ADMIN_ONLY }, /branch protection: gh: Must have admin rights/],
+    [{ rules: { err: 'gh: HTTP 502: Bad Gateway' } }, /rulesets: gh: HTTP 502/],
+  ];
+  for (const [extra, why] of cases) {
+    const r = exec(Q(), gh(pr([running('build')]), extra));
+    eq(r.code, 2, `exit (${why})`);
+    eq(r.rec.ci, 'unknown', 'ci');
+    eq(r.rec.queueable, false, 'queueable');
+    assert(why.test(r.rec.queue_reason), r.rec.queue_reason);
+    assert(/not falling back to all checks/.test(r.rec.queue_reason), r.rec.queue_reason);
+    eq(r.sleeps.length, 0, 'one shot: a transient failure is not retried');
+  }
+  // Recovery control: once the set is readable, the same head is queueable.
+  eq(exec(Q(), gh(pr([running('build')]), { rules: rules('build') })).code, 0, 'readable again -> 0');
+});
+
+test('queue-check: a request that cannot be read, or one already merged or closed', () => {
+  const dead = exec(Q(), gh(NOT_LOGGED_IN));
+  eq(dead.code, 2, 'view failed -> 2');
+  eq(dead.rec.queueable, false, 'queueable');
+  assert(/gh pr view failed: gh: To use GitHub CLI/.test(dead.rec.queue_reason), dead.rec.queue_reason);
+  eq(dead.pb.calls.length, 1, 'nothing after the failed view');
+  const merged = exec(Q(), gh(pr([ok('build')], { state: 'MERGED' }), { rules: rules('build') }));
+  eq(merged.code, 5, 'merged PR -> 5');
+  assert(/PR is MERGED/.test(merged.rec.queue_reason), merged.rec.queue_reason);
+});
+
+test('queue-check (GitLab): "Pipelines must succeed" on -> 0; off -> 5; unreadable or not visible -> 2; read live from projects/:id', () => {
+  const on = exec(Q('12'), { view: mr('running'), project: JSON.stringify({ only_allow_merge_if_pipeline_succeeds: true }) }, { forgeName: 'gitlab' });
+  eq(on.code, 0, 'on');
+  eq(on.rec.queueable, true, 'queueable');
+  eq(on.rec.ci, 'pending', 'pending pipeline');
+  eq(keysOf(on.rec), JSON.stringify(QUEUE_KEYS), 'fields');
+  eq(JSON.stringify(on.pb.calls.map((c) => c.args)), JSON.stringify([['mr', 'view', '12', '--output', 'json'], ['api', 'projects/:id']]), 'exact calls');
+  const off = exec(Q('12'), { view: mr('running'), project: JSON.stringify({ only_allow_merge_if_pipeline_succeeds: false }) }, { forgeName: 'gitlab' });
+  eq(off.pb.count('project'), 1, 'precondition: the setting was read');
+  eq(off.code, 5, 'off');
+  eq(off.rec.queueable, false, 'queueable');
+  assert(/"Pipelines must succeed" \(only_allow_merge_if_pipeline_succeeds\) is off/.test(off.rec.queue_reason), off.rec.queue_reason);
+  const failed = exec(Q('12'), { view: mr('running'), project: { err: 'glab: 403 Forbidden' } }, { forgeName: 'gitlab' });
+  eq(failed.code, 2, 'unreadable');
+  eq(failed.rec.ci, 'unknown', 'ci unknown');
+  assert(/could not read the project setting "Pipelines must succeed".*403 Forbidden/.test(failed.rec.queue_reason), failed.rec.queue_reason);
+  const hidden = exec(Q('12'), { view: mr('running'), project: JSON.stringify({ name: 'app' }) }, { forgeName: 'gitlab' });
+  eq(hidden.code, 2, 'setting missing from the JSON');
+  assert(/not in the project JSON this token sees/.test(hidden.rec.queue_reason), hidden.rec.queue_reason);
+});
+
+test('queue-check (GitLab): a failed pipeline is 1 (before an off setting); no pipeline is 5', () => {
+  const setting = (v) => JSON.stringify({ only_allow_merge_if_pipeline_succeeds: v });
+  const red = exec(Q('12'), { view: mr('failed'), project: setting(true) }, { forgeName: 'gitlab' });
+  eq(red.code, 1, 'red');
+  assert(/CI is red \(pipeline #55\)/.test(red.rec.queue_reason), red.rec.queue_reason);
+  eq(exec(Q('12'), { view: mr('failed'), project: setting(false) }, { forgeName: 'gitlab' }).code, 1, 'red before not queueable');
+  eq(exec(Q('12'), { view: mr('failed'), project: { err: 'glab: 500' } }, { forgeName: 'gitlab' }).code, 2, 'unreadable before red');
+  const none = exec(Q('12'), { view: mr(null), project: setting(true) }, { forgeName: 'gitlab' });
+  eq(none.code, 5, 'no pipeline');
+  assert(/no pipeline on the MR head/.test(none.rec.queue_reason), none.rec.queue_reason);
+});
+
+test('queue-check arguments: --sha is required; --once, --names, --allow-none, --timeout and a value on the switch are refused, with no CLI call', () => {
+  const bad_ = [
+    ['7', '--queue-check'], ['7', '--queue-check', '--once', '--sha', SHA], ['--once', '7', '--queue-check', '--sha', SHA],
+    ['7', '--queue-check', '--names', '--sha', SHA], ['7', '--queue-check', '--allow-none', '--sha', SHA],
+    ['7', '--queue-check', '--timeout', '60', '--sha', SHA], ['7', '--timeout=60', '--queue-check', '--sha', SHA],
+    ['7', '--queue-check=1', '--sha', SHA], ['7', '8', '--queue-check', '--sha', SHA],
+  ];
+  for (const argv of bad_) {
+    const r = exec(argv, {});
+    eq(r.code, 2, `exit for ${JSON.stringify(argv)}`);
+    eq(r.raw.length, 0, 'nothing on stdout');
+    eq(r.pb.calls.length, 0, 'no CLI call');
+  }
+  assert(/--queue-check needs --sha/.test(exec(['7', '--queue-check'], {}).errs.join('\n')), 'says --sha is needed');
+  assert(/--queue-check and --allow-none can not be combined/.test(exec(['7', '--queue-check', '--allow-none', '--sha', SHA], {}).errs.join('\n')), 'names the clash');
+  assert(/usage:[\s\S]*--queue-check exit: 0 queueable, 1 red, 2 unknown[\s\S]*4 head moved, 5 not queueable/.test(exec(['7', '--queue-check'], {}).errs.join('\n')), 'usage lists the exit codes');
+  const o = ciWait.parseArgs(['--queue-check', '7', '--sha', SHA.slice(0, 7)]);
+  eq(`${o.mode}/${o.prs[0]}/${o.sha}`, `queue/7/${SHA.slice(0, 7)}`, 'flag order does not matter; a 7-char sha is accepted');
+});
+
+test('arguments: a switch with a value is refused (`--allow-none=false` used to turn it on)', () => {
+  for (const argv of [['--once', '7', '--allow-none=false'], ['--once=1', '7'], ['--names=0', '7']]) {
+    const r = exec(argv, {});
+    eq(r.code, 2, `exit for ${JSON.stringify(argv)}`);
+    assert(/takes no value/.test(r.errs.join('\n')), r.errs.join('\n'));
+    eq(r.pb.calls.length, 0, 'no CLI call');
+  }
+  eq(ciWait.parseArgs(['--once', '7', '--allow-none']).allowNone, true, 'control: the bare switch still works');
 });
 
 console.log('ci-wait: arguments');
@@ -863,4 +1040,24 @@ test('process: exit codes for red, none and head moved', () => {
   eq(proc(['--once', '7', '--allow-none', '--sha', SHA], gh(pr([]))).status, 0, 'none allowed with a matching --sha');
   eq(proc(['--once', '7'], gh(pr([ok('b')]), { protection: ADMIN_ONLY })).status, 2, 'required checks unreadable');
   eq(proc(['--once', '7', '--sha', 'f'.repeat(40)], gh(pr([ok('b')]))).status, 4, 'head moved');
+});
+
+test('process: --queue-check exit codes 0, 1, 2, 4, 5 through the real script, with the real gh arguments', () => {
+  const queueable = proc(['7', '--queue-check', '--sha', SHA], gh(pr([running('b')]), { rules: rules('b') }));
+  eq(queueable.status, 0, `queueable (stderr: ${queueable.stderr})`);
+  eq(queueable.lines[0].queueable, true, 'queueable');
+  eq(JSON.stringify(queueable.calls), JSON.stringify([
+    ['pr', 'view', '7', '--json', 'headRefOid,baseRefName,state,statusCheckRollup'],
+    ['api', 'repos/{owner}/{repo}/rules/branches/main?per_page=100'],
+    ['api', 'repos/{owner}/{repo}/branches/main/protection/required_status_checks'],
+  ]), 'gh arguments');
+  eq(proc(['7', '--queue-check', '--sha', SHA], gh(pr([bad('b')]), { rules: rules('b') })).status, 1, 'red');
+  eq(proc(['7', '--queue-check', '--sha', SHA], gh(pr([running('b')]), { protection: ADMIN_ONLY })).status, 2, 'unreadable');
+  eq(proc(['7', '--queue-check', '--sha', 'f'.repeat(40)], gh(pr([running('b')]))).status, 4, 'head moved');
+  const none = proc(['7', '--queue-check', '--sha', SHA], gh(pr([running('b')])));
+  eq(none.status, 5, 'nothing required');
+  eq(none.lines[0].queueable, false, 'not queueable');
+  const gl = proc(['12', '--queue-check', '--sha', SHA], { view: mr('running'), project: JSON.stringify({ only_allow_merge_if_pipeline_succeeds: false }) }, { AGENT_TEAM_FORGE: 'gitlab' });
+  eq(gl.status, 5, `GitLab setting off (stderr: ${gl.stderr})`);
+  eq(JSON.stringify(gl.calls), JSON.stringify([['mr', 'view', '12', '--output', 'json'], ['api', 'projects/:id']]), 'glab arguments');
 });

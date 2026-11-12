@@ -225,13 +225,20 @@ function gitlabPipelineCi(status) {
 //     checks: [{ name, workflow, state: 'pass'|'fail'|'pending' }]   (GitHub)
 //     pipeline: { id, status } | null                                (GitLab) }
 // One CLI call. With `{ resolution: true }` it also asks for whether auto-merge
-// is queued and when the request was merged, and adds `auto_merge` (bool) and
-// `merged_at` (ISO time | null) to the result (used by reconcile-logs.js).
-function requestStatus(forge, number, cwd, timeout = 20000, run = cli, { resolution = false } = {}) {
+// is queued, when the request was merged and its number, and adds `auto_merge`
+// (bool) and `merged_at` (ISO time | null) to the result (used by
+// reconcile-logs.js and the merge logger). `number` may also be a branch or URL,
+// or null for the current branch's request; `repo` is OWNER/REPO (gh) or
+// GROUP/PROJECT (glab).
+function requestStatus(forge, number, cwd, timeout = 20000, run = cli, { resolution = false, repo = null } = {}) {
   const gitlab = forge === 'gitlab';
+  const target = number == null || number === '' ? [] : [String(number)];
+  const inRepo = repo ? ['--repo', repo] : [];
+  // The number asked for, when it was one (a branch or URL names no number).
+  const asNumber = /^\d+$/.test(String(number)) ? Number(number) : null;
   const args = gitlab
-    ? ['mr', 'view', String(number), '--output', 'json']
-    : ['pr', 'view', String(number), '--json', 'headRefOid,baseRefName,state,statusCheckRollup' + (resolution ? ',autoMergeRequest,mergedAt' : '')];
+    ? ['mr', 'view', ...target, ...inRepo, '--output', 'json']
+    : ['pr', 'view', ...target, ...inRepo, '--json', 'headRefOid,baseRefName,state,statusCheckRollup' + (resolution ? ',autoMergeRequest,mergedAt,number' : '')];
   const more = (info, parsed) => (resolution ? { auto_merge: Boolean(info.autoMerge), merged_at: (gitlab ? parsed.merged_at : parsed.mergedAt) || null } : {});
   let parsed;
   try {
@@ -246,7 +253,7 @@ function requestStatus(forge, number, cwd, timeout = 20000, run = cli, { resolut
     if (!head) return { ok: false, error: 'MR JSON has no sha', notFound: false };
     const info = fromGitlab(parsed) || {};
     return {
-      ok: true, number: info.number != null ? info.number : Number(number), state: info.state, head_sha: String(head), base: info.base,
+      ok: true, number: info.number != null ? info.number : asNumber, state: info.state, head_sha: String(head), base: info.base,
       checks: [], pipeline: hp ? { id: hp.id != null ? hp.id : null, status: hp.status != null ? String(hp.status) : null } : null,
       ...more(info, parsed),
     };
@@ -254,14 +261,15 @@ function requestStatus(forge, number, cwd, timeout = 20000, run = cli, { resolut
   if (typeof parsed.headRefOid !== 'string' || !parsed.headRefOid) return { ok: false, error: 'PR JSON has no headRefOid', notFound: false };
   const info = fromGithub(parsed) || {};
   return {
-    ok: true, number: Number(number), state: info.state, head_sha: parsed.headRefOid, base: info.base,
+    ok: true, number: info.number != null ? info.number : asNumber, state: info.state, head_sha: parsed.headRefOid, base: info.base,
     checks: normalizeRollup(parsed.statusCheckRollup), pipeline: null,
     ...more(info, parsed),
   };
 }
 
 // The status checks a base branch requires, from rulesets
-// (`rules/branches/<base>`) and classic branch protection
+// (`rules/branches/<base>?per_page=100`: the API's default page is 30 rules)
+// and classic branch protection
 // (`branches/<base>/protection/required_status_checks`). GitHub only. Two CLI
 // calls at most. Returns
 //   { ok: true, names: [...] }   both sources read; empty = nothing is required
@@ -281,7 +289,7 @@ function requiredChecks(forge, base, cwd, timeout = 20000, run = cli) {
     return { ok: false, source, status, error: `${source}: ${failure(err).error}`, definitive: [401, 403, 404].includes(status) };
   };
   try {
-    const rules = JSON.parse(run(forge, ['api', `repos/{owner}/{repo}/rules/branches/${b}`], cwd, timeout));
+    const rules = JSON.parse(run(forge, ['api', `repos/{owner}/{repo}/rules/branches/${b}?per_page=100`], cwd, timeout));
     if (!Array.isArray(rules)) return { ok: false, source: 'rulesets', status: null, error: 'rulesets: output was not a list', definitive: false };
     for (const r of rules) {
       if (!r || r.type !== 'required_status_checks') continue;

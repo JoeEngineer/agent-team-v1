@@ -52,6 +52,8 @@ const reconcile = (s, args = ['--merges']) => spawnSync('node', [path.join(SCRIP
   env: { ...process.env, CLAUDE_PROJECT_DIR: s.proj, AGENT_TEAM_PROJECTS_ROOT: path.join(s.proj, 'no-projects-root'), ...s.env },
 });
 
+const logMerge = (proj, command, env) => run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: '' } }, proj, env);
+
 console.log('merge-reconcile: resolution lines');
 
 test('queued then merged: appends a merged line with the real merge time; queued line untouched; second run adds nothing', () => {
@@ -89,6 +91,7 @@ test('closed and cancelled (open, auto-merge off) outcomes; gitlab MR keeps its 
   });
   const r = reconcile(s);
   eq(r.status, 0, r.stderr);
+  assert(/PR 2: auto-merge was cancelled; CI has no checks/.test(r.stdout), r.stdout);
   const [, , , a, b, c] = s.rows();
   eq(a.outcome, 'closed', 'closed'); eq(a.merged_at, null, 'closed has no merged_at');
   eq(b.outcome, 'auto-merge-cancelled', 'cancelled'); eq(b.merged_at, null, 'cancelled has no merged_at');
@@ -119,6 +122,106 @@ test('still queued with a moved head: warns to disable auto-merge', () => {
   const r = reconcile(s);
   assert(/PR 7: still queued, CI green; head moved since queued: disable auto-merge now/.test(r.stdout), r.stdout);
   assert(!/PR 8:.*head moved/.test(r.stdout), 'PR 8 head is the queued one');
+});
+
+// Final review M2: a queued PR that merged at another head than the reviewed
+// match_head was reported as plain "merged".
+test('merged at another head than the queued match_head: a loud line, head_moved and merged_head on the resolution (GitHub and GitLab)', () => {
+  const s = setup([
+    queued(90, '2026-11-01T10:00:00.000Z', { match_head: SHA }),
+    queued(91, '2026-11-01T10:01:00.000Z', { match_head: SHA }),
+    queued(92, '2026-11-01T10:02:00.000Z', { match_head: SHA.slice(0, 12) }),
+    queued(93, '2026-11-01T10:03:00.000Z', { match_head: SHA, forge: 'gitlab' }),
+  ], {
+    'view:90': prJson('MERGED', { head: NEW_SHA, mergedAt: '2026-11-01T10:07:30Z' }),
+    'view:91': prJson('MERGED', { head: SHA, mergedAt: '2026-11-01T10:08:00Z' }),
+    'view:92': prJson('MERGED', { head: SHA, mergedAt: '2026-11-01T10:09:00Z' }),
+    'view:93': mrJson('merged', { iid: 93, head: NEW_SHA, mergedAt: '2026-11-01T10:10:00Z' }),
+  });
+  const r = reconcile(s);
+  eq(r.status, 0, r.stderr);
+  eq(s.calls().length, 4, 'precondition: each PR was asked once');
+  assert(r.stdout.includes(`WARNING: PR 90 merged at ${NEW_SHA}, not the reviewed ${SHA}: check it`), r.stdout);
+  assert(r.stdout.includes(`WARNING: MR 93 merged at ${NEW_SHA}, not the reviewed ${SHA}: check it`), r.stdout);
+  assert(/PR 91: merged at 2026-11-01T10:08:00Z/.test(r.stdout) && !/PR 91 merged at/.test(r.stdout), `same head: plain line\n${r.stdout}`);
+  assert(/PR 92: merged at/.test(r.stdout), `a short match_head that prefixes the head is the same head\n${r.stdout}`);
+  const res = Object.fromEntries(s.rows().filter((x) => x.resolution_id).map((x) => [x.pr, x]));
+  eq(res['90'].outcome, 'merged', 'still a merge'); eq(res['90'].head_moved, true, 'head_moved'); eq(res['90'].merged_head, NEW_SHA, 'merged_head');
+  eq(res['90'].merged_at, '2026-11-01T10:07:30Z', 'merged_at kept');
+  eq(res['93'].head_moved, true, 'gitlab head_moved'); eq(res['93'].merged_head, NEW_SHA, 'gitlab merged_head');
+  eq(res['91'].head_moved, undefined, 'same head: no head_moved'); eq(res['91'].merged_head, undefined, 'same head: no merged_head');
+  eq(res['92'].head_moved, undefined, 'prefix: no head_moved');
+  // One step past: the resolved PRs are not asked again and nothing more is written.
+  const n = s.rows().length;
+  reconcile(s);
+  eq(s.rows().length, n, 'idempotent'); eq(s.calls().length, 4, 'no further forge call');
+});
+
+// Final review minor (f): the cancelled line now carries the CI state, so a red
+// PR can be sent back without another CI turn.
+test('auto-merge found cancelled: the line gives the CI state and failing check names (red, pending, green, GitLab pipeline)', () => {
+  const s = setup([queued(1, 't1'), queued(2, 't2'), queued(3, 't3'), queued(4, 't4', { forge: 'gitlab' })], {
+    'view:1': prJson('OPEN', { auto: false, checks: [check('build', 'FAILURE'), check('unit', 'FAILURE'), check('lint', 'SUCCESS')] }),
+    'view:2': prJson('OPEN', { auto: false, checks: [check('build', '')] }),
+    'view:3': prJson('OPEN', { auto: false, checks: [check('build', 'SUCCESS')] }),
+    'view:4': mrJson('opened', { iid: 4, auto: false, pipeline: { id: 9, status: 'failed' } }),
+  });
+  const r = reconcile(s);
+  eq(r.status, 0, r.stderr);
+  assert(r.stdout.includes('PR 1: auto-merge was cancelled; CI red (build, unit)'), r.stdout);
+  assert(r.stdout.includes('PR 2: auto-merge was cancelled; CI pending'), r.stdout);
+  assert(r.stdout.includes('PR 3: auto-merge was cancelled; CI green'), r.stdout);
+  assert(r.stdout.includes('MR 4: auto-merge was cancelled; CI red'), r.stdout);
+  eq(s.rows().filter((x) => x.outcome === 'auto-merge-cancelled').length, 4, 'four cancelled lines');
+});
+
+// Final review minor (b): openQueued keyed on ts alone, so resolving one PR
+// also hid another PR queued in the same millisecond.
+test('two PRs queued in the same millisecond: resolving one leaves the other open, and the next run still asks about it', () => {
+  const T = '2026-11-01T10:00:00.000Z';
+  const s = setup([queued(1, T), queued(2, T)], {
+    'view:1': prJson('MERGED', { mergedAt: '2026-11-01T10:05:00Z' }),
+    'view:2': prJson('OPEN', { auto: true, checks: [check('build', '')] }),
+  });
+  const r = reconcile(s);
+  eq(r.status, 0, r.stderr);
+  assert(/PR 1: merged/.test(r.stdout) && /PR 2: still queued/.test(r.stdout), r.stdout);
+  eq(s.rows().filter((x) => x.resolution_id).length, 1, 'precondition: PR 1 resolved, PR 2 not');
+  const r2 = reconcile(s);
+  assert(/PR 2: still queued/.test(r2.stdout), `second run still asks about PR 2:\n${r2.stdout}`);
+  eq(s.calls().filter((c) => c[2] === '2').length, 2, 'PR 2 asked on both runs');
+  eq(s.calls().filter((c) => c[2] === '1').length, 1, 'PR 1 not asked again');
+  const records = require(path.join(SCRIPTS, 'records.js'));
+  eq(JSON.stringify(records.openQueued(s.rows()).map((x) => x.pr)), '["2"]', 'openQueued: only PR 2');
+  eq(JSON.stringify(records.unresolvedQueued(s.rows()).map((x) => x.pr)), '["2"]', 'unresolvedQueued (archive-logs): only PR 2');
+  // An older resolution line written without resolution_id still resolves only its own PR.
+  const legacy = [queued(1, T), queued(2, T), { ts: 'x', pr: '1', outcome: 'closed', resolves_ts: T }];
+  eq(JSON.stringify(records.openQueued(legacy).map((x) => x.pr)), '["2"]', 'legacy line: forge, PR and resolves_ts');
+});
+
+// Final review minor (a): a plain merge attempt on a queued PR logged the queue
+// again without match_head, superseding the pinned line and losing the
+// head-moved check.
+test('a later non-auto merge attempt on a queued PR keeps the pinned match_head, so reconcile still flags a merge at another head', () => {
+  const p = tmpProject();
+  logMerge(p, `gh pr merge 5 --auto --squash --match-head-commit ${SHA}`, fakeGh(prJson('OPEN', { auto: true })));
+  logMerge(p, 'gh pr merge 5 --squash', fakeGh(prJson('OPEN', { auto: true })));
+  const [q, again] = readLog(p, 'merges.jsonl');
+  eq(q.match_head, SHA, 'precondition: the queue is pinned');
+  eq(again.outcome, 'auto-merge-queued', 'precondition: the plain attempt found the queue still on');
+  eq(again.auto, undefined, 'not an auto command');
+  eq(again.match_head, SHA, 'match_head carried forward');
+  eq(again.match_head_from_ts, q.ts, 'from the pinned line');
+  const s = { proj: p, rows: () => readLog(p, 'merges.jsonl'), env: { AGENT_TEAM_FAKE_GH: FAKE_CI, FAKE_CI_ROUTES: path.join(p, 'routes.json'), FAKE_CI_STATE: path.join(p, 's.json'), FAKE_CI_LOG: path.join(p, 'calls.log') } };
+  fs.writeFileSync(s.env.FAKE_CI_ROUTES, JSON.stringify({ 'view:5': prJson('MERGED', { head: NEW_SHA, mergedAt: '2026-11-01T10:07:30Z' }) }));
+  const r = reconcile(s);
+  assert(r.stdout.includes(`WARNING: PR 5 merged at ${NEW_SHA}, not the reviewed ${SHA}: check it`), r.stdout);
+  const res = s.rows().find((x) => x.resolves_ts === again.ts);
+  eq(res.head_moved, true, 'head_moved on the latest line\'s resolution');
+  // Control: a plain attempt with nothing queued carries nothing.
+  const p2 = tmpProject();
+  logMerge(p2, 'gh pr merge 6 --squash', fakeGh(prJson('OPEN', { auto: true })));
+  eq(readLog(p2, 'merges.jsonl')[0].match_head, undefined, 'nothing to carry');
 });
 
 test('older queued line for a PR with a newer one is superseded without asking the forge', () => {
@@ -164,6 +267,32 @@ test('a plain reconcile-logs.js run includes the merge step (no projects root ne
   eq(s.rows()[1].outcome, 'closed', 'resolved by the plain run');
 });
 
+// Final review minor (c): --merges printed nothing both when nothing was
+// queued and when merges.jsonl was missing.
+test('--merges with nothing queued says so and counts the merge lines; with no merges.jsonl it says that, with a stderr note, exit 0; no forge call either way', () => {
+  const resolvedOnly = [queued(1, 't1'), { ...queued(1, 't2'), outcome: 'closed', resolves_ts: 't1', resolution_id: 'github:1:t1' }];
+  const s = setup(resolvedOnly, {});
+  const file = path.join(s.proj, '.agent-team', 'logs', 'merges.jsonl');
+  const r = reconcile(s);
+  eq(r.status, 0, r.stderr);
+  eq(r.stdout.trim(), `no queued merges (2 merge lines in ${file})`, 'nothing queued');
+  eq(r.stderr, '', 'no stderr when the log exists');
+  eq(reconcile(s, ['--merges', '--dry-run']).stdout.trim(), `[dry run] no queued merges (2 merge lines in ${file})`, 'dry run');
+  const one = setup([{ ...queued(3, 't3'), outcome: 'merged', auto: undefined }], {});
+  assert(reconcile(one).stdout.includes('(1 merge line in '), 'singular');
+  const empty = setup([], {});
+  fs.rmSync(path.join(empty.proj, '.agent-team', 'logs', 'merges.jsonl'));
+  const missing = reconcile(empty);
+  eq(missing.status, 0, 'exit 0');
+  eq(missing.stdout.trim(), `no merges.jsonl at ${path.join(empty.proj, '.agent-team', 'logs', 'merges.jsonl')}; hooks may be off`, 'missing file');
+  assert(/agent-team hooks: active/.test(missing.stderr), `stderr note: ${missing.stderr}`);
+  eq(fs.existsSync(path.join(empty.proj, '.agent-team', 'logs', 'merges.jsonl')), false, 'nothing created');
+  eq(s.calls().length + empty.calls().length, 0, 'no forge call');
+  // A plain run (not --merges) keeps its own summary and adds neither line.
+  const plain = reconcile(empty, []);
+  assert(!/hooks may be off|no queued merges/.test(plain.stdout), plain.stdout);
+});
+
 console.log('merge-reconcile: request budget');
 
 test('one forge call per PR; 50 PRs at most, oldest first, the rest counted; a failing PR does not stop the others', () => {
@@ -194,8 +323,6 @@ test('one forge call per PR; 50 PRs at most, oldest first, the rest counted; a f
 });
 
 console.log('merge-reconcile: logMerges fields');
-
-const logMerge = (proj, command, env) => run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_input: { command }, tool_response: { stdout: '' } }, proj, env);
 
 test('auto-merge command records auto and match_head (gh --match-head-commit, glab --sha); a plain merge has neither', () => {
   const p = tmpProject();
@@ -233,13 +360,13 @@ test('gate: the PowerShell shape from decision 0012 is a gate; ; and || joiners,
   eq(JSON.stringify(gates), JSON.stringify(['ci-wait', null, null, null, null, null, 'gh-checks']), 'gates in order');
 });
 
-test('cancellation and reconcile share one resolution_id: whichever comes second adds nothing (cancel first, and reconcile first)', () => {
-  // Cancel first: the logged cancellation carries the id.
+test('a forge-confirmed cancellation and reconcile share one resolution_id: whichever comes second adds nothing (cancel first, and reconcile first)', () => {
+  // Cancel first: the cancellation, confirmed by gh (open, auto-merge off), carries the id.
   const p = tmpProject();
   logMerge(p, 'gh pr merge 11 --auto --squash', fakeGh(prJson('OPEN', { auto: true })));
   const [q] = readLog(p, 'merges.jsonl');
   eq(q.outcome, 'auto-merge-queued', 'precondition: queued');
-  logMerge(p, 'gh pr merge 11 --disable-auto', fakeGh('', 1));
+  logMerge(p, 'gh pr merge 11 --disable-auto', fakeGh(prJson('OPEN', { auto: false })));
   const c = readLog(p, 'merges.jsonl')[1];
   eq(c.resolution_id, `github:11:${q.ts}`, 'cancellation resolution_id');
   // Reconcile first (its forge call said "no auto-merge"): a late cancel adds nothing.
@@ -247,20 +374,25 @@ test('cancellation and reconcile share one resolution_id: whichever comes second
   reconcile(s);
   const res = s.rows()[1];
   eq(res.resolution_id, c.resolution_id, 'same id as a cancellation');
-  logMerge(s.proj, 'gh pr merge 11 --disable-auto', fakeGh('', 1));
+  logMerge(s.proj, 'gh pr merge 11 --disable-auto', fakeGh(prJson('OPEN', { auto: false })));
   eq(s.rows().length, 2, 'late cancel added nothing');
 });
 
-test('glab api cancel needs POST: a GET of the same path is not a cancellation; --method POST and -X POST are', () => {
+test('glab api cancel needs POST: a GET of the same path is not a cancellation (and asks nothing); --method POST and -X POST are', () => {
   const p = tmpProject();
   const url = 'projects/:id/merge_requests/12/cancel_merge_when_pipeline_succeeds';
-  logMerge(p, `glab api ${url}`, fakeGlab('', 1));
-  logMerge(p, `glab api -X GET ${url}`, fakeGlab('', 1));
+  const argsFile = path.join(p, 'glab-args.jsonl');
+  const off = fakeGlab(mrJson('opened', { iid: 12, auto: false }), 0, { FAKE_GH_ARGS: argsFile });
+  logMerge(p, `glab api ${url}`, off);
+  logMerge(p, `glab api -X GET ${url}`, off);
   eq(readLog(p, 'merges.jsonl').length, 0, 'GET logs nothing');
-  logMerge(p, `glab api --method POST ${url}`, fakeGlab('', 1));
+  eq(fs.existsSync(argsFile), false, 'GET asks glab nothing');
+  logMerge(p, `glab api --method POST ${url}`, off);
   eq(readLog(p, 'merges.jsonl').length, 1, '--method POST logged');
-  logMerge(p, `glab api -X POST ${url}`, fakeGlab('', 1));
+  logMerge(p, `glab api -X POST ${url}`, off);
   eq(readLog(p, 'merges.jsonl').length, 2, '-X POST logged');
+  const asked = fs.readFileSync(argsFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l).join(' '));
+  eq(asked.join('|'), 'mr view 12 --output json|mr view 12 --output json', 'each POST asked glab about MR 12 once');
 });
 
 test('queued --auto then a plain merge of the same PR: reconcile resolves the queued line as merged directly, flagged so it is not counted twice, no forge call', () => {
@@ -287,20 +419,25 @@ test('a GitLab MR still queued: pipeline status text and a moved head raise the 
   eq(s.calls()[0][0], 'mr', 'asked glab (mr view)');
 });
 
-test('gh pr merge --disable-auto is logged as auto-merge-cancelled by the director, resolving the latest open queued line; reconcile then adds no second cancellation', () => {
+const GH_RESOLUTION_VIEW = (n) => `pr view ${n} --json headRefOid,baseRefName,state,statusCheckRollup,autoMergeRequest,mergedAt,number`;
+const argsOf = (file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l).join(' ')) : []);
+
+test('gh pr merge --disable-auto is logged as auto-merge-cancelled only after one gh pr view confirms auto-merge is off, resolving the latest open queued line; reconcile then adds no second cancellation', () => {
   const p = tmpProject();
   logMerge(p, 'gh pr merge 11 --auto --squash', fakeGh(prJson('OPEN', { auto: true })));
   logMerge(p, 'gh pr merge 11 --auto --squash', fakeGh(prJson('OPEN', { auto: true })));
   const [, q2] = readLog(p, 'merges.jsonl');
   eq(q2.outcome, 'auto-merge-queued', 'precondition: a queued line exists');
   const argsFile = path.join(p, 'gh-args.jsonl');
-  logMerge(p, 'gh pr merge 11 --disable-auto', fakeGh('', 1, { FAKE_GH_ARGS: argsFile }));
+  const logged = logMerge(p, 'gh pr merge 11 --disable-auto', fakeGh(prJson('OPEN', { auto: false }), 0, { FAKE_GH_ARGS: argsFile }));
   const rows = readLog(p, 'merges.jsonl');
   const c = rows[2];
   eq(rows.length, 3, 'one new line');
   eq(c.outcome, 'auto-merge-cancelled', 'outcome'); eq(c.cancelled_by, 'director', 'cancelled_by');
   eq(c.resolves_ts, q2.ts, 'resolves the latest open queued line'); eq(c.pr, '11', 'pr');
-  eq(fs.existsSync(argsFile), false, 'a numbered --disable-auto asks the forge nothing');
+  eq(c.outcome_source, 'gh pr view', 'the cancel is the forge\'s answer, not the command\'s');
+  eq(argsOf(argsFile).join('|'), GH_RESOLUTION_VIEW(11), 'asked gh about PR 11, once, after the command');
+  eq(logged.stdout, '', 'confirmed: no warning');
   // Reconcile: the first queued line has a newer one (superseded); the latest is already resolved.
   const s = { proj: p, env: { AGENT_TEAM_FAKE_GH: FAKE_CI, FAKE_CI_ROUTES: path.join(p, 'none.json'), FAKE_CI_STATE: path.join(p, 's.json'), FAKE_CI_LOG: path.join(p, 'calls.log') } };
   fs.writeFileSync(s.env.FAKE_CI_ROUTES, '{}');
@@ -314,18 +451,99 @@ test('gh pr merge --disable-auto is logged as auto-merge-cancelled by the direct
   eq(readLog(p, 'merges.jsonl').length, after.length, 'idempotent');
 });
 
-test('glab api cancel_merge_when_pipeline_succeeds is logged as a cancellation; disable-auto with nothing queued has resolves_ts null', () => {
+test('glab api cancel_merge_when_pipeline_succeeds, confirmed by glab, is logged as a cancellation; a confirmed disable-auto with nothing queued has resolves_ts null', () => {
   const p = tmpProject();
   logMerge(p, 'glab mr merge 12 --auto-merge', fakeGlab(mrJson('opened', { iid: 12, auto: true })));
   const [q] = readLog(p, 'merges.jsonl');
   eq(q.outcome, 'auto-merge-queued', 'precondition');
-  logMerge(p, 'glab api -X POST projects/:id/merge_requests/12/cancel_merge_when_pipeline_succeeds', fakeGlab('', 1));
+  logMerge(p, 'glab api -X POST projects/:id/merge_requests/12/cancel_merge_when_pipeline_succeeds', fakeGlab(mrJson('opened', { iid: 12, auto: false })));
   const c = readLog(p, 'merges.jsonl')[1];
   eq(c.outcome, 'auto-merge-cancelled', 'outcome'); eq(c.forge, 'gitlab', 'forge'); eq(c.pr, '12', 'pr');
-  eq(c.resolves_ts, q.ts, 'resolves_ts'); eq(c.cancelled_by, 'director', 'cancelled_by');
-  logMerge(p, 'gh pr merge 77 --disable-auto', fakeGh('', 1));
+  eq(c.resolves_ts, q.ts, 'resolves_ts'); eq(c.cancelled_by, 'director', 'cancelled_by'); eq(c.outcome_source, 'glab mr view', 'source');
+  logMerge(p, 'gh pr merge 77 --disable-auto', fakeGh(prJson('OPEN', { auto: false })));
   const n = readLog(p, 'merges.jsonl')[2];
   eq(n.outcome, 'auto-merge-cancelled', 'nothing queued still not a failed merge'); eq(n.resolves_ts, null, 'resolves_ts null');
+  eq(n.pr, '77', 'pr');
+});
+
+// Final review M3: a cancel that failed (gh exits 1, or auto-merge is still on)
+// used to be logged as cancelled, so reconcile stopped tracking a PR that could
+// still auto-merge the unreviewed head of a send-back push.
+for (const [why, env, warn] of [
+  ['gh pr view says auto-merge is still on', () => fakeGh(prJson('OPEN', { auto: true })), /gh pr view says auto-merge is still on/],
+  ["gh can't answer (the stand-in exits 1)", () => fakeGh('', 1), /gh pr view couldn't answer/],
+]) {
+  test(`--disable-auto when ${why}: no cancelled line, the queued line stays open, a loud warning; reconcile still tracks it; a later confirmed cancel resolves it`, () => {
+    const p = tmpProject();
+    logMerge(p, `gh pr merge 11 --auto --squash --match-head-commit ${SHA}`, fakeGh(prJson('OPEN', { auto: true })));
+    const [q] = readLog(p, 'merges.jsonl');
+    eq(q.outcome, 'auto-merge-queued', 'precondition: queued');
+    const argsFile = path.join(p, 'gh-args.jsonl');
+    const r = logMerge(p, 'gh pr merge 11 --disable-auto && git push', { ...env(), FAKE_GH_ARGS: argsFile });
+    eq(argsOf(argsFile).join('|'), GH_RESOLUTION_VIEW(11), 'precondition: the forge was asked about PR 11 after the cancel');
+    eq(readLog(p, 'merges.jsonl').length, 1, 'no line written');
+    const ctx = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    assert(/WARNING: auto-merge may still be on for PR 11/.test(ctx), ctx);
+    assert(warn.test(ctx), ctx);
+    assert(/Do not push to this PR until `gh pr view 11 --json autoMergeRequest` shows auto-merge off/.test(ctx), ctx);
+    assert(r.stderr.includes('WARNING: auto-merge may still be on for PR 11'), `stderr: ${r.stderr}`);
+    // One step past: reconcile still asks the forge about it and reports it queued.
+    const s = { proj: p, rows: () => readLog(p, 'merges.jsonl'), env: { AGENT_TEAM_FAKE_GH: FAKE_CI, FAKE_CI_ROUTES: path.join(p, 'routes.json'), FAKE_CI_STATE: path.join(p, 's.json'), FAKE_CI_LOG: path.join(p, 'calls.log') } };
+    fs.writeFileSync(s.env.FAKE_CI_ROUTES, JSON.stringify({ 'view:11': prJson('OPEN', { auto: true, checks: [check('build', '')] }) }));
+    const rr = reconcile(s);
+    assert(/PR 11: still queued, CI pending/.test(rr.stdout), rr.stdout);
+    eq(s.rows().length, 1, 'still open after reconcile');
+    // Recovery control: the next cancel, confirmed, resolves the queued line.
+    logMerge(p, 'gh pr merge 11 --disable-auto', fakeGh(prJson('OPEN', { auto: false })));
+    const after = s.rows();
+    eq(after.length, 2, 'cancel logged once confirmed');
+    eq(after[1].outcome, 'auto-merge-cancelled', 'outcome'); eq(after[1].resolves_ts, q.ts, 'resolves the queued line');
+  });
+}
+
+test('glab cancel that glab does not confirm: no line, warning names the glab check; a merged or closed PR gets that resolution instead of a cancel', () => {
+  const p = tmpProject();
+  logMerge(p, `glab mr merge 12 --auto-merge --sha ${SHA}`, fakeGlab(mrJson('opened', { iid: 12, auto: true })));
+  const cancel = 'glab api -X POST projects/:id/merge_requests/12/cancel_merge_when_pipeline_succeeds';
+  const r = logMerge(p, cancel, fakeGlab(mrJson('opened', { iid: 12, auto: true })));
+  eq(readLog(p, 'merges.jsonl').length, 1, 'no line while still on');
+  assert(/auto-merge may still be on for MR 12.*glab mr view 12 --output json \(merge_when_pipeline_succeeds\)/.test(JSON.parse(r.stdout).hookSpecificOutput.additionalContext), r.stdout);
+  // The MR merged before the cancel landed: the queued line is resolved as merged.
+  logMerge(p, cancel, fakeGlab(mrJson('merged', { iid: 12, mergedAt: '2026-11-01T12:00:00Z' })));
+  const res = readLog(p, 'merges.jsonl')[1];
+  eq(res.outcome, 'merged', 'merged, not cancelled'); eq(res.merged_at, '2026-11-01T12:00:00Z', 'merged_at');
+  eq(res.cancelled_by, undefined, 'not a cancellation'); eq(res.note, 'checked after a cancel', 'note');
+  eq(res.forge, 'gitlab', 'forge'); eq(res.head_moved, undefined, 'merged at the queued head');
+  // A closed PR, on GitHub, with --disable-auto on the current branch (no number in the command).
+  const p2 = tmpProject();
+  logMerge(p2, 'gh pr merge 30 --auto --squash', fakeGh(prJson('OPEN', { auto: true })));
+  const argsFile = path.join(p2, 'gh-args.jsonl');
+  logMerge(p2, 'gh pr merge --disable-auto', fakeGh(JSON.stringify({ ...JSON.parse(prJson('CLOSED')), number: 30 }), 0, { FAKE_GH_ARGS: argsFile }));
+  eq(argsOf(argsFile).join('|'), 'pr view --json headRefOid,baseRefName,state,statusCheckRollup,autoMergeRequest,mergedAt,number', 'asked about the current branch');
+  const closed = readLog(p2, 'merges.jsonl')[1];
+  eq(closed.outcome, 'closed', 'closed'); eq(closed.pr, '30', 'pr from the forge'); eq(closed.resolution_id.startsWith('github:30:'), true, 'resolves PR 30');
+});
+
+test('a cancel in another repo asks that repo: gh -R o/r, and glab api projects/<encoded path>', () => {
+  const p = tmpProject();
+  const ghArgs = path.join(p, 'gh-args.jsonl');
+  logMerge(p, 'gh pr merge 11 -R o/r --disable-auto', fakeGh(prJson('OPEN', { auto: false }), 0, { FAKE_GH_ARGS: ghArgs }));
+  eq(argsOf(ghArgs).join('|'), 'pr view 11 --repo o/r --json headRefOid,baseRefName,state,statusCheckRollup,autoMergeRequest,mergedAt,number', 'gh --repo');
+  const glArgs = path.join(p, 'glab-args.jsonl');
+  logMerge(p, 'glab api -X POST projects/grp%2Fapp/merge_requests/12/cancel_merge_when_pipeline_succeeds', fakeGlab(mrJson('opened', { iid: 12, auto: false }), 0, { FAKE_GH_ARGS: glArgs }));
+  eq(argsOf(glArgs).join('|'), 'mr view 12 --repo grp/app --output json', 'glab --repo, decoded');
+  eq(readLog(p, 'merges.jsonl').length, 2, 'both confirmed cancels logged');
+});
+
+test('--disable-auto=true is a cancel (pflag form); --disable-auto=false is not', () => {
+  const p = tmpProject();
+  logMerge(p, 'gh pr merge 11 --auto --squash', fakeGh(prJson('OPEN', { auto: true })));
+  logMerge(p, 'gh pr merge 11 --disable-auto=false --squash', fakeGh(prJson('OPEN', { auto: true })));
+  const rows = readLog(p, 'merges.jsonl');
+  eq(rows[1].cancelled_by, undefined, '=false: logged as a merge attempt, not a cancel');
+  logMerge(p, 'gh pr merge 11 --disable-auto=true', fakeGh(prJson('OPEN', { auto: false })));
+  const c = readLog(p, 'merges.jsonl')[2];
+  eq(c.outcome, 'auto-merge-cancelled', '=true is a cancel'); eq(c.cancelled_by, 'director', 'cancelled_by');
 });
 
 console.log('merge-reconcile: archive-logs');

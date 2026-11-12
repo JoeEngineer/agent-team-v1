@@ -468,7 +468,8 @@ function main() {
   if (tool === SESSION_START) return onPostSession(input);
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
   if (isBridge(tool)) return onPostBridge(input);
-  if (isShell(tool)) return logMerges(input, 'claude');
+  // A merge-log warning (e.g. a cancel the forge didn't confirm) goes to the Director.
+  if (isShell(tool)) return emit(event, logMerges(input, 'claude'));
   if (tool === 'SendMessage') return emit(event, onPostSendMessage(input));
 }
 
