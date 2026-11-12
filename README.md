@@ -22,8 +22,9 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/codex-agents.js` | Writes `.codex/agents/<role>-<tier>.toml` for each role and enabled Codex tier, from the model map. Per machine, gitignored. `--check` reports drift |
 | `scripts/codex-hooks.js` | Writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Both are committed |
 | `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run, plus `agent-team forge: gitlab` on a GitLab project |
+| `scripts/ci-wait.js` | Waits for or checks CI on GitHub (`gh`) or GitLab (`glab`), with its own deadline (9 minutes by default). `--once` checks once without waiting; `--names` prints the check names for setup. Exit codes and fields are in the script's header |
 | `scripts/archive-logs.js` | Milestone close: copies the project's logs to an archive folder outside the repo, and with `--clear` removes the live copies once the archive is verified |
-| `scripts/reconcile-logs.js` | Drains snapshots from observed Codex stops and backfills Claude completion/review records from transcripts. May rewrite `completions.jsonl`/`reviews.jsonl` to add `stale_of` to lines holding another attempt's report; all other lines are kept as they were |
+| `scripts/reconcile-logs.js` | Drains snapshots from observed Codex stops and backfills Claude completion/review records from transcripts. With `--merges`, checks the merges queued by auto-merge and appends how each one ended to `merges.jsonl`. May rewrite `completions.jsonl`/`reviews.jsonl` to add `stale_of` to lines holding another attempt's report; all other lines are kept as they were |
 | `plugin.json` (root) | Portable Agent Plugins manifest that Codex reads; `.claude-plugin/` stays for Claude Code |
 | `templates/project/` | Files `/agent-team:team-init` copies into a project, including the Codex hook shim |
 
@@ -45,6 +46,8 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
 - **GitHub or GitLab:** works with GitHub and with GitLab, including self-hosted GitLab. On GitLab the Director uses `glab` and merge requests; see [GitLab](#gitlab), `skills/director/references/gitlab.md`, and [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md) for the full mapping and what's verified.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
+- **CI waits:** the reviewer waits for CI with `scripts/ci-wait.js` after its review. The Director then merges in one call: the CI gate, then the merge, then the PR comment, each running only if the one before succeeded. If CI is still pending, it queues auto-merge instead, and it checks queued merges with `reconcile-logs.js --merges` at checkpoints. A milestone is reported complete only after its PR's checks finish green.
+- **Without the helper:** `gh pr checks <n> --required` is a quick check, and `gh pr checks <n> --watch --fail-fast --interval 30` waits until the checks finish. The watch has no deadline of its own, and `--required` can fail when the base has no required checks. On GitLab, read `head_pipeline.status` from `glab mr view <n> --output json`.
 - **Script commands:** run them from the project root with the plugin path, `node "<plugin root>/scripts/…"`, as `team-init` does. The commands below are written relative to the plugin root.
 - **Milestone close:** `node scripts/archive-logs.js <milestone>` copies the project's logs to `<archive>/<project>/<date>-<milestone>/`. The archive is `~/.agent-team/archive/` by default, or the folder in `AGENT_TEAM_ARCHIVE`. Add `--clear` to delete the live logs after the archive is verified; `--dry-run` shows what would happen.
 - **Backfill:** `node scripts/reconcile-logs.js` drains snapshots from observed Codex stop events and rebuilds missing Claude completion or review records from Claude subagent transcripts. Codex stop events may be saved temporarily while the child transcript finishes; a later hook dispatch (including `wait_agent`) or reconciliation drains them. A Codex stop that never reached the hook is recovered from the child transcript by `turn_id` when another turn of that agent is known (see "Codex turns with no stop" below). In Codex-only projects, reconciliation handles pending snapshots before checking for a Claude projects root. `--dry-run` previews work without changing logs or pending files. Rebuilt Claude lines are marked `report_source: "reconcile"`. For a resumed agent, reconcile may also rewrite `completions.jsonl` and `reviews.jsonl` to add `stale_of` to lines that hold a different attempt's report (for example, an older logger wrote turn 1's report under attempt 2). `stale_of` names the attempt the content really belongs to, and readers (the Coach) drop lines that carry it. Only those lines change; every other line, including ones that are not valid JSON, is kept byte for byte, and lines a hook appends while the rewrite runs are carried over (an append in the instant before the final file swap can still be lost, so run it when no agents are active). Since 0.4.2 it exits 1 on errors (it used to exit 0). It prints how many lines it marked and in which files. If a file cannot be rewritten, the file is left as it was and the command exits 1. `--dry-run` only reports the count.
@@ -147,7 +150,7 @@ Repo → **Settings** → **Rules** → **Rulesets** → **New ruleset** → **N
 | Restrict deletions | On | `main` should never be deleted. |
 | Block force pushes | On | A force-push can silently rewrite reviewed history. |
 | Require a pull request before merging | On, **Required approvals: 0** | Every change reaches `main` through a PR you can see and undo. Approvals stay at 0 because GitHub won't let an account approve its own PR. With your agents acting as you, 1 required approval would lock everyone out. |
-| Require status checks to pass | On, once you have CI | Turn on when the project has CI, so a red build can't reach `main`. |
+| Require status checks to pass | On, once CI has run and you have its check names (see [Required check names](#required-check-names)) | Turn on when the project has CI, so a red build can't reach `main`. |
 
 Or from a terminal:
 
@@ -181,11 +184,11 @@ EOF
 | Bypass list | Leave empty | Same reason as above. |
 | Target branches | Include by pattern: `milestone/*` | |
 | Block force pushes | On | Milestone branches collect reviewed work. Rewriting them would drop it without a trace. |
-| Require status checks to pass | On, once you have CI | The Director merges task PRs here without you, so CI is the automatic check. |
+| Require status checks to pass | On, once CI has run and you have its check names (see [Required check names](#required-check-names)) | The Director merges task PRs here without you, so CI is the automatic check. |
 | Require a pull request | **Off** | The Director's task PRs already go through the `reviewer` agent. Requiring a GitHub PR here adds nothing, and it would block the Director from tidying up the branch. |
 | Restrict deletions | **Off** | You'll want to delete a milestone branch after it's merged into `main`, and with an empty bypass list this rule would stop you too. The guard hook already blocks agents from deleting milestone branches. |
 
-Or from a terminal (add a `required_status_checks` rule once you have CI):
+Or from a terminal (add the `required_status_checks` rule from [Required check names](#required-check-names) once you have names):
 
 ```bash
 gh api -X POST repos/OWNER/REPO/rulesets --input - <<'EOF'
@@ -199,7 +202,20 @@ gh api -X POST repos/OWNER/REPO/rulesets --input - <<'EOF'
 EOF
 ```
 
-Rulesets are free on public repos. Private repos need a paid GitHub plan for them.
+Rulesets are free on public repos. Private repos need a paid GitHub plan for rulesets and for auto-merge.
+
+### Required check names
+
+A required status check is the name of a CI job, and the name exists only after CI has run once on a PR. Turning the rule on with an empty list enforces nothing, so add the rule only with real names. The rule looks like this (replace the placeholder with your job name):
+
+```json
+{ "type": "required_status_checks", "parameters": {
+    "required_status_checks": [ { "context": "<your CI job name, e.g. test>" } ] } }
+```
+
+Get the names from the first CI run with `node "<plugin root>/scripts/ci-wait.js" --names <n>` or `gh pr checks <n> --json name`. Add them to the `milestone/*` ruleset and to `protect-main`, with the bypass list still empty. The Director never changes rulesets: it asks you, and records the names in STATUS.md.
+
+**Auto-merge:** turn on **Settings → General → Pull Requests → Allow auto-merge**. The Director queues a merge with auto-merge only when CI is still pending and the ruleset names its required checks. Without this setting it waits for CI in a background check instead. The Director asks you to turn it on; it doesn't change the setting itself.
 
 ### On GitLab
 
@@ -210,7 +226,9 @@ GitLab's equivalent of rulesets is **protected branches** (Settings → Reposito
 | `main` (protected by default) | Maintainers | **No one** | Off | Every change reaches `main` through an MR. GitLab protects the default branch already; change "Allowed to push and merge" to No one. |
 | `milestone/*` (wildcard) | Developers + Maintainers | Developers + Maintainers | **Off** | The Director pushes and merges here on its own; force pushes would rewrite reviewed work. |
 
-The Director acts through *your* `glab` login. If you're a maintainer, so is it, so server rules can't tell you apart: the guard hook is what stops it merging into `main`, as on GitHub. In Settings → Merge requests, turn on **Pipelines must succeed** once you have CI.
+The Director acts through *your* `glab` login. If you're a maintainer, so is it, so server rules can't tell you apart: the guard hook is what stops it merging into `main`, as on GitHub. Once you have CI, turn on **Pipelines must succeed** in Settings → Merge requests. Without it, a merge can go through before the pipeline finishes. The Director queues a merge with auto-merge (**Merge when pipeline succeeds**, set per MR) only when CI is still pending, and this setting is what makes the queued merge wait for green. The Director asks you to turn it on; it doesn't change it itself.
+
+The CI names come from the head pipeline's jobs, which exist only after CI has run once. Read them with `node "<plugin root>/scripts/ci-wait.js" --names <n>`. GitLab has no per-job list to fill in: **Pipelines must succeed** covers the whole pipeline.
 
 Or from a terminal, for `milestone/*` (for `main`, change the existing protection in the UI):
 
@@ -296,7 +314,14 @@ Bump `version` in both `plugin.json` and `.claude-plugin/plugin.json` whenever r
 - **Effort of the Director itself** isn't visible to Claude Code hooks. On Claude, a decision line's `effort` is `null` unless the Director gives it; on Codex it comes from the session transcript.
 - **Codex gaps:** admins can disable hooks, which turns off the guard and logging. The worktree and agent-file limits above also apply. See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
 - **GitLab support is newer.** It's covered by unit tests against a stand-in `glab` that prints GitLab's MR JSON, and by a run of `tests/live/gitlab-live.sh` against that stand-in. It has not yet been run against a real GitLab instance; `GITLAB_TEST_PROJECT=group/scratch bash tests/live/gitlab-live.sh` does that (see [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md#still-open) for what it would settle). Forge detection reads the `origin` remote; a project whose merges go to another remote needs `AGENT_TEAM_FORGE` or `git config agent-team.forge`. The Codex hook shim's "GitHub rulesets still apply" warning means your forge's branch rules either way.
+- **CI waits are capped by the shell:** Claude's foreground shell stops at 10 minutes, so the reviewer waits for CI in at most two calls (about 9 and 6 minutes, roughly 15 in all). Codex has no background shell that wakes the Director, so without auto-merge a pending PR costs a reviewer re-wait, which is two more Director turns for that PR.
+- **Queued auto-merge and new pushes:** whether GitHub enforces the expected head SHA at the moment a queued auto-merge fires is untested. So the Director disables auto-merge before any push to a queued PR.
+- **Unreadable required checks:** `ci-wait.js` reports `unknown` (exit 2) when the token can't read the required checks. Classic branch protection needs admin rights, so a token without them gets a 403 there. The Director then asks you, and doesn't merge on a guess.
 - **Windows, macOS, Linux:** developed and tested on Windows 11 (Git Bash and PowerShell). The scripts are plain Node, so they should work on other systems, but they haven't been tested there yet.
+
+## Changelog
+
+- **0.6.0 (ci-wait):** CI waiting. `scripts/ci-wait.js` waits for CI on GitHub and GitLab with its own deadline, and reports `unknown` rather than guessing when required checks can't be read. The Director gates each merge on CI in one call, or queues auto-merge when CI is pending. `reconcile-logs.js --merges` checks queued merges. Setup docs now cover required check names (added after the first CI run) and the auto-merge settings.
 
 ## License
 
