@@ -12,19 +12,20 @@ const TIMEOUT_MIN = 8;
 
 const USAGE = `usage: node tests/live/ci-wait-live.js --tool claude|codex --repo OWNER/REPO --plugin <plugin checkout> --label <before|after|...>
          [--probe-auto-head] [--keep] [--seed-only] [--smoke] [--timeout-min N] [--model M] [--out-dir DIR]
+       node tests/live/ci-wait-live.js --repo OWNER/REPO --preflight-only       (read-only check that the repo is ready; starts nothing)
        node tests/live/ci-wait-live.js --repo OWNER/REPO --seed-only            (push the fixture once so the check name exists)
-       node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <live-...-claude> [--dry-run]
+       node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <live-...-claude-xxxx> [--dry-run]
 
 Exit codes: 0 the run finished and the report was written (target misses do NOT change this);
             1 harness error (setup, Director crashed or timed out, wrong plugin loaded, cleanup failed);
-            2 bad arguments or the read-only preflight failed.`;
+            2 bad arguments or the read-only preflight failed (--preflight-only: 0 ready, 2 not ready).`;
 
 // ---- arguments ----
 function parseArgs(argv) {
-  const o = { probeAutoHead: false, keep: false, seedOnly: false, smoke: false, dryRun: false, timeoutMin: 75 };
+  const o = { probeAutoHead: false, keep: false, seedOnly: false, smoke: false, preflightOnly: false, dryRun: false, timeoutMin: 75 };
   const valued = { '--tool': 'tool', '--repo': 'repo', '--plugin': 'plugin', '--label': 'label', '--model': 'model',
     '--out-dir': 'outDir', '--cleanup-run': 'cleanupRun', '--timeout-min': 'timeoutMin' };
-  const flags = { '--probe-auto-head': 'probeAutoHead', '--keep': 'keep', '--seed-only': 'seedOnly', '--smoke': 'smoke', '--dry-run': 'dryRun' };
+  const flags = { '--probe-auto-head': 'probeAutoHead', '--keep': 'keep', '--seed-only': 'seedOnly', '--smoke': 'smoke', '--preflight-only': 'preflightOnly', '--dry-run': 'dryRun' };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (flags[a]) { o[flags[a]] = true; continue; }
@@ -41,12 +42,15 @@ function parseArgs(argv) {
   if (!o.repo || !/^[\w.-]+\/[\w.-]+$/.test(o.repo)) return { error: '--repo OWNER/REPO is required' };
   if (o.tool && !TOOLS.includes(o.tool)) return { error: `--tool must be one of ${TOOLS.join(', ')}` };
   if (o.label && !/^[\w.-]+$/.test(o.label)) return { error: '--label may only use letters, digits, ".", "_" and "-"' };
+  if (o.preflightOnly && o.cleanupRun) return { error: '--preflight-only and --cleanup-run cannot be combined' };
   if (o.cleanupRun) {
-    if (!RUN_RE.test(o.cleanupRun)) return { error: `--cleanup-run must look like live-YYYYMMDDtHHMMSS-claude|codex, got ${o.cleanupRun}` };
+    if (!RUN_RE.test(o.cleanupRun)) return { error: `--cleanup-run must look like live-YYYYMMDDtHHMMSS-claude|codex-xxxx (four hex digits), got ${o.cleanupRun}` };
     return { opts: o };
   }
   if (o.dryRun) return { error: '--dry-run only goes with --cleanup-run' };
   if (o.seedOnly && o.smoke) return { error: '--seed-only and --smoke cannot be combined' };
+  // Only the read-only preflight: needs no tool, plugin or label, and starts nothing.
+  if (o.preflightOnly) return { opts: o };
   if (o.seedOnly) { o.tool = o.tool || 'claude'; return { opts: o }; }
   if (!o.tool) return { error: '--tool claude|codex is required' };
   if (!o.plugin) return { error: '--plugin <path to a plugin checkout> is required' };
@@ -56,11 +60,13 @@ function parseArgs(argv) {
 
 // ---- run prefix ----
 // Every branch, issue and PR the harness makes carries this, so cleanup can find
-// exactly its own and nothing else. The seconds make two runs differ.
-const RUN_RE = /^live-\d{8}t\d{6}-(?:claude|codex)$/;
-function runPrefix(tool, date) {
-  const d = (date || new Date()).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').toLowerCase();   // 20261111t213045z
-  return `live-${d.replace(/z$/, '')}-${tool}`;
+// exactly its own and nothing else. The UTC time makes runs differ; four random hex digits
+// keep two runs of the same tool in the same second from cleaning up each other.
+const RUN_RE = /^live-\d{8}t\d{6}-(?:claude|codex)-[0-9a-f]{4}$/;
+function runPrefix(tool, date, rand) {
+  const d = (date || new Date()).toISOString().replace(/[-:]/g, '').replace(/\..*$/, '').toLowerCase();   // 20261111t213045
+  const r = rand || require('crypto').randomBytes(2).toString('hex');
+  return `live-${d}-${tool}-${r}`;
 }
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
@@ -203,6 +209,7 @@ function checksFinished(rollup) {
   const failed = nodes.filter((n) => done(n) && !['SUCCESS', 'NEUTRAL', 'SKIPPED'].includes(String(n.conclusion || n.state).toUpperCase())).length;
   return { total: nodes.length, pending, failed, finishedAtMs: pending === 0 && times.length ? Math.max(...times) : null };
 }
+const CLOCK_TOLERANCE_S = 10;
 // reported: the last milestone-json ({status, pr, ci}) or null; reportedAtMs: wall clock when it was printed.
 function milestoneTiming(reported, reportedAtMs, rollup) {
   const c = checksFinished(rollup);
@@ -211,12 +218,17 @@ function milestoneTiming(reported, reportedAtMs, rollup) {
   if (reported.status !== 'complete') { out.detail = 'reported incomplete'; return out; }
   if (!c.total) { out.completeBeforeChecksFinished = true; out.detail = 'reported complete but the milestone PR has no checks'; return out; }
   if (c.pending) { out.completeBeforeChecksFinished = true; out.detail = `reported complete while ${c.pending} check(s) were still running`; return out; }
-  if (c.finishedAtMs != null && reportedAtMs != null && c.finishedAtMs > reportedAtMs) {
+  if (c.finishedAtMs == null || reportedAtMs == null) { out.detail = 'checks finished (no usable finish time)'; return out; }
+  // The line is stamped by the local clock and the check by GitHub's, so only a clear gap counts.
+  const margin = Math.round((reportedAtMs - c.finishedAtMs) / 1000);   // positive: printed after the last check finished
+  out.marginSeconds = margin;
+  const when = margin >= 0 ? `${margin}s after` : `${-margin}s before`;
+  if (margin < -CLOCK_TOLERANCE_S) {
     out.completeBeforeChecksFinished = true;
-    out.detail = `reported complete ${Math.round((c.finishedAtMs - reportedAtMs) / 1000)}s before the last check finished`;
-    return out;
+    out.detail = `reported complete ${when} the last check finished (margin ${margin}s, tolerance ${CLOCK_TOLERANCE_S}s)`;
+  } else {
+    out.detail = `reported complete ${when} the last check finished (margin ${margin}s${margin < 0 ? `, within the ${CLOCK_TOLERANCE_S}s clock tolerance` : ''})`;
   }
-  out.detail = c.finishedAtMs != null && reportedAtMs != null ? `reported complete ${Math.round((reportedAtMs - c.finishedAtMs) / 1000)}s after the last check finished` : 'checks finished';
   return out;
 }
 
@@ -231,9 +243,14 @@ function evaluateTargets(input) {
   const per = (taskPrs || []).map((pr) => ({ pr, turns: (summary.ci.byPr[pr] || { turns: 0 }).turns }));
   const worst = per.reduce((a, p) => Math.max(a, p.turns), 0);
   const un = summary.ci.unattributed.turns;
+  // A CI turn that names no PR (a bare `gh pr list --json statusCheckRollup`, a reconcile run) cannot
+  // be pinned on one PR, so it counts against the total: task-PR turns plus these must not exceed
+  // the number of task PRs. Turns that only name another PR (the milestone PR) are not counted.
+  const total = per.reduce((a, p) => a + p.turns, 0) + un;
+  const ok2 = worst <= 1 && total <= per.length;
   t.push({ id: 'ci-turns-per-task-pr', name: '<= 1 CI-related Director turn per task PR',
-    result: !per.length ? 'N/A' : worst <= 1 ? 'PASS' : 'FAIL',
-    detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}${un ? `; plus ${un} CI turn(s) not tied to a PR` : ''}` : 'no task PRs found' });
+    result: !per.length ? 'N/A' : ok2 ? 'PASS' : 'FAIL',
+    detail: per.length ? `${per.map((p) => `#${p.pr}: ${p.turns}`).join(', ')}; ${total} CI turn(s) for ${per.length} task PR(s)${un ? `, ${un} of them not tied to a PR` : ''}` : 'no task PRs found' });
   const pend = reviews.pending;
   const bad = pend.filter((p) => !p.timeout);
   t.push({ id: 'pending-only-on-timeout', name: 'reviewer pending only on timeout', result: bad.length ? 'FAIL' : 'PASS',
@@ -316,7 +333,23 @@ function secretsFromJson(text) {
   return out;
 }
 
+// ---- the run's temp folder ----
+// The harness records its temp folder in a small run file under the out-dir at start, so a run
+// that was hard-killed can still be cleaned up by --cleanup-run. A recorded folder is deleted
+// only when it is <base>/<digits> (the harness's own per-process folder, base being the one
+// recorded with it) and holds nothing but h/ (Codex home) and p/ (the clone).
+const nodePath = require('path');
+function deletableTemp(tmp, base, entries) {
+  if (typeof tmp !== 'string' || typeof base !== 'string' || !tmp || !base) return false;
+  const t = nodePath.resolve(tmp);
+  if (nodePath.resolve(nodePath.dirname(t)) !== nodePath.resolve(base)) return false;
+  if (!/^\d+$/.test(nodePath.basename(t))) return false;
+  return (entries || []).every((e) => e === 'h' || e === 'p');
+}
+const runFileName = (run) => `ci-wait-${run}.run.json`;
+
 module.exports = {
+  CLOCK_TOLERANCE_S, deletableTemp, runFileName,
   CHECK_NAME, TOOLS, TIMEOUT_MIN, USAGE, RUN_RE,
   parseArgs, runPrefix, ownsBranch, selectCleanup,
   evaluatePreflight, requiredChecksIn, rulesetSteps,

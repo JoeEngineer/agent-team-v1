@@ -227,3 +227,46 @@ test('ci-turns: empty and junk input give zero turns', () => {
   const r = T.parseClaudeStream('not json\n' + JSON.stringify(asst('m', [{ type: 'text', text: 'x' }], usage(1, 2, 3))) + '\n');
   eq(r.contextTokens, 6, 'stray stderr line skipped');
 });
+
+test('ci-turns: backgrounding shapes (& echo $!, nohup, Start-Process, Start-Job) vs foreground look-alikes', () => {
+  const bg = [
+    'gh pr checks 3 --watch &', 'gh pr checks 3 --watch & echo $!', 'gh pr checks 3 --watch &; echo started',
+    'nohup gh pr checks 3 --watch > out.txt 2>&1 &', 'gh pr checks 3 --watch &\necho started',
+    'Start-Process gh -ArgumentList "pr checks 3 --watch" -NoNewWindow', 'Start-Job { gh pr checks 3 --watch }', 'Start-ThreadJob { gh run watch 5 }',
+  ];
+  for (const c of bg) assert(T.isBackgroundCommand(c), `should be background: ${JSON.stringify(c)}`);
+  const fg = ['gh pr checks 3 --watch', 'a && gh pr checks 3 --watch', 'gh pr checks 3 2>&1', 'gh pr view 3 >&2', 'gh pr checks 3 &>/dev/null',
+    'Start-Process gh -ArgumentList "pr checks 3 --watch" -Wait -NoNewWindow', 'nohup gh pr checks 3 --watch', ''];
+  for (const c of fg) assert(!T.isBackgroundCommand(c), `should be foreground: ${JSON.stringify(c)}`);
+  // and it reaches the watch count
+  const r = T.parseClaudeStream([
+    asst('m1', [bash('a', 'gh pr checks 3 --watch & echo $!', false)], usage(1, 10, 0)),
+    asst('m2', [tool('b', 'PowerShell', { command: 'Start-Job { gh pr checks 4 --watch }' })], usage(1, 20, 0)),
+    asst('m3', [tool('c', 'PowerShell', { command: 'Start-Process powershell -ArgumentList "-Command gh run watch 9" -Wait' })], usage(1, 30, 0)),
+  ]);
+  eq(r.watch.background, 2, 'background watches');
+  eq(r.watch.foreground, 1, 'foreground watch (Start-Process -Wait)');
+});
+
+test('ci-turns: the Monitor tool runs a command in the background and is CI when the command is', () => {
+  const r = T.parseClaudeStream([
+    asst('m1', [tool('mon1', 'Monitor', { command: 'until gh pr checks 5 --watch; do sleep 20; done', description: 'wait for ci', timeout_ms: 600000 })], usage(1, 10, 0)),
+    asst('m2', [tool('mon2', 'Monitor', { command: 'tail -f build.log' })], usage(1, 20, 0)),
+  ]);
+  nodeAssert.deepStrictEqual(r.turns.map((t) => t.ci), [true, false]);
+  nodeAssert.deepStrictEqual(r.turns[0].prs, ['5']);
+  eq(r.turns[0].tools[0].background, true, 'Monitor is background');
+  eq(r.watch.foreground, 0, 'a --watch inside Monitor is not foreground');
+  eq(r.watch.background, 1, 'but is counted as a background watch');
+  eq(T.commandOf('Monitor', { command: 'echo hi' }).background, true, 'commandOf marks Monitor background');
+  eq(T.commandOf('Bash', { command: 'echo hi' }).background, false, 'Bash foreground by default');
+});
+
+test('ci-turns: ci-wait.js --names and --once take PR numbers; flag values still do not', () => {
+  nodeAssert.deepStrictEqual(T.prNumbers('node scripts/ci-wait.js --names 12'), ['12']);
+  nodeAssert.deepStrictEqual(T.prNumbers('node scripts/ci-wait.js --once 4 5 --allow-none'), ['4', '5']);
+  nodeAssert.deepStrictEqual(T.prNumbers('node scripts/ci-wait.js 7 --timeout 540 --interval 30'), ['7']);
+  const r = T.parseClaudeStream([asst('m1', [bash('a', 'node scripts/ci-wait.js --names 12', false)], usage(1, 10, 0))]);
+  nodeAssert.deepStrictEqual(r.ci.byPr, { 12: { turns: 1, contextTokens: 11 } });
+  eq(r.ci.unattributed.turns, 0, 'attributed, not unattributed');
+});

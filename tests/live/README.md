@@ -58,10 +58,11 @@ node tests/live/ci-wait-live.js --tool codex --repo OWNER/REPO --plugin <path to
 | `--label <text>` | Names the report (`before`, `after`, ...). |
 | `--probe-auto-head` | After the run, queue `gh pr merge --auto --squash --match-head-commit <sha>` on a throwaway PR into the run's milestone branch, push another commit, wait for the checks, and record whether it merged anyway (`merged-anyway`, `held` or `inconclusive`). |
 | `--keep` | Keep the temp folder and the GitHub items for inspection (the copied Codex `auth.json` is still deleted). |
+| `--preflight-only` | Run only the read-only preflight and exit: 0 when the repo is ready, 2 when it is not (with the steps to fix it). Starts no clone, PR or Director. **Use this to check readiness**: running the harness without it starts a real run, including a seed run of about 3 minutes. |
 | `--seed-only` | Push the fixture once so the `sample-ci` check name exists, then clean up. Use it before adding the check to the ruleset. |
 | `--smoke` | Plumbing check only: a one-line Director prompt instead of the milestone, about 3 minutes. It does not need auto-merge or the ruleset. |
 | `--model M`, `--timeout-min N`, `--out-dir DIR` | Director model (default: the tool's default), Director time limit (default 75), where the report goes (default `<tmp>/agent-team-ci-wait-live`). |
-| `--cleanup-run <run> [--dry-run]` | Close the open PRs and issues and delete the branches of one earlier run, for example after the harness was killed. `--dry-run` only lists them. |
+| `--cleanup-run <run> [--dry-run] [--out-dir DIR]` | Close the open PRs and issues, delete the branches of one earlier run, and delete that run's temp folder (found through the run file below), for example after the harness was killed hard. `--dry-run` only lists them. Pass the same `--out-dir` the run used, if any. |
 
 ## What you set up once
 
@@ -70,12 +71,13 @@ The scratch repo is a private GitHub repo with a `main` branch (a README is enou
 1. Settings > General > Pull Requests: tick **Allow auto-merge**.
 2. Run `node tests/live/ci-wait-live.js --repo OWNER/REPO --seed-only` once. It pushes the fixture on a branch, opens a PR so the workflow runs, waits for `sample-ci`, and removes what it made. GitHub only offers check names it has seen run.
 3. Settings > Rules > Rulesets > New branch ruleset: name `protect-milestones`, enforcement Active, empty bypass list, target `milestone/*` by pattern, **Block force pushes** on, **Require status checks to pass** on with `sample-ci`, **Require a pull request** off, **Restrict deletions** off. This is "Ruleset 2" of the plugin README with the check added. Rulesets on a private repo need a paid GitHub plan.
+4. Check it with `node tests/live/ci-wait-live.js --repo OWNER/REPO --preflight-only`, not with a plain run: a plain run starts a real seed run and a Director.
 
-Before every run the harness does a read-only preflight: `gh` logged in, repo reachable with push access, Actions enabled, `allow_auto_merge`, and a ruleset requiring `sample-ci` on `milestone/*`. If something is missing it prints what, and the exact steps, and exits with code 2 without touching anything.
+Before every run the harness does a read-only preflight (`--preflight-only` runs just this): `gh` logged in, repo reachable with push access, Actions enabled, `allow_auto_merge`, and a ruleset requiring `sample-ci` on `milestone/*`. If something is missing it prints what, and the exact steps, and exits with code 2 without touching anything.
 
 ## What a run does
 
-1. Clones the repo into a short temp folder (`C:\cw6\<pid>` on Windows, `<tmp>/cw6/<pid>` elsewhere; `AGENT_TEAM_LIVE_TMP` changes the base). Everything it creates carries a run prefix, `live-<UTC timestamp>-<tool>`.
+1. Clones the repo into a short temp folder (`C:\cw6\<pid>` on Windows, `<tmp>/cw6/<pid>` elsewhere; `AGENT_TEAM_LIVE_TMP` changes the base). Everything it creates carries a run prefix, `live-<UTC timestamp>-<tool>-<4 hex digits>`; the random part keeps two runs of the same tool in the same second apart. Before creating anything in the temp folder it writes a small run file, `ci-wait-<run>.run.json`, in the out-dir with the run name and the temp folder path, so `--cleanup-run` can find the folder later.
 2. Seeds the fixture (`tests/live/fixtures/ci-sample`: a dependency-free Node project, a `sample-ci` workflow of about two minutes, and the files `team-init` would create). The fixture goes on `<run>-seed`, a PR runs the workflow on that commit, and once `sample-ci` is green the same commit is pushed as `milestone/<run>`. That is why a ruleset that requires `sample-ci` on `milestone/*` does not block the first push. The seed PR is then closed.
 3. Starts the Director headless in the clone with the plugin under test:
    - Claude: `claude -p --plugin-dir <plugin> --output-format stream-json --verbose --dangerously-skip-permissions`. The run stops at once if Claude loaded a different `agent-team` than `--plugin`, or if the `agent-team hooks: active` line is missing, so the guard hooks always run.
@@ -92,9 +94,9 @@ A PASS/FAIL table for the four targets, the metrics, and a JSON file with everyt
 | Target | PASS when |
 |---|---|
 | no foreground `--watch` | no `--watch` command (or `gh run watch`) ran in the foreground. On Codex there is no background shell, so any `--watch` counts. |
-| <= 1 CI-related Director turn per task PR | for each PR into the milestone branch, at most one Director turn was about CI. CI turns that name no PR are listed next to the verdict, not counted against a PR. |
+| <= 1 CI-related Director turn per task PR | for each PR into the milestone branch, at most one Director turn was about CI, **and** the CI turns on task PRs plus the CI turns that name no PR (a bare `gh pr list --json statusCheckRollup`, a `reconcile-logs.js --merges` run) number no more than the task PRs. So three task PRs allow three CI turns in all; one extra turn that names no PR fails it. Turns that name only another PR, such as the milestone PR, are not counted. The detail line says how many turns were not tied to a PR. |
 | reviewer `pending` only on timeout | every `ci: pending` in `reviews.jsonl` has a summary that states a wait of 8 minutes or more (the helper's default deadline is 9). |
-| not "complete" before the PR checks finished | the Director's `milestone-json` said `incomplete`, or the milestone PR's checks had all finished before the line was printed (stamped when the harness read it from the stream, compared with the checks' `completedAt` from `gh pr view`). `N/A` when no line was printed. |
+| not "complete" before the PR checks finished | the Director's `milestone-json` said `incomplete`, or the milestone PR's checks had all finished before the line was printed. The line is stamped with the local clock when the harness reads it from the stream and compared with GitHub's `completedAt` for the last check, so only a gap of more than 10 seconds counts as early; the margin in seconds (negative: printed before the check finished) is shown next to the verdict and kept in the JSON as `milestone.marginSeconds`. `N/A` when no line was printed. |
 
 A baseline run is expected to miss targets: that is data, not a harness failure. **Exit code:** 0 when the run finished and the report was written, whatever the targets say; 1 for a harness error (setup failed, the Director crashed or timed out, the wrong plugin or no hooks, cleanup failed); 2 for bad arguments or a failed preflight.
 
@@ -112,7 +114,9 @@ Each run takes 20 to 40 minutes of wall clock, plus the Director's model usage (
 
 ## Cleanup
 
-On success, failure and Ctrl-C (SIGTERM and SIGHUP too, where the OS delivers them) the harness closes its own open PRs and issues, deletes the branches whose name starts with its run prefix (never `main` or the default branch, never another run's), and removes the temp folder, including any copied Codex `auth.json`. Auth is never written to the report, the transcript copy or the console. A process that is killed hard (on Windows, Stop-Process or a background task stopped by its parent) gets no handler: run `node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <run> --dry-run` to see what is left, then without `--dry-run` to remove it. The run name is in the first lines of the output. `--keep` skips cleanup and prints that command.
+On success, failure and Ctrl-C (SIGTERM and SIGHUP too, where the OS delivers them) the harness closes its own open PRs and issues, deletes the branches whose name starts with its run prefix (never `main` or the default branch, never another run's), and removes the temp folder, including any copied Codex `auth.json`. Auth is never written to the report, the transcript copy or the console.
+
+A process that is killed hard (on Windows, Stop-Process, a timeout that kills the process, or a background task stopped by its parent) gets no handler, so it leaves its PRs, issues and branches on GitHub **and its temp folder** (`C:\cw6\<pid>` by default), which for a Codex run holds a copied `auth.json` under `h\`. Run `node tests/live/ci-wait-live.js --repo OWNER/REPO --cleanup-run <run> --dry-run` to see what is left (the run name is in the first lines of the output, and in the file name of the run file), then the same without `--dry-run`. It deletes the temp folder it finds in the run file, but only if that folder is `<base>/<digits>` and holds nothing but `h` and `p`; anything else is left alone and reported. If there is no run file (a different `--out-dir`, or it was deleted), delete the temp folder by hand. `--keep` skips cleanup, leaves the run file and prints that command.
 
 ## Known gaps
 

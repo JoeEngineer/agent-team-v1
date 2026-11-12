@@ -134,13 +134,37 @@ function cleanupTemp() {
   try { fs.rmSync(path.join(t, 'h', 'auth.json'), { force: true }); } catch (e) { /* ignore */ }
   try { fs.rmSync(t, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch (e) { log(`cleanup incomplete: ${t}`); }
   try { fs.rmdirSync(S.base); } catch (e) { /* not empty or gone */ }
+  if (S.runFile && !fs.existsSync(t)) try { fs.rmSync(S.runFile, { force: true }); } catch (e) { /* ignore */ }
+}
+const outDirOf = (opts) => (opts.outDir ? path.resolve(opts.outDir) : path.join(os.tmpdir(), 'agent-team-ci-wait-live'));
+// --cleanup-run: also delete the run's temp folder (it may hold a copied Codex auth.json) when the
+// run file written at its start says where it was. Refuses anything that is not <base>/<digits>
+// holding only h/ and p/.
+function cleanupRecordedTemp(opts, runPrefix, { dryRun } = {}) {
+  const file = path.join(outDirOf(opts), L.runFileName(runPrefix));
+  let rec = null;
+  try { rec = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* no run file */ }
+  if (!rec) { log(`no run file for ${runPrefix} in ${outDirOf(opts)} (pass --out-dir if the run used one): its temp folder, if any, must be deleted by hand`); return { ok: true, found: false }; }
+  if (rec.run !== runPrefix) { log(`run file ${file} is for another run; temp folder left alone`); return { ok: false, found: true }; }
+  if (!fs.existsSync(rec.tmp)) { log(`temp folder ${rec.tmp} is already gone`); if (!dryRun) fs.rmSync(file, { force: true }); return { ok: true, found: true, gone: true }; }
+  let entries = [];
+  try { entries = fs.readdirSync(rec.tmp); } catch (e) { /* unreadable: refused below */ }
+  if (!L.deletableTemp(rec.tmp, rec.base, entries)) { log(`refusing to delete ${rec.tmp}: it is not a harness temp folder (<base>/<pid> holding only h and p)`); return { ok: false, found: true, refused: true }; }
+  if (dryRun) { log(`(dry run) would delete the temp folder ${rec.tmp}`); return { ok: true, found: true, dryRun: true }; }
+  try { fs.rmSync(path.join(rec.tmp, 'h', 'auth.json'), { force: true }); } catch (e) { /* ignore */ }
+  try { fs.rmSync(rec.tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); } catch (e) { log(`could not delete ${rec.tmp}: ${e.message}`); return { ok: false, found: true }; }
+  try { fs.rmdirSync(rec.base); } catch (e) { /* not empty or gone */ }
+  if (fs.existsSync(rec.tmp)) { log(`temp folder ${rec.tmp} is still there`); return { ok: false, found: true }; }
+  fs.rmSync(file, { force: true });
+  log(`deleted the temp folder ${rec.tmp}`);
+  return { ok: true, found: true, deleted: true };
 }
 function cleanupAll() {
   killTree(S.child);
   if (S.opts && S.opts.keep) {
     // Kept for inspection, but never leave credentials behind.
     if (S.tmp) try { fs.rmSync(path.join(S.tmp, 'h', 'auth.json'), { force: true }); } catch (e) { /* ignore */ }
-    if (S.run) log(`--keep: left the temp folder ${S.tmp} and the GitHub items. Clean up later with: node tests/live/ci-wait-live.js --repo ${S.opts.repo} --cleanup-run ${S.run}`);
+    if (S.run) log(`--keep: left the temp folder ${S.tmp} and the GitHub items. Clean up later with: node tests/live/ci-wait-live.js --repo ${S.opts.repo} --cleanup-run ${S.run}${S.opts.outDir ? ` --out-dir ${S.opts.outDir}` : ''}`);
     return { ok: true, kept: true };
   }
   let res = { ok: true };
@@ -336,7 +360,16 @@ async function main() {
     const head = gh(['api', `repos/${opts.repo}`, '--jq', '.default_branch']);
     if (ok(head) && head.stdout.trim()) S.defaultBranch = head.stdout.trim();
     const r = cleanupRemote(opts, opts.cleanupRun, { dryRun: opts.dryRun });
-    return r.ok ? 0 : 1;
+    const t = cleanupRecordedTemp(opts, opts.cleanupRun, { dryRun: opts.dryRun });
+    return r.ok && t.ok ? 0 : 1;
+  }
+
+  // Read-only: report whether the repo is ready and stop. Starts no run, no clone, no PR.
+  if (opts.preflightOnly) {
+    const only = preflight(Object.assign({}, opts, { seedOnly: opts.seedOnly || opts.smoke }));
+    printPreflight(only);
+    log(only.ok ? '\nThe repo is ready for a run.' : '');
+    return only.ok ? 0 : 2;
   }
 
   // Plugin under test and tool checks.
@@ -367,10 +400,15 @@ async function main() {
   const clone = path.join(S.tmp, 'p');
   const home = path.join(S.tmp, 'h');
   fs.mkdirSync(S.tmp, { recursive: true });
+  // Say where the temp folder is before anything is put in it, so --cleanup-run can find it
+  // even if this process is killed hard.
+  const runDir = outDirOf(opts);
+  fs.mkdirSync(runDir, { recursive: true });
+  S.runFile = path.join(runDir, L.runFileName(S.run));
+  fs.writeFileSync(S.runFile, JSON.stringify({ run: S.run, repo: opts.repo, tmp: S.tmp, base: S.base, pid: process.pid, startedAt: new Date().toISOString() }));
   const report = { harness: 'ci-wait-live', schema: 1, smoke: opts.smoke, label: opts.label || null, tool: opts.tool, repo: opts.repo, run: S.run, plugin: pluginInfo,
     startedAt: new Date().toISOString(), preflight: pf.checks, errors: [], warnings: [] };
-  const outDir = opts.outDir ? path.resolve(opts.outDir) : path.join(os.tmpdir(), 'agent-team-ci-wait-live');
-  fs.mkdirSync(outDir, { recursive: true });
+  const outDir = runDir;
   const jsonPath = path.join(outDir, `ci-wait-${S.run}${opts.label ? '-' + opts.label : ''}.json`);
   const writeReport = () => fs.writeFileSync(jsonPath, redact(JSON.stringify(report, null, 2)));
   log(`\nrun ${S.run}  (temp ${S.tmp})`);

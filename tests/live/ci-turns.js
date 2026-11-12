@@ -28,10 +28,25 @@ const CI_PATTERNS = [
 ];
 // A blocking watch: `gh pr checks --watch`, `gh run watch`, any --watch flag.
 const WATCH = /--watch\b|\bgh(?:\.exe)?\s+run\s+watch\b/;
-// Shell commands that end in a lone `&` run in the background (sh and bash).
-const TRAILING_AMP = /(?:^|[^&])&\s*$/;
+// A command that does not block the call. sh/bash: a lone `&` ending a line, alone or
+// followed by `echo $!` / `disown` (so also `nohup cmd &`). PowerShell: Start-Job,
+// Start-ThreadJob, and Start-Process unless it has -Wait. Judged on the whole command
+// text, so a script that backgrounds one line and runs another in the foreground counts
+// as background.
+const AMP_BACKGROUND = /(?:^|[^&>])&\s*(?:(?:;\s*)?(?:echo\b[^\n]*|disown\b[^\n]*))?$/m;
+const PS_JOB = /\b(?:Start-Job|Start-ThreadJob)\b/i;
+const PS_START_PROCESS = /\bStart-Process\b/i;
+function isBackgroundCommand(cmd) {
+  const c = String(cmd || '');
+  if (AMP_BACKGROUND.test(c) || PS_JOB.test(c)) return true;
+  return PS_START_PROCESS.test(c) && !/-Wait\b/i.test(c);
+}
 
+// Tools that run a shell command. Monitor runs one and streams its output back as
+// notifications, so it never blocks the call: always background.
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+const COMMAND_TOOLS = new Set([...SHELL_TOOLS, 'Monitor']);
+const ALWAYS_BACKGROUND = new Set(['Monitor']);
 
 // Which CI patterns a command matches (labels). Empty when it is not about CI.
 function ciKinds(cmd) {
@@ -40,8 +55,8 @@ function ciKinds(cmd) {
 }
 const isWatch = (cmd) => WATCH.test(String(cmd || ''));
 
-// Flags that take no value, so a number after them is a PR number.
-const BOOL_FLAGS = new Set(['--auto', '--auto-merge', '--squash', '--merge', '--rebase', '--delete-branch', '--admin',
+// Flags that take no value, so a number after them is a PR number (ci-wait.js --once 12, --names 12).
+const BOOL_FLAGS = new Set(['--names', '--allow-none', '--auto', '--auto-merge', '--squash', '--merge', '--rebase', '--delete-branch', '--admin',
   '--once', '--watch', '--fail-fast', '--required', '--web', '--disable-auto', '--no-delete-branch']);
 // PR numbers a command names: `gh pr <sub> 12`, `glab mr <sub> 12`, `ci-wait.js 12 13`.
 function prNumbers(cmd) {
@@ -77,10 +92,10 @@ function commandOf(name, input) {
     if (Array.isArray(c)) c = c.join(' ');
     if (c == null) c = JSON.stringify(o);
     const bg = o.run_in_background === true;
-    return { command: String(c), background: bg || TRAILING_AMP.test(String(c)) };
+    return { command: String(c), background: bg || ALWAYS_BACKGROUND.has(name) || isBackgroundCommand(c) };
   }
   const c = String(o == null ? '' : o);
-  return { command: c, background: TRAILING_AMP.test(c) };
+  return { command: c, background: ALWAYS_BACKGROUND.has(name) || isBackgroundCommand(c) };
 }
 
 const ctxTokens = (u) => !u ? 0 : (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
@@ -220,9 +235,9 @@ function parseClaudeStream(input) {
     turn.tokens = Math.max(turn.tokens, ctxTokens(o.message.usage));
     for (const b of Array.isArray(o.message.content) ? o.message.content : []) {
       if (!b || b.type !== 'tool_use' || toolUses.has(b.id)) continue;
-      // Only shell tools run commands. Other tools (Agent, Read, ...) are kept as plain
-      // records and count only when they poll a CI background task (matched below).
-      const rec = SHELL_TOOLS.has(b.name)
+      // Only shell tools and Monitor run commands. Other tools (Agent, Read, ...) are kept as
+      // plain records and count only when they poll a CI background task (matched below).
+      const rec = COMMAND_TOOLS.has(b.name)
         ? toolFrom(b.name, b.input, b.id)
         : { name: b.name, id: b.id, command: JSON.stringify(b.input || '').slice(0, 400), background: false, kinds: [], prs: [], watch: false };
       rec.turn = turn.index;
@@ -239,7 +254,7 @@ function parseClaudeStream(input) {
   }
   for (const t of turns) {
     for (const rec of t.tools) {
-      if (SHELL_TOOLS.has(rec.name)) continue;
+      if (COMMAND_TOOLS.has(rec.name)) continue;
       for (const id of ciTaskIds) if ((rec.command || '').includes(id)) { rec.kinds = ['poll-background-ci']; break; }
     }
     for (const n of t.notified) {
@@ -311,7 +326,7 @@ function isDirectorRollout(objs) {
 }
 
 module.exports = {
-  CI_PATTERNS, ciKinds, isWatch, prNumbers, commandOf, ctxTokens, toObjects,
+  CI_PATTERNS, isBackgroundCommand, ciKinds, isWatch, prNumbers, commandOf, ctxTokens, toObjects,
   milestoneJsonIn, milestoneJsonInEvent, directorText, hooksActiveIn,
   summarize, parseClaudeStream, parseCodexRollout, isDirectorRollout,
 };

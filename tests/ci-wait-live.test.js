@@ -15,9 +15,10 @@ const L = require('./live/ci-wait-lib.js');
 const LIVE = path.join(__dirname, 'live');
 const HARNESS = path.join(LIVE, 'ci-wait-live.js');
 const FIXTURE = path.join(LIVE, 'fixtures', 'ci-sample');
-const RUN = 'live-20261112t012548-claude';
-const OTHER_TOOL = 'live-20261112t012548-codex';
-const OTHER_RUN = 'live-20261111t000000-claude';
+const RUN = 'live-20261112t012548-claude-a1b2';
+const SIBLING = 'live-20261112t012548-claude-c3d4';   // same tool, same second, other random part
+const OTHER_TOOL = 'live-20261112t012548-codex-a1b2';
+const OTHER_RUN = 'live-20261111t000000-claude-9f3e';
 
 // ---- arguments ----
 test('ci-wait-live args: a full run needs tool, repo, plugin and label', () => {
@@ -53,15 +54,41 @@ test('ci-wait-live args: --seed-only, --smoke and --cleanup-run are their own mo
   eq(c.opts.dryRun, true, 'dry run');
   assert(L.parseArgs(['--repo', 'o/r', '--cleanup-run', 'main']).error, 'a prefix that is not a run prefix is refused');
   assert(L.parseArgs(['--repo', 'o/r', '--cleanup-run', 'live-1-claude']).error, 'a malformed timestamp is refused');
+  assert(L.parseArgs(['--repo', 'o/r', '--cleanup-run', 'live-20261112t012548-claude']).error, 'a prefix without the random part is refused');
+  assert(L.parseArgs(['--repo', 'o/r', '--cleanup-run', 'live-20261112t012548-claude-a1b']).error, 'a short random part is refused');
   assert(L.parseArgs(['--tool', 'claude', '--repo', 'o/r', '--plugin', 'p', '--label', 'x', '--dry-run']).error.includes('--cleanup-run'), '--dry-run alone');
 });
 
-test('ci-wait-live: the run prefix is unique per second and per tool, and matches RUN_RE', () => {
+test('ci-wait-live args: --preflight-only needs only a repo and cannot be mixed with --cleanup-run', () => {
+  const p = L.parseArgs(['--repo', 'o/r', '--preflight-only']);
+  eq(p.error, undefined, 'valid without tool, plugin or label');
+  eq(p.opts.preflightOnly, true, 'flag set');
+  assert(L.parseArgs(['--preflight-only']).error.includes('--repo'), 'still needs --repo');
+  assert(L.parseArgs(['--repo', 'o/r', '--preflight-only', '--cleanup-run', RUN]).error.includes('cannot be combined'), 'with --cleanup-run');
+  assert(L.parseArgs(['--repo', 'o/r', '--preflight-only', '--dry-run']).error.includes('--cleanup-run'), '--dry-run alone');
+  eq(L.parseArgs(['--repo', 'o/r']).error.includes('--tool'), true, 'a plain run still needs a tool');
+});
+
+test('ci-wait-live: the run prefix differs per second, per tool and per random part, and matches RUN_RE', () => {
   const d = new Date('2026-11-12T01:25:48.999Z');
-  eq(L.runPrefix('claude', d), RUN, 'prefix');
+  eq(L.runPrefix('claude', d, 'a1b2'), RUN, 'prefix');
   assert(L.RUN_RE.test(L.runPrefix('codex', d)), 'codex prefix matches');
-  assert(L.runPrefix('claude', d) !== L.runPrefix('claude', new Date('2026-11-12T01:25:49Z')), 'next second differs');
-  assert(L.runPrefix('claude', d) !== L.runPrefix('codex', d), 'tools differ');
+  assert(L.RUN_RE.test(L.runPrefix('claude', d)), 'a generated random part matches');
+  assert(L.runPrefix('claude', d, 'a1b2') !== L.runPrefix('claude', new Date('2026-11-12T01:25:49Z'), 'a1b2'), 'next second differs');
+  assert(L.runPrefix('claude', d, 'a1b2') !== L.runPrefix('codex', d, 'a1b2'), 'tools differ');
+  // two runs of the same tool in the same second differ by the random part (16 draws, 65536 values)
+  const seen = new Set(Array.from({ length: 16 }, () => L.runPrefix('claude', d)));
+  assert(seen.size > 1, 'the random part varies between calls');
+});
+
+test('ci-wait-live cleanup: a run in the same second with the same tool does not touch this one, and vice versa', () => {
+  const l = {
+    branches: [`milestone/${RUN}`, `task/${RUN}-1`, `milestone/${SIBLING}`, `task/${SIBLING}-1`, `${SIBLING}-seed`],
+    prs: [{ number: 1, title: `${RUN} seed`, headRefName: `${RUN}-seed` }, { number: 2, title: `${SIBLING}-1: x`, headRefName: `task/${SIBLING}-1` }],
+    issues: [{ number: 3, title: `${RUN}: m`, body: '' }, { number: 4, title: `${SIBLING}: m`, body: `${SIBLING}-1` }],
+  };
+  nodeAssert.deepStrictEqual(L.selectCleanup(l, RUN, 'main'), { branches: [`milestone/${RUN}`, `task/${RUN}-1`], prs: [1], issues: [3] });
+  nodeAssert.deepStrictEqual(L.selectCleanup(l, SIBLING, 'main'), { branches: [`milestone/${SIBLING}`, `task/${SIBLING}-1`, `${SIBLING}-seed`], prs: [2], issues: [4] });
 });
 
 // ---- cleanup selection (dry-run listing) ----
@@ -200,6 +227,16 @@ test('ci-wait-live milestone: "complete" printed before the checks finished is f
   const before = L.milestoneTiming(complete, T0 - 20000, [done('2026-11-12T01:30:00Z')]);
   eq(before.completeBeforeChecksFinished, true, 'printed 20 s before it finished');
   assert(/20s before/.test(before.detail), before.detail);
+  eq(before.marginSeconds, -20, 'margin is reported (negative: printed before the finish)');
+  eq(after.marginSeconds, 30, 'margin is reported (positive: printed after the finish)');
+  assert(/margin 30s/.test(after.detail) && /margin -20s/.test(before.detail), 'margin shows in the verdict text');
+  // clock tolerance: only a clear gap is flagged (10 s)
+  const at = (s) => L.milestoneTiming(complete, T0 + s * 1000, [done('2026-11-12T01:30:00Z')]);
+  eq(at(-5).completeBeforeChecksFinished, false, '5 s early is within the tolerance');
+  assert(/within the 10s clock tolerance/.test(at(-5).detail), at(-5).detail);
+  eq(at(-10).completeBeforeChecksFinished, false, 'exactly 10 s early is not flagged');
+  eq(at(-11).completeBeforeChecksFinished, true, '11 s early is flagged');
+  eq(at(-11).marginSeconds, -11, 'margin of the flagged case');
   const pending = L.milestoneTiming(complete, T0 + 99999, [running]);
   eq(pending.completeBeforeChecksFinished, true, 'still running now');
   eq(pending.checks.finishedAtMs, null, 'an unfinished check has no finish time');
@@ -222,7 +259,16 @@ test('ci-wait-live targets: PASS, FAIL and N/A come out of the metrics', () => {
     reviews: { total: 2, byCi: { pending: 1 }, pending: [{ statesTimeWaited: false, waitedMinutes: null, timeout: false }] },
     milestone: { reported: { status: 'complete' }, completeBeforeChecksFinished: true, detail: 'early' } });
   nodeAssert.deepStrictEqual(bad.map((t) => t.result), ['FAIL', 'FAIL', 'FAIL', 'FAIL']);
-  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /2 CI turn/.test(bad[1].detail), bad[1].detail);
+  assert(/#4: 3/.test(bad[1].detail) && /#5: 0/.test(bad[1].detail) && /5 CI turn\(s\) for 2 task PR\(s\), 2 of them not tied to a PR/.test(bad[1].detail), bad[1].detail);
+  // Unattributed CI turns count against the total: one per PR is fine, one extra is not.
+  const perPrOk = { 4: { turns: 1 }, 5: { turns: 1 } };
+  const pick = (s) => L.evaluateTargets({ summary: s, taskPrs: ['4', '5'], reviews: quiet, milestone: okMs })[1];
+  eq(pick(summary(0, perPrOk, 0)).result, 'PASS', '2 turns for 2 PRs');
+  eq(pick(summary(0, perPrOk, 1)).result, 'FAIL', 'every PR at 1 and one more turn that names no PR');
+  assert(/3 CI turn\(s\) for 2 task PR\(s\), 1 of them not tied to a PR/.test(pick(summary(0, perPrOk, 1)).detail), pick(summary(0, perPrOk, 1)).detail);
+  eq(pick(summary(0, { 4: { turns: 1 } }, 1)).result, 'PASS', 'a PR with no CI turn leaves room for one unattributed turn');
+  eq(pick(summary(0, { 4: { turns: 1 } }, 2)).result, 'FAIL', 'two unattributed turns with only one attributed is 3 for 2 PRs');
+  eq(pick(summary(0, { 4: { turns: 1 }, 9: { turns: 3 } }, 0)).result, 'PASS', 'turns on a PR that is not a task PR (the milestone PR) are not counted');
   const none = L.evaluateTargets({ summary: summary(0, {}), taskPrs: [], reviews: { total: 0, byCi: {}, pending: [{ timeout: true, waitedMinutes: 9 }] }, milestone: { reported: null, completeBeforeChecksFinished: false, detail: 'none' } });
   nodeAssert.deepStrictEqual(none.map((t) => t.result), ['PASS', 'N/A', 'PASS', 'N/A']);
   assert(L.renderTable(good).split('\n').length === 4, 'one row per target');
@@ -302,9 +348,9 @@ const has = (x) => a.includes(x);
 if (a[0] === '--version') out('gh fake');
 if (a[0] === 'auth') out('ok');
 if (a[0] === 'api' && a[1] === 'repos/o/r' && has('--jq')) out('main');
-if (a[0] === 'api' && a[1] === 'repos/o/r') out({ private: true, default_branch: 'main', permissions: { push: true }, allow_auto_merge: true, allow_squash_merge: true });
+if (a[0] === 'api' && a[1] === 'repos/o/r') out({ private: true, default_branch: 'main', permissions: { push: true }, allow_auto_merge: E.FAKE_AUTO_MERGE !== '0', allow_squash_merge: true });
 if (a[0] === 'api' && a[1] === 'repos/o/r/actions/permissions') out({ enabled: true });
-if (a[0] === 'api' && /rules\\/branches/.test(a[1])) out([]);
+if (a[0] === 'api' && /rules\\/branches/.test(a[1])) out(JSON.parse(E.FAKE_RULES || '[]'));
 if (a[0] === 'repo' && a[1] === 'clone') { const r = git(['clone', '-q', E.FAKE_BARE, a[3]]); process.exit(r.status); }
 if (a[0] === 'pr' && a[1] === 'create') {
   const s = state(); const n = 7 + s.prs.length;
@@ -425,6 +471,7 @@ test('ci-wait-live --seed-only: failure path (the seed check fails) cleans up it
     const json = fs.readdirSync(h.outDir).find((f) => f.endsWith('-f.json'));
     assert(json, 'the report was still written');
     assert(JSON.parse(fs.readFileSync(path.join(h.outDir, json), 'utf8')).errors.length === 1, 'the error is in the report');
+    assert(!fs.readdirSync(h.outDir).some((f) => f.endsWith('.run.json')), 'the run file is removed with the temp folder');
   } finally { rm(h.dir); }
 });
 
@@ -439,18 +486,120 @@ test('ci-wait-live --seed-only: recovery control, a passing check ends with exit
     const json = JSON.parse(fs.readFileSync(path.join(h.outDir, fs.readdirSync(h.outDir).find((f) => f.endsWith('-ok.json'))), 'utf8'));
     eq(json.seed.check.state, 'pass', 'seed check state');
     eq(json.errors.length, 0, 'no errors');
+    assert(!fs.readdirSync(h.outDir).some((f) => f.endsWith('.run.json')), 'the run file is removed with the temp folder');
   } finally { rm(h.dir); }
 });
 
-test('ci-wait-live --seed-only --keep leaves the branch and the temp folder, and says how to clean up', () => {
+// --keep leaves exactly what a hard-killed run leaves: GitHub items, the temp folder, the run file.
+function keptRun() {
   const h = harnessEnv({ FAKE_CHECKS: JSON.stringify([{ name: 'sample-ci', bucket: 'pass', startedAt: '', completedAt: '' }]) });
+  const r = harness(h, ['--repo', 'o/r', '--seed-only', '--keep', '--out-dir', h.outDir]);
+  const runFile = fs.readdirSync(h.outDir).find((f) => f.endsWith('.run.json'));
+  const run = runFile ? runFile.replace(/^ci-wait-/, '').replace(/\.run\.json$/, '') : null;
+  const rec = run ? JSON.parse(fs.readFileSync(path.join(h.outDir, runFile), 'utf8')) : null;
+  if (rec) {      // a copied Codex auth.json, as a Codex run would have left
+    fs.mkdirSync(path.join(rec.tmp, 'h'), { recursive: true });
+    fs.writeFileSync(path.join(rec.tmp, 'h', 'auth.json'), '{"refresh_token":"rt-0123456789abcdefghijklmnop"}');
+  }
+  return { h, r, run, rec, runFile };
+}
+
+test('ci-wait-live --seed-only --keep leaves the branch, the temp folder and a run file, and says how to clean up', () => {
+  const k = keptRun();
   try {
-    const r = harness(h, ['--repo', 'o/r', '--seed-only', '--keep', '--out-dir', h.outDir]);
-    eq(r.status, 0, `exit 0 (${r.stdout.slice(-300)})`);
-    assert(h.branches().some((b) => b.endsWith('-seed')), 'seed branch kept');
-    assert(/--cleanup-run live-\d{8}t\d{6}-claude/.test(r.stdout), 'tells how to clean up later');
-    assert(fs.existsSync(h.tmpBase), 'temp folder kept');
+    eq(k.r.status, 0, `exit 0 (${k.r.stdout.slice(-300)})`);
+    assert(k.h.branches().some((b) => b.endsWith('-seed')), 'seed branch kept');
+    assert(/--cleanup-run live-\d{8}t\d{6}-claude-[0-9a-f]{4} --out-dir /.test(k.r.stdout), 'tells how to clean up later');
+    assert(fs.existsSync(k.h.tmpBase), 'temp folder kept');
+    assert(k.rec && k.rec.run === k.run && k.rec.base === k.h.tmpBase && fs.existsSync(k.rec.tmp), 'the run file records the run and the temp folder');
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run also deletes the recorded temp folder (a hard-killed run), auth.json included', () => {
+  const k = keptRun();
+  try {
+    assert(k.rec && fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'precondition: the folder holds a copied auth.json');
+    const dry = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--dry-run']);
+    eq(dry.status, 0, `dry run exit (${dry.stdout})`);
+    assert(/\(dry run\) would delete the temp folder/.test(dry.stdout), dry.stdout);
+    assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'a dry run deletes nothing');
+    const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(r.status, 0, `exit 0 (${r.stdout})`);
+    assert(/deleted the temp folder/.test(r.stdout), r.stdout);
+    assert(!fs.existsSync(k.rec.tmp) && !fs.existsSync(k.h.tmpBase), 'temp folder and its base are gone, auth.json with them');
+    assert(!fs.existsSync(path.join(k.h.outDir, k.runFile)), 'the run file is removed');
+    nodeAssert.deepStrictEqual(k.h.branches(), ['main', `milestone/${OTHER_RUN}`]);
+    // one step past: a second cleanup finds nothing to do and succeeds
+    const again = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    eq(again.status, 0, 'second cleanup exits 0');
+    assert(/no run file/.test(again.stdout), again.stdout);
+  } finally { rm(k.h.dir); }
+});
+
+test('ci-wait-live cleanup-run refuses a recorded folder that is not a harness temp folder', () => {
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    const mutate = (fn) => { const rec = JSON.parse(fs.readFileSync(file, 'utf8')); fn(rec); fs.writeFileSync(file, JSON.stringify(rec)); };
+    const cleanup = () => harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+    // a folder with other content
+    fs.writeFileSync(path.join(k.rec.tmp, 'precious.txt'), 'keep');
+    let r = cleanup();
+    eq(r.status, 1, 'exit 1 when refused');
+    assert(/refusing to delete/.test(r.stdout) && fs.existsSync(path.join(k.rec.tmp, 'precious.txt')), `kept (${r.stdout})`);
+    fs.rmSync(path.join(k.rec.tmp, 'precious.txt'));
+    // a folder that is not <base>/<digits>
+    const odd = path.join(k.h.dir, 'not-a-pid'); fs.mkdirSync(path.join(odd, 'h'), { recursive: true });
+    mutate((rec) => { rec.tmp = odd; });
+    r = cleanup();
+    eq(r.status, 1, 'exit 1 when the name is wrong');
+    assert(/refusing to delete/.test(r.stdout) && fs.existsSync(odd), r.stdout);
+    // a digits-named folder with the right content, but not under the recorded base
+    const elsewhere = path.join(k.h.dir, '4242'); fs.mkdirSync(path.join(elsewhere, 'p'), { recursive: true });
+    mutate((rec) => { rec.tmp = elsewhere; });
+    r = cleanup();
+    eq(r.status, 1, 'exit 1 when the folder is not under the recorded base');
+    assert(/refusing to delete/.test(r.stdout) && fs.existsSync(elsewhere), r.stdout);
+    // a run file for another run
+    mutate((rec) => { rec.tmp = k.rec.tmp; rec.run = OTHER_RUN; });
+    r = cleanup();
+    eq(r.status, 1, 'exit 1 for another run\'s file');
+    assert(/another run/.test(r.stdout) && fs.existsSync(k.rec.tmp), r.stdout);
+    // recovery control: the genuine record is deleted normally
+    mutate((rec) => { rec.run = k.run; });
+    r = cleanup();
+    eq(r.status, 0, `genuine record works (${r.stdout})`);
+    assert(!fs.existsSync(k.rec.tmp), 'deleted');
+  } finally { rm(k.h.dir); }
+});
+
+// ---- --preflight-only: read-only, starts nothing ----
+const READY_RULES = JSON.stringify([{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'sample-ci' }] } }]);
+const startedSomething = (calls) => calls.some((c) => (c[0] === 'repo' && c[1] === 'clone') || (c[0] === 'pr' && c[1] === 'create') || isMutation(c));
+
+test('ci-wait-live --preflight-only: ready repo exits 0 and starts nothing', () => {
+  const h = harnessEnv({ FAKE_RULES: READY_RULES });
+  try {
+    const r = harness(h, ['--repo', 'o/r', '--preflight-only']);
+    eq(r.status, 0, `exit 0 (${r.stdout})`);
+    assert(/The repo is ready for a run/.test(r.stdout), r.stdout);
+    assert(h.calls().some((c) => c[0] === 'api' && c[1] === 'repos/o/r/actions/permissions'), 'precondition: the preflight reads ran');
+    assert(!startedSomething(h.calls()), 'no clone, no PR, no close or delete');
+    assert(!fs.existsSync(h.tmpBase), 'no temp folder');
   } finally { rm(h.dir); }
+});
+
+test('ci-wait-live --preflight-only: a repo that is not ready exits 2 with the steps, and starts nothing', () => {
+  for (const [extra, mention] of [[{ FAKE_AUTO_MERGE: '0', FAKE_RULES: READY_RULES }, 'Allow auto-merge'], [{ FAKE_RULES: '[]' }, 'Include by pattern > milestone/*']]) {
+    const h = harnessEnv(extra);
+    try {
+      const r = harness(h, ['--repo', 'o/r', '--preflight-only']);
+      eq(r.status, 2, `exit 2 (${r.stdout})`);
+      assert(r.stdout.includes(mention) && /Nothing was changed/.test(r.stdout), r.stdout);
+      assert(h.calls().some((c) => c[0] === 'api' && c[1] === 'repos/o/r/actions/permissions'), 'precondition: the preflight reads ran');
+      assert(!startedSomething(h.calls()), 'no clone, no PR, no close or delete');
+    } finally { rm(h.dir); }
+  }
 });
 
 // Windows delivers no SIGTERM to a Node process (it just ends it), so this runs elsewhere only.
