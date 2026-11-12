@@ -19,7 +19,7 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
 | CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
 | CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | merged | #95 | #96 |
-| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | in review | #88 | #97 |
+| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 1 | approved; fold-in after the CW-9 re-run | #88 | #97 |
 | CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 1 | in progress | #98 | |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
@@ -64,3 +64,4 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - Merge lines record no repo, so a PR merged with `-R other/repo` is reconciled against the current repo (CW-3).
 - CW-3 review minors: tests/ci-wait.test.js ~842 recovery control still uses `--call-timeout 1` (same slow-runner flake class); `mergeGates` logs `gh-checks` when both gates precede a merge (cosmetic).
 - Live harness parser (CW-7): PR numbers are taken from the whole call, not only the CI part (Codex turn 42 over-counts the milestone PR); a `task_notification` is attached only after a `result` event, so a background CI completion would go undetected. A slow-CI run is needed to see a non-zero notification count.
+- `tests/live/ci-recompute.js` prints recomputed numbers but doesn't diff them against the original run report (CW-7 review); a `--compare` option would make the check repeatable.
