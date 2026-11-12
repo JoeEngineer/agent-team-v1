@@ -329,7 +329,8 @@ function gateOf(text) {
   if (!seg) return null;
   const isNode = /^(?:.*[/\x5c])?node(?:\.exe)?$/i.test(seg[0]);
   const ciWait = /(?:^|[/\x5c])ci-wait(?:\.js)?$/;
-  if ((isNode && seg[1] && ciWait.test(seg[1])) || ciWait.test(seg[0])) return 'ci-wait';
+  // `ci-wait.js --names` only lists check names; it checks nothing, so it is never a gate.
+  if (((isNode && seg[1] && ciWait.test(seg[1])) || ciWait.test(seg[0])) && !seg.includes('--names')) return 'ci-wait';
   if (/^(?:.*[/\x5c])?gh(?:\.exe)?$/.test(seg[0])) {
     const gh = lib.ghParts(seg);
     if (gh && gh[0] === 'pr' && gh[1] === 'checks') return 'gh-checks';

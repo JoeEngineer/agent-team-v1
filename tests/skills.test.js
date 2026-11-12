@@ -78,7 +78,7 @@ test('Director CI guidance: one gated merge call, disable auto-merge before push
   assert(merging.includes('Merge in ONE call holding exactly three things: the CI gate, the merge and the comment'));
   assert(merging.includes('ci-wait.js" <n> --once --sha <head_sha> && gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha> && gh pr comment <n>'));
   assert(merging.includes('if ($LASTEXITCODE -eq 0)'));
-  assert(merging.includes('In sh never join the gate, merge and comment with a bare `;`'));
+  assert(merging.includes('Never join the gate, merge and comment with a bare `;`; use `&&` in sh'));
   assert(!merging.includes('in a Bash call of its own'), 'stale call-of-its-own rule');
   assert(merging.includes('disable auto-merge first'));
   assert(merging.includes('--disable-auto'));

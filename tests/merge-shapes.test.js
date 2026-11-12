@@ -685,6 +685,19 @@ test('merge log: a --names prefix leaves one merge line with pr, match_head and 
   }
 });
 
+test('merge log: ci-wait --names is never a gate, even joined with &&; the documented shapes still log ci-wait', () => {
+  const p = tmpProject();
+  const merged = fakeGh('{"number":5,"state":"MERGED","autoMergeRequest":null,"baseRefName":"milestone/auth"}');
+  logMerge(p, 'node "/p/scripts/ci-wait.js" --names 5 && gh pr merge 5 --squash --match-head-commit abc', merged);
+  logMerge(p, NAMES_SH, merged);
+  logMerge(p, NAMES_PS, merged);
+  const lines = readLog(p, 'merges.jsonl');
+  eq(lines.length, 3, 'three merge lines');
+  eq(lines[0].gate, undefined, '--names && merge: no gate');
+  eq(lines[1].gate, 'ci-wait', 'sh prefixed shape');
+  eq(lines[2].gate, 'ci-wait', 'PowerShell prefixed shape');
+});
+
 test('merge log: a --names call alone logs no merge', () => {
   const p = tmpProject();
   logMerge(p, 'node "/p/scripts/ci-wait.js" --names 36', fakeGh('{"number":36,"state":"OPEN","autoMergeRequest":null}'));

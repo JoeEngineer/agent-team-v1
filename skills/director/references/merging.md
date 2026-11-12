@@ -36,7 +36,7 @@ In PowerShell (Windows PowerShell 5.1):
 node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)." } }
 ```
 
-- Put no other merges, `git pull` or file edits in that call. In sh never join the gate, merge and comment with a bare `;`: use `&&` (the one exception is the `--names` prefix below). Always pass the PR number.
+- Put no other merges, `git pull` or file edits in that call. Never join the gate, merge and comment with a bare `;`; use `&&` in sh. A bare `;` is allowed only after the `--names` prefix below, never between gate, merge and comment. Always pass the PR number.
 - Always use both merge flags: without `--delete-branch` the `task/<ID>` branch stays behind. If a merge went through without them, delete the branch (`git push origin --delete task/<ID>`).
 - `--match-head-commit` makes the merge fail if the PR head moved since the review.
 - The log stays correct: the logging hook finds the one merge segment in the chained command and asks the forge for the PR's state afterwards, so the merge line records the real outcome.
@@ -52,7 +52,7 @@ node "<plugin root>/scripts/ci-wait.js" --names <n>; node "<plugin root>/scripts
 node "<plugin root>\scripts\ci-wait.js" --names <n>; node "<plugin root>\scripts\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n> -b "Merged by Director after reviewer approval (task <ID>, attempt <a>)." } }
 ```
 
-Read the names from that call's output, ask the user (ruleset names, "Allow auto-merge"; GitLab: "Pipelines must succeed", where `--names` prints the job names) and record them in `STATUS.md`'s CI block. If the first PR's reviewer reported `pending` there is no merge call: put `--names <n>;` in front of the queue call (`--auto`) when auto-merge is already known usable, otherwise in front of the background wait or the followup the fallback below already uses.
+Read the names from that call's output, ask the user (ruleset names, "Allow auto-merge"; GitLab: "Pipelines must succeed", where `--names` prints the job names) and record them in `STATUS.md`'s CI block. If the first PR's reviewer reported `pending`, there is no merge call yet. If the names are already in `STATUS.md`'s CI block, no `--names` is needed. Otherwise send the followup as usual and put the `--names <n>;` prefix on the merge call that follows the green report; on Claude, put it on the background wait command.
 
 Gate results. Exit 0 (green): the merge and the comment run. Any other exit stops the call and nothing is merged; then act on it as on the same reviewer result:
 - 1 (red): "Red CI" below.

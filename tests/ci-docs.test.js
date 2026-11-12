@@ -135,7 +135,7 @@ test('director docs: --names rides the first merge-gate call with a plain ; and 
   const ps = 'node "<plugin root>\\scripts\\ci-wait.js" --names <n>; node "<plugin root>\\scripts\\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n>';
   assert(merging.includes(sh), 'sh prefixed shape');
   assert(merging.includes(ps), 'PowerShell prefixed shape');
-  assert(merging.includes('there is no merge call: put `--names <n>;` in front of the queue call (`--auto`)'), 'pending case');
+  assert(merging.includes('there is no merge call yet. If the names are already in `STATUS.md`\'s CI block, no `--names` is needed'), 'pending case');
   assert(dskill.includes('prefix that PR\'s merge call with `node "<plugin root>/scripts/ci-wait.js" --names <n>;`'), 'SKILL prefix rule');
   assert(dskill.includes('Never run `--names` as a call of its own.'), 'SKILL never standalone');
   // Every `ci-wait.js" --names <n>` command in the two files is followed by `;`, so none stands alone.
@@ -145,6 +145,28 @@ test('director docs: --names rides the first merge-gate call with a plain ; and 
     assert(all.length >= 1, `${name}: no --names command at all`);
     eq(prefixed.length, all.length, `${name}: a --names command without the ; prefix`);
   }
+  // README mentions are descriptive: each says the Director runs it inside its first merge call.
+  const readme = read('README.md');
+  const mentions = readme.match(/ci-wait\.js" --names <n>`[^.]*/g) || [];
+  eq(mentions.length, 2, 'README --names command mentions');
+  for (const m of mentions) assert(m.includes('(the Director runs this inside its first merge call)'), `README standalone --names: ${m.slice(0, 80)}`);
+  // The pending case never asks the reviewer to run --names.
+  assert(read('skills/director/references/codex.md').includes('don\'t ask it to run `--names`'), 'codex pending case');
+  assert(merging.includes('put the `--names <n>;` prefix on the merge call that follows the green report; on Claude, put it on the background wait command'), 'merging pending case');
+});
+
+test('director docs: no sh merge example puts a bare ; between the gate and the merge', () => {
+  for (const f of ['SKILL.md', 'references/merging.md', 'references/gitlab.md', 'references/codex.md']) {
+    const text = read('skills/director/' + f);
+    const gates = text.match(/--once[^\n`]*/g) || [];
+    for (const g of gates) {
+      if (!/(gh pr merge|glab mr merge)/.test(g)) continue; // not a merge example line
+      if (g.includes('$LASTEXITCODE')) continue; // the PowerShell shape
+      assert(!/--once[^&;\n]*;\s*(gh pr merge|glab mr merge)/.test(g), `${f}: ; between the gate and the merge: ${g.slice(0, 100)}`);
+    }
+  }
+  // The check bites: a bad sh shape would match.
+  assert(/--once[^&;\n]*;\s*(gh pr merge|glab mr merge)/.test('ci-wait.js 5 --once --sha a; gh pr merge 5'), 'detector works');
 });
 
 test('plugin manifests are 0.6.0', () => {
