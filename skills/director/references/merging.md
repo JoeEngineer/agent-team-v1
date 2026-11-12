@@ -83,14 +83,14 @@ The helper couldn't tell (decision 0014), for example because the required check
 
 ### Red CI
 
-Red in review: send it back to the implementer with the failing check names. If the reviewer approved anyway and explained why the failure isn't this PR's fault, still don't merge (the gate stops on red): ask the user.
+Red CI, whether from the reviewer, the merge-call gate (exit 1), a checkpoint or a cancelled auto-merge: send it back to the implementer with the failing check names. Only when the reviewer approved and explained the failure as not this PR's fault: still don't merge (the gate stops on red), ask the user.
 
 ### Queued PRs: checkpoints
 
 Run `node "<plugin root>/scripts/reconcile-logs.js" --merges` before the next merge when something is queued, at the end of a wave, and before opening the milestone PR. One call covers every queued PR. It prints one line per PR: merged, auto-merge-cancelled, closed, still queued (with its CI state), or head moved.
 - Merged: set the state to `merged` in `STATUS.md`.
 - Still queued: nothing to do until the next checkpoint.
-- Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: the cancel row in `gitlab.md`), then send it back to the implementer with the failing check names. It counts as red CI.
+- Cancelled or red: `gh pr merge <n> --disable-auto` if it is still on (GitLab: the cancel row in `gitlab.md`), then send it back to the implementer with the failing check names ("Red CI").
 - Head moved: disable auto-merge at once, then follow "Commits pushed after the review".
 - Closed: ask the user.
 

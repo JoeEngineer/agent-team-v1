@@ -127,7 +127,7 @@ test('Director CI guidance: allow-none, auto-merge conditions, unknown, queued s
   assert(skill.includes('When it is `unknown`, don\'t merge, don\'t queue and don\'t wait: ask the user.'));
   assert(merging.includes('Don\'t merge, don\'t queue and don\'t wait: ask the user.'));
   assert(skill.includes('Commits pushed after the review get an incremental review first, and that review\'s result decides.'));
-  assert(skill.includes('When it is `red`, don\'t merge'));
+  assert(skill.includes('When it is `red`, don\'t merge: send it back to the implementer with the failing check names, unless the reviewer approved and explained why the failure isn\'t this PR\'s fault, in which case ask the user'));
   assert(skill.includes('"Pipelines must succeed" in Settings → Merge requests'), 'GitLab first-CI-run step');
   assert(skill.includes('Only a reviewed head (`head_sha`) is ever merged or queued'));
   // GitLab: the cancel row is a glab api call, and merging.md points at it
@@ -190,7 +190,15 @@ test('merging.md: the --auto block sits in the pending case under its own lead-i
   }
   // Red never merges, even when the reviewer approved
   const red = secs.find((x) => x.heading === '### Red CI');
-  assert(red && red.body.includes('still don\'t merge'), 'red must never merge');
+  assert(red, 'no "Red CI" section');
+  assert(red.body.includes('still don\'t merge'), 'red must never merge');
+  assert(red.body.includes('send it back to the implementer with the failing check names'), 'red goes back to the implementer');
+  for (const route of ['the reviewer', 'the merge-call gate (exit 1)', 'a checkpoint', 'a cancelled auto-merge']) {
+    assert(red.body.includes(route), `Red CI must cover the route: ${route}`);
+  }
+  const cancelled = lines.filter((l) => l.startsWith('- Cancelled or red:'));
+  eq(cancelled.length, 1, 'one checkpoint line for cancelled or red');
+  assert(cancelled[0].includes('send it back to the implementer with the failing check names'), 'checkpoint red goes back to the implementer');
   // The fallback's extra wait happens once
   assert(pending.includes('Still pending after this one extra wait: tell the user'), 'single extra wait');
 });
