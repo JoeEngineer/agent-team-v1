@@ -22,7 +22,7 @@ Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 | CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 4 | merged | #88 | #97 |
 | CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | merged | #98 | #99 |
 | CW-final | Final milestone review | reviewer | Fable (user-chosen) / high | 1 | done: 1 critical, 3 major, 15 minor | #81 | |
-| CW-10 | Final-review script fixes: guard `--admin=`, `--queue-check`, reconcile | implementer | large (opus) / high | 1 | in review | #100 | #103 |
+| CW-10 | Final-review script fixes: guard `--admin=`, `--queue-check`, reconcile | implementer | large (opus) / high | 2 | changes requested (hook time budget) + git push abbreviation fold-in | #100 | #103 |
 | CW-11 | Final-review doc fixes, 0017 items, carried items | implementer | medium (sonnet) / medium | 2 | merged | #101 | #102 |
 
 States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
@@ -54,6 +54,7 @@ Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier 
 - PowerShell `$LASTEXITCODE` keeps a stale value if `node` can't start; `$LASTEXITCODE = 1;` before the gate would harden it (merging.md ~36; not reproducible).
 - GitLab `head_pipeline.sha` isn't compared with the MR head, so just after a push an older pipeline could be read (forge.js ~244; unconfirmed, needs a live GitLab run).
 - On a project with no CI, every review waits the 120 s grace before `none` (reviewer.md / ci-wait.js).
+- CW-10 review, unconfirmed glab: `glabCancels` passes a numeric project id as `--repo` (likely rejected by glab: a false warning, safe direction); a bare `glab mr merge` may default to auto-merge on recent glab, so it would be logged without `match_head` (needs `glab mr merge --help` on a current glab).
 
 ## Carried into the post-final-review fix batch (CW-11)
 
