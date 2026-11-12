@@ -43,7 +43,7 @@ Needs `git`, Node 18+, and a current `glab` logged in to the project's host (`gl
 
 # Live CI-wait harness
 
-`node tests/live/ci-wait-live.js` runs a small fixed milestone with a headless Director (Claude or Codex) against a real GitHub repo whose CI takes about two minutes, then measures from the Director's own transcript how many turns and context tokens went to CI. It works with any plugin checkout, so the 0.5.0 baseline and the new version are measured the same way. It is opt-in: `node tests/run.js` never runs it (its helpers are unit-tested in `tests/ci-turns.test.js` and `tests/ci-wait-live.test.js`).
+`node tests/live/ci-wait-live.js` runs a small fixed milestone with a headless Director (Claude or Codex) against a real GitHub repo whose CI takes about two minutes, then measures from the Director's own transcript how many turns and context tokens went to CI. It works with any plugin checkout, so the 0.5.0 baseline and the new version are measured the same way. It is opt-in: `node tests/run.js` never runs it (its helpers are unit-tested in `tests/ci-turns.test.js` and `tests/ci-wait-live.test.js`). To recompute a finished run's transcript metrics with the current parser: `node tests/live/ci-recompute.js <run>.transcript.jsonl` (task and milestone PR numbers come from the `<run>.json` next to it, or `--task-prs 1,2 --milestone-prs 3`; read-only; unit-tested in `tests/ci-recompute.test.js`). A `--cleanup-run` run file that exists but is not valid JSON is refused like an unknown pid (use `--force`).
 
 ```
 node tests/live/ci-wait-live.js --tool claude --repo OWNER/REPO --plugin <path to a plugin checkout> --label before

@@ -403,13 +403,13 @@ function deletableTemp(tmp, base, entries, expectedBase) {
   if (!/^\d+$/.test(nodePath.basename(t))) return false;
   return (entries || []).every((e) => e === 'h' || e === 'p');
 }
-// True when a process with this pid exists (signal 0 only checks; EPERM means it exists).
 // 'alive', 'dead' or 'unknown' (a missing or invalid pid: the guard must not fail open on it).
 function pidState(pid) {
   const n = Number(pid);
   if (pid == null || pid === '' || !Number.isInteger(n) || n <= 0) return 'unknown';
   return pidAlive(n) ? 'alive' : 'dead';
 }
+// True when a process with this pid exists (signal 0 only checks; EPERM means it exists).
 function pidAlive(pid) {
   const n = Number(pid);
   if (!Number.isInteger(n) || n <= 0) return false;

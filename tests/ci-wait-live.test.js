@@ -718,6 +718,46 @@ test('ci-wait-live cleanup-run: a run file with a missing or invalid pid needs -
   } finally { rm(k.h.dir); }
 });
 
+test('ci-wait-live cleanup-run: a run file that is not valid JSON is refused like an unknown pid, and touches nothing', () => {
+  const k = keptRun();
+  try {
+    const file = path.join(k.h.outDir, k.runFile);
+    const mut0 = k.h.calls().filter(isMutation).length;
+    for (const bad of ['{"run": "truncated', '', 'null', '[]', '42']) {
+      fs.writeFileSync(file, bad);
+      // precondition: the file is there and is not a run record
+      let rec; try { rec = JSON.parse(bad); } catch (e) { rec = undefined; }
+      assert(fs.existsSync(file) && (rec === undefined || rec === null || typeof rec !== 'object' || Array.isArray(rec)), `precondition: ${JSON.stringify(bad)} is not a run record`);
+      const r = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir]);
+      eq(r.status, 1, `${JSON.stringify(bad)}: exit 1`);
+      assert(/not valid JSON/.test(r.stdout) && /--force/.test(r.stdout) && /Nothing was closed or deleted/.test(r.stdout), r.stdout);
+      eq(k.h.calls().filter(isMutation).length, mut0, 'no remote mutation');
+      assert(k.h.branches().some((b) => b.endsWith('-seed')), 'the remote branch is still there');
+      assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')) && fs.existsSync(file), 'nothing deleted, run file kept');
+    }
+    // one step past: a dry run reports it too, and still nothing changed
+    fs.writeFileSync(file, '{"run": "truncated');
+    const dry = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--dry-run']);
+    eq(dry.status, 1, 'a dry run reports the refusal');
+    eq(k.h.calls().filter(isMutation).length, mut0, 'still no mutation after the dry run');
+    // --force goes ahead with the remote cleanup and leaves the temp folder for the user
+    const f = harness(k.h, ['--repo', 'o/r', '--cleanup-run', k.run, '--out-dir', k.h.outDir, '--force']);
+    eq(f.status, 0, `--force proceeds (${f.stdout})`);
+    assert(!k.h.branches().some((b) => b.endsWith('-seed')), '--force runs the remote cleanup');
+    assert(/not valid JSON/.test(f.stdout) && !/no run file/.test(f.stdout), f.stdout);
+    assert(fs.existsSync(path.join(k.rec.tmp, 'h', 'auth.json')), 'the temp folder is left for the user (nothing says where it is)');
+  } finally { rm(k.h.dir); }
+  // recovery control: a valid record whose pid is gone is cleaned normally
+  const g = keptRun();
+  try {
+    const gone = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' });
+    fs.writeFileSync(path.join(g.h.outDir, g.runFile), JSON.stringify(Object.assign({}, g.rec, { pid: Number(gone.stdout) })));
+    const r = harness(g.h, ['--repo', 'o/r', '--cleanup-run', g.run, '--out-dir', g.h.outDir]);
+    eq(r.status, 0, `a valid record with a dead pid is cleaned (${r.stdout})`);
+    assert(!g.h.branches().some((b) => b.endsWith('-seed')) && !fs.existsSync(g.rec.tmp), 'branch and temp folder gone');
+  } finally { rm(g.h.dir); }
+});
+
 test('ci-wait-live cleanup-run: with no run file the remote cleanup still runs', () => {
   const k = keptRun();
   try {

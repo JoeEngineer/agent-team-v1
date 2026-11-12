@@ -125,7 +125,6 @@ function cleanupRemote(opts, runPrefix, { dryRun } = {}) {
   if (failed) log(`cleanup incomplete: ${failed} item(s) failed. Retry with: node tests/live/ci-wait-live.js --repo ${opts.repo} --cleanup-run ${runPrefix}`);
   return { ok: failed === 0, sel, failed };
 }
-// Removes <base>/<digits> (this process's own folder) and the copied Codex auth. Idempotent.
 // The first of tmp, tmp/h and tmp/p that exists and is a link (symlink or Windows junction) or not
 // a directory, else null. A recursive delete does not follow links, but nothing may be deleted
 // "through" one either, so a folder with a link in it is never touched.
@@ -137,6 +136,7 @@ function linkInTemp(t) {
   }
   return null;
 }
+// Removes <base>/<digits> (this process's own folder) and the copied Codex auth. Idempotent.
 function cleanupTemp() {
   if (S.cleanedTemp || !S.tmp) return;
   const t = path.resolve(S.tmp);
@@ -150,24 +150,32 @@ function cleanupTemp() {
   if (S.runFile && !fs.existsSync(t)) try { fs.rmSync(S.runFile, { force: true }); } catch (e) { /* ignore */ }
 }
 const outDirOf = (opts) => (opts.outDir ? path.resolve(opts.outDir) : path.join(os.tmpdir(), 'agent-team-ci-wait-live'));
-// --cleanup-run: also delete the run's temp folder (it may hold a copied Codex auth.json) when the
-// run file written at its start says where it was. Refuses anything that is not <base>/<digits>
-// holding only h/ and p/.
 // Read before any remote action: a run whose recorded pid is alive (or unknown, so it cannot be told)
 // may still be in flight, so --cleanup-run refuses everything unless --force. null when fine or no run file.
 function liveRunRefusal(opts, runPrefix) {
+  const file = path.join(outDirOf(opts), L.runFileName(runPrefix));
   let rec = null;
-  try { rec = JSON.parse(fs.readFileSync(path.join(outDirOf(opts), L.runFileName(runPrefix)), 'utf8')); } catch (e) { return null; }
-  if (!rec || rec.run !== runPrefix || opts.force) return null;
+  let text;
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) { return null; }   // no run file: nothing to protect
+  // A file that is there but cannot be read as a run record is treated like an unknown pid.
+  try { rec = JSON.parse(text); } catch (e) { rec = null; }
+  if (opts.force) return null;
+  if (!rec || typeof rec !== 'object' || Array.isArray(rec)) return `the run file for ${runPrefix} is not valid JSON, so it cannot be told whether the run is still in flight`;
+  if (rec.run !== runPrefix) return null;
   const st = L.pidState(rec.pid);
   if (st === 'alive') return `process ${rec.pid} (recorded for ${runPrefix}) is still alive, so the run may still be in flight`;
   if (st === 'unknown') return `the run file for ${runPrefix} has no valid pid (${JSON.stringify(rec.pid)}), so it cannot be told whether the run is still in flight`;
   return null;
 }
+// --cleanup-run: also delete the run's temp folder (it may hold a copied Codex auth.json) when the
+// run file written at its start says where it was. Refuses anything that is not <base>/<digits>
+// holding only h/ and p/.
 function cleanupRecordedTemp(opts, runPrefix, { dryRun } = {}) {
   const file = path.join(outDirOf(opts), L.runFileName(runPrefix));
   let rec = null;
-  try { rec = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* no run file */ }
+  let unreadable = false;
+  try { rec = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { unreadable = !!e && e.code !== 'ENOENT'; }
+  if (!rec && unreadable) { log(`run file ${file} is not valid JSON: its temp folder, if any, was left alone and must be deleted by hand`); return { ok: true, found: true, unreadable: true }; }
   if (!rec) { log(`no run file for ${runPrefix} in ${outDirOf(opts)} (pass --out-dir if the run used one): its temp folder, if any, must be deleted by hand`); return { ok: true, found: false }; }
   if (rec.run !== runPrefix) { log(`run file ${file} is for another run; temp folder left alone`); return { ok: false, found: true }; }
   if (!fs.existsSync(rec.tmp)) { log(`temp folder ${rec.tmp} is already gone`); if (!dryRun) fs.rmSync(file, { force: true }); return { ok: true, found: true, gone: true }; }
