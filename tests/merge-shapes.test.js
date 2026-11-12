@@ -629,3 +629,77 @@ test('merge log: `gh pr merge 5&>/dev/null` with the lookup failing records pr 5
   eq(m.pr, '5', 'pr from the command target');
   eq(m.chained, false, 'a redirect is not a chain');
 });
+
+console.log('first-gate-call: the --names prefix (decision 0016)');
+
+const NAMES_SH = 'node "/p/scripts/ci-wait.js" --names 5; ' + SH_GH;
+const NAMES_PS = 'node "C:\\p\\scripts\\ci-wait.js" --names 5; ' + PS_GH;
+const NAMES_SH_GL = 'node "/p/scripts/ci-wait.js" --names 5; ' + SH_GL;
+const NAMES_PS_GL = 'node "C:\\p\\scripts\\ci-wait.js" --names 5; ' + PS_GL;
+
+for (const [name, cmd] of [['sh', NAMES_SH], ['PowerShell', NAMES_PS]]) {
+  test(`guard: the ${name} --names-prefixed merge chain is allowed into a milestone base`, () => {
+    const r = guard(cmd, fakeGh(pr(5, 'milestone/auth')));
+    eq(r.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5 only');
+    assert(!r.denied, `should allow: ${r.reason}`);
+  });
+  test(`guard: the ${name} --names-prefixed merge chain stays denied into main`, () => {
+    const r = guard(cmd, fakeGh(pr(5, 'main')));
+    eq(r.lookups.join('|'), GH_VIEW(5), 'asked gh about PR 5');
+    assert(r.denied && r.reason.includes('protected branch "main"'), `reason: ${r.reason}`);
+  });
+}
+for (const [name, cmd] of [['sh', NAMES_SH_GL], ['PowerShell', NAMES_PS_GL]]) {
+  test(`guard: the ${name} --names-prefixed glab chain is allowed into milestone, denied into main`, () => {
+    const ok = guard(cmd, fakeGlab(mr(5, 'opened', 'milestone/auth')));
+    eq(ok.lookups.join('|'), GL_VIEW(5), 'asked glab about MR 5');
+    assert(!ok.denied, `should allow: ${ok.reason}`);
+    const no = guard(cmd, fakeGlab(mr(5, 'opened', 'main')));
+    assert(no.denied, 'main is denied');
+  });
+}
+
+for (const [name, cmd] of [['sh', NAMES_SH], ['PowerShell', NAMES_PS], ['sh glab', NAMES_SH_GL], ['PowerShell glab', NAMES_PS_GL]]) {
+  test(`findMerges: the ${name} --names prefix adds no merge and its number is not a target`, () => {
+    const merges = lib.findMerges(cmd);
+    eq(merges.length, 1, 'merge count');
+    eq(merges[0].target, '5', 'target');
+  });
+}
+
+test('merge log: a --names prefix leaves one merge line with pr, match_head and the ci-wait gate', () => {
+  // match_head is recorded for queued (--auto) merges, so the sh case uses the --auto chain.
+  for (const cmd of [NAMES_SH, NAMES_PS, 'node "/p/scripts/ci-wait.js" --names 5; ' + SH_GH_AUTO]) {
+    const p = tmpProject();
+    const auto = cmd.includes('--auto');
+    const file = path.join(p, 'gh-args.jsonl');
+    // The prefix names PR 36; the merge is PR 5, so a misread would show in the lookup or the line.
+    logMerge(p, cmd.replace('--names 5', '--names 36'), fakeGh('{"number":5,"state":"MERGED","autoMergeRequest":null,"baseRefName":"milestone/auth"}', 0, { FAKE_GH_ARGS: file }));
+    eq(calls(file).map((a) => a.join(' ')).join('|'), GH_VIEW(5), 'asked gh about PR 5, once');
+    const lines = readLog(p, 'merges.jsonl');
+    eq(lines.length, 1, 'one merge line');
+    eq(lines[0].pr, '5', 'pr');
+    eq(lines[0].match_head, auto ? 'abc' : undefined, 'match_head');
+    eq(lines[0].gate, 'ci-wait', 'gate');
+    eq(lines[0].outcome, 'merged', 'outcome');
+  }
+});
+
+test('merge log: ci-wait --names is never a gate, even joined with &&; the documented shapes still log ci-wait', () => {
+  const p = tmpProject();
+  const merged = fakeGh('{"number":5,"state":"MERGED","autoMergeRequest":null,"baseRefName":"milestone/auth"}');
+  logMerge(p, 'node "/p/scripts/ci-wait.js" --names 5 && gh pr merge 5 --squash --match-head-commit abc', merged);
+  logMerge(p, NAMES_SH, merged);
+  logMerge(p, NAMES_PS, merged);
+  const lines = readLog(p, 'merges.jsonl');
+  eq(lines.length, 3, 'three merge lines');
+  eq(lines[0].gate, undefined, '--names && merge: no gate');
+  eq(lines[1].gate, 'ci-wait', 'sh prefixed shape');
+  eq(lines[2].gate, 'ci-wait', 'PowerShell prefixed shape');
+});
+
+test('merge log: a --names call alone logs no merge', () => {
+  const p = tmpProject();
+  logMerge(p, 'node "/p/scripts/ci-wait.js" --names 36', fakeGh('{"number":36,"state":"OPEN","autoMergeRequest":null}'));
+  eq(readLog(p, 'merges.jsonl').length, 0, 'no merge line');
+});
