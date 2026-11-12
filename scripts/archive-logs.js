@@ -55,6 +55,19 @@ function localDate() {
 
 const sha256 = (file) => crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
 
+// How many `auto-merge-queued` lines in merges.jsonl have no resolution line
+// (no line carries their ts as `resolves_ts`). Offline: reads the file only.
+function unresolvedQueued(logDir) {
+  let rows;
+  try {
+    rows = fs.readFileSync(path.join(logDir, 'merges.jsonl'), 'utf8').split(/\r?\n/).flatMap((l) => {
+      try { const r = JSON.parse(l); return r && typeof r === 'object' ? [r] : []; } catch { return []; }
+    });
+  } catch { return 0; }
+  const resolved = new Set(rows.filter((r) => r.resolves_ts).map((r) => r.resolves_ts));
+  return rows.filter((r) => r.outcome === 'auto-merge-queued' && !resolved.has(r.ts)).length;
+}
+
 function main() {
   const o = parseArgs(process.argv.slice(2));
   if (!o.milestone) fail('usage: archive-logs.js <milestone> [--project <name>] [--root <dir>] [--clear] [--force] [--dry-run]');
@@ -79,6 +92,10 @@ function main() {
 
   if (fs.existsSync(dest) && !o.force) fail(`destination already exists (use --force to overwrite): ${dest}`);
 
+  // Counted before anything is cleared. Archiving stays offline; resolving is reconcile-logs.js's job.
+  const unresolved = unresolvedQueued(logDir);
+  const unresolvedNote = unresolved ? `${unresolved} auto-merge-queued merges unresolved; run reconcile-logs.js --merges first` : '';
+
   const pendingDir = path.join(logDir, '.pending');
   const now = Date.now();
   const pending = fs.existsSync(pendingDir)
@@ -94,6 +111,7 @@ function main() {
     for (const f of files) console.log(`  ${f}`);
     console.log(`[dry-run] would delete ${stale.length} stale .pending entries (keeping ${pending.length - stale.length} fresh)`);
     if (o.clear) console.log('[dry-run] would delete the live logs after verification');
+    if (unresolvedNote) console.log(unresolvedNote);
     console.log(dest);
     return;
   }
@@ -194,6 +212,7 @@ function main() {
   console.log(`.pending: deleted ${removed} stale, kept ${pending.length - removed}.`);
   if (o.clear) console.log(`Cleared ${cleared} live log file(s).`);
   for (const f of skipped) console.log(`Not cleared (changed since the copy was verified): ${f}`);
+  if (unresolvedNote) console.log(unresolvedNote);
   console.log(dest);
 }
 

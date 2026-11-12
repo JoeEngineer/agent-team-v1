@@ -272,3 +272,23 @@ test('archive: archive root may be a git repo (files only, no commits)', () => {
   const log = spawnSync('git', ['log', '--oneline'], { cwd: root, encoding: 'utf8' });
   assert(log.status !== 0 || log.stdout.trim() === '', 'no commits made');
 });
+
+test('archive: warns about unresolved auto-merge-queued merges (offline), exit code unchanged; resolved ones are not counted', () => {
+  const q = (pr, ts) => JSON.stringify({ ts, pr, outcome: 'auto-merge-queued', milestone: 'm1' });
+  const res = JSON.stringify({ ts: 't9', pr: '2', outcome: 'merged', resolves_ts: 't2', milestone: 'm1' });
+  const p = project({ 'merges.jsonl': [q('1', 't1'), q('2', 't2'), res].join('\n') });
+  const ghRan = path.join(p, 'gh-ran');
+  const gh = path.join(p, 'fake-gh.js');
+  fs.writeFileSync(gh, "require('fs').writeFileSync(process.env.GH_RAN, 'x'); process.exit(1);");
+  const env = { AGENT_TEAM_FAKE_GH: gh, GH_RAN: ghRan };
+  const msg = '1 auto-merge-queued merges unresolved; run reconcile-logs.js --merges first';
+  const dry = arch(p, ['m1', '--project', 'proj', '--dry-run'], env);
+  eq(dry.status, 0, dry.stderr);
+  assert(dry.stdout.includes(msg), dry.stdout);
+  const r = arch(p, ['m1', '--project', 'proj'], env);
+  eq(r.status, 0, r.stderr);
+  assert(r.stdout.includes(msg), r.stdout);
+  eq(fs.existsSync(ghRan), false, 'the archive never calls the forge');
+  const none = arch(project({ 'merges.jsonl': res }), ['m1', '--project', 'proj']);
+  assert(!none.stdout.includes('unresolved'), 'nothing unresolved: no warning');
+});
