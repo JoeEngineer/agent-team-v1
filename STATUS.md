@@ -35,7 +35,8 @@ Result: `node tests/run.js` passes on the branch head. What a Claude + GitHub Di
 
 ## Needs the user
 
-- **Live verification.** 1.0.0 was checked against the rule inventory and unit tests only. The live CI-wait harness (`tests/live/ci-wait-live.js`) has not yet been run on it; compare its report with the 0.6.0 runs (`docs/coach/2026-11-12-ci-wait-live.md`).
+- **Merge #107 (1.0.1).** The live CI-wait harness was run on 1.0.0 on 2026-11-13 (Claude and Codex). It found three wording regressions, fixed in #107, which also holds the report (`docs/coach/2026-11-13-v1-live.md`). On 1.0.1 both Directors complete the test milestone. Not covered by those runs: compaction, the queued and waiting merge paths, GitLab.
+- **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
 
 ## Recent decisions
