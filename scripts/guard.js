@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // PreToolUse guard for Bash/PowerShell commands. Blocks actions the Director is
 // not authorized to take on its own:
-//   - merging a PR whose base is a protected branch (default: main, master)
+//   - merging a PR whose base is a protected branch (default: main, master),
+//     typed as `gh pr merge` or run through scripts/merge-task.js
 //   - `gh pr merge --admin` (also `--admin=<any value>`)
 //   - force-pushes, pushes to protected branches, deleting protected/milestone branches
 //     (also `--mirror`, `--prune`, and `--all` while a protected branch exists locally)
@@ -340,7 +341,23 @@ function checkGlabApi(args, cwd) {
   }
 }
 
+// `node <...>/merge-task.js <n> ...` merges request <n> itself (decision 0019).
+// The script refuses a protected base too; the guard checks it the same way it
+// checks a typed `gh pr merge` / `glab mr merge`, so every merge path is covered.
+const MERGE_TASK = /(?:^|[\\/])merge-task(?:\.js)?$/;
+function checkMergeTask(tokens, cwd) {
+  const at = tokens.findIndex((t) => MERGE_TASK.test(t));
+  if (at < 0) return;
+  // Only when the script is what runs: first in the segment, or right after
+  // `node`. `git log scripts/merge-task.js -n 5` names the file and merges nothing.
+  if (at > 0 && !/(?:^|[\\/])node(?:\.exe)?$/i.test(tokens[at - 1])) return;
+  const target = tokens.slice(at + 1).find((t) => /^\d+$/.test(t));
+  if (!target) return; // the script itself refuses a call with no request number
+  requireUnprotectedBase(forge.detect(cwd), target, null, cwd);
+}
+
 function checkSegment(tokens, cwd) {
+  checkMergeTask(tokens, cwd);
   const git = gitParts(tokens);
   if (git && git.sub === 'push') checkGitPush(git.args, git.dir || cwd);
   if (git && git.sub === 'add') checkGitAdd(git.args, git.dir || cwd);
@@ -367,7 +384,7 @@ function main() {
   const input = lib.readStdin();
   if (input.hook_event_name && input.hook_event_name !== 'PreToolUse') return;
   const cmd = input.tool_input && input.tool_input.command;
-  if (typeof cmd !== 'string' || !/\b(git|gh|glab)(\.exe)?\b/.test(cmd)) return;
+  if (typeof cmd !== 'string' || !/\b(git|gh|glab)(\.exe)?\b|merge-task/.test(cmd)) return;
   const cwd = input.cwd || lib.projectDir(input);
   const segs = lib.allSegments(cmd);
   // A redirection the shells read differently (see lib.segments) means the

@@ -14,6 +14,8 @@ How each GitHub-facing piece of the `agent-team` plugin maps to GitLab (gitlab.c
 - 📄 **Documented** by GitLab / `glab`, relied on but not exercised.
 - ❓ **Unknown**: needs the live run (see [Still open](#still-open)).
 
+> Since 1.0.0 the Director runs the gate, merge, queue and comment commands in this document through `scripts/merge-task.js` (decision 0019). The rows below are what that script runs.
+
 ## Summary
 
 1. **Before 0.5.0 the guard failed open on GitLab.** It only recognized `gh pr merge` and `gh api`, so `glab mr merge` into `main` went through unchecked. The guard now parses `glab` on every project, whatever the detected forge, and fails closed when `glab` can't confirm an MR's target branch.

@@ -216,6 +216,16 @@ Two live runs on Codex CLI 0.166.0, Windows 11, against the 0.3.0 plugin. **Spik
 | Noise | Node prints a DEP0190 deprecation warning (`spawn` with `shell: true` on Windows). It's harmless. |
 | Exit code (harness) | `codex exec` exited 0. |
 
+## Completion logging and recovery
+
+Codex transcript events can arrive before the child turn has finished writing its transcript. When `SubagentStop` identifies a known child turn, the logger matches the exact `turn_id` window and reads only that turn's report, model, effort, tokens and duration. It must not fill a missing value from the latest earlier or later turn.
+
+If the stop event arrives before that turn's `task_complete`, the hook saves a durable parsed snapshot under `.agent-team/logs/.pending/codex-completions/<event_id>.json`. That pending file is a recovery snapshot, not a normalized completion record; until a later dispatch drains it, the shared completion log may not yet have the final record. A later Codex hook dispatch, including a `wait_agent` dispatch, drains pending snapshots with bounded checks and no sleep. The snapshot preserves the stop event's parsed data while the transcript finishes.
+
+To drain pending snapshots from observed Codex stop events, run `node scripts/reconcile-logs.js`. It processes those Codex snapshots before checking for the Claude projects root, so it also works in Codex-only projects. It cannot reconstruct a Codex stop event that was entirely missed and left no snapshot. Claude completion and review recovery from transcripts remains supported. `--dry-run` previews reconciliation and does not mutate logs or pending files.
+
+(Moved here from the Director's `references/codex.md` in 1.0.0; that file keeps only what the Director does about a missing completion.)
+
 ## Still open
 
 - [x] **Do CLI sessions run *plugin* hooks?** **No** in 0.166 (spike, above). `hooks/list` and `plugin/read` show none, and a guarded push wasn't blocked. `team-init` writes project `.codex/hooks.json` through `codex-hooks.js` instead. OpenAI's docs say plugin hooks work for manually installed **Desktop** plugins; that's not tested here.

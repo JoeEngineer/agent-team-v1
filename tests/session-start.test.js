@@ -82,3 +82,17 @@ test('guard: git add -A / . blocked while .agent-team/worktrees/ exists unignore
   fs.mkdirSync(path.join(dir, '.claude', 'worktrees', 'a'), { recursive: true });
   assert(denied(g('git add -A')), 'still blocked by unignored .claude/worktrees');
 });
+
+test('after a compaction the Director is told to re-read STATUS.md and the references; not on startup, and not where agent-team is unused', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.agent-team'));
+  const compact = { ...claudeIn, source: 'compact' };
+  const ctx = (r) => JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+  const after = ctx(run('session-start.js', compact, dir));
+  assert(after.startsWith(`agent-team hooks: active (claude, ${version})`), 'the hooks line still comes first');
+  assert(/context was compacted/.test(after) && /re-read STATUS\.md/.test(after) && /merging\.md before any merge/.test(after), after);
+  eq(ctx(run('session-start.js', claudeIn, dir)), `agent-team hooks: active (claude, ${version})`, 'startup: no note');
+  eq(ctx(run('session-start.js', { ...claudeIn, source: 'resume' }, dir)), `agent-team hooks: active (claude, ${version})`, 'resume: no note');
+  const unused = tmpProject();
+  eq(ctx(run('session-start.js', compact, unused)), `agent-team hooks: active (claude, ${version})`, 'no .agent-team: no note');
+});
