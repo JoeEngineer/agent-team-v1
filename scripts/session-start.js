@@ -39,10 +39,18 @@ try {
     }
   } catch { /* detection is best effort */ }
 
+  // After a compaction the Director's SKILL.md is re-attached, but the
+  // reference files it had read are not (decision 0020). Say so, once, where
+  // agent-team is in use.
+  let compactNote = '';
+  if (input && input.source === 'compact' && fs.existsSync(root)) {
+    compactNote = '\nagent-team: context was compacted. If you are the Director, re-read STATUS.md and the references/ file for your next step (merging.md before any merge) before you act.';
+  }
+
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'SessionStart',
-      additionalContext: `agent-team hooks: active (${tool}, ${version})${forgeNote}`,
+      additionalContext: `agent-team hooks: active (${tool}, ${version})${forgeNote}${compactNote}`,
     },
   }));
 } catch { /* never fail a session start */ }

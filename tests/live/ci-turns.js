@@ -19,6 +19,8 @@ const CI_PATTERNS = [
   ['pr-checks', /\bgh(?:\.exe)?\s+pr\s+checks\b/],
   ['run-watch-view', /\bgh(?:\.exe)?\s+run\s+(?:watch|view)\b/],
   ['ci-wait', /\bci-wait\.js\b/],
+  // 1.0.0: the gate, the merge and the comment in one script (decision 0019).
+  ['merge-task', /\bmerge-task\.js\b/],
   ['glab-ci', /\bglab(?:\.exe)?\s+ci\b/],
   ['head-pipeline', /\bhead_pipeline\b/],
   ['status-check-rollup', /\bstatusCheckRollup\b/],
@@ -146,7 +148,7 @@ function prNumbers(cmd) {
   const out = new Set();
   for (const seg of segmentsOf(codeView(cmd))) {
     if (!CI_PATTERNS.some(([, re]) => re.test(seg))) continue;
-    const re = /\bgh(?:\.exe)?\s+pr\s+(?:checks|merge|view|status)\b|\bglab(?:\.exe)?\s+mr\s+(?:merge|view|checks)\b|\bci-wait\.js\b/g;
+    const re = /\bgh(?:\.exe)?\s+pr\s+(?:checks|merge|view|status)\b|\bglab(?:\.exe)?\s+mr\s+(?:merge|view|checks)\b|\b(?:ci-wait|merge-task)\.js\b/g;
     let m;
     while ((m = re.exec(seg))) {
       // The command ends at a closing quote that sits in code (cmd:"gh pr checks 12",).

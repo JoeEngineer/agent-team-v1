@@ -458,3 +458,11 @@ test('ci-turns: a here-string run through bash -c $c or a script block is recogn
   nodeAssert.deepStrictEqual(T.prNumbers(codexJs("$c=@'\\ngh pr checks 5\\n'@\\n& ([scriptblock]::Create($c))")), ['5']);
   nodeAssert.deepStrictEqual(T.ciKinds("$c=@'\ngh pr checks 5\n'@\nSet-Content notes.md $c"), [], 'control: written to a file');
 });
+
+test('merge-task.js is a CI turn that names its request; --sha, --attempt and --wait values are not request numbers', () => {
+  const cmd = 'node "/p/agent-team/scripts/merge-task.js" 12 --sha 1234567 --task AUTH-3 --attempt 2 --allow-none --wait 1800';
+  nodeAssert.deepStrictEqual(T.ciKinds(cmd), ['merge-task']);
+  nodeAssert.deepStrictEqual(T.prNumbers(cmd), ['12']);
+  nodeAssert.deepStrictEqual(T.prNumbers('node x/merge-task.js 7 --sha abcdef0 --task T-1 --names'), ['7']);
+  eq(T.isWatch(cmd), false, 'not a foreground watch');
+});
