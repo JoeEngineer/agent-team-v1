@@ -2,7 +2,7 @@
 // PreToolUse guard for Bash/PowerShell commands. Blocks actions the Director is
 // not authorized to take on its own:
 //   - merging a PR whose base is a protected branch (default: main, master)
-//   - `gh pr merge --admin`
+//   - `gh pr merge --admin` (also `--admin=<any value>`)
 //   - force-pushes, pushes to protected branches, deleting protected/milestone branches
 //     (also `--mirror`, `--prune`, and `--all` while a protected branch exists locally)
 //   - changing branch protection / rulesets; deleting, archiving or editing the repo
@@ -14,6 +14,8 @@
 // `eval` are checked too. `$(…)` inside a double-quoted string is not.
 //   - creating or deleting releases
 //   - `git add -A` / `git add .` while unignored agent worktrees exist
+//   - a redirection that bash, PowerShell and cmd read differently (`7>out`,
+//     `""5>out`, `5&>out`, `>out\ 5`), in any command that runs git, gh or glab
 // This is a guardrail against mistakes, not a sandbox: a determined command can evade
 // simple parsing. Server-side branch protection is the real enforcement.
 'use strict';
@@ -31,10 +33,11 @@ const isProtected = (b) => PROTECTED.includes(b);
 // Block by printing a PreToolUse "deny" decision as JSON and exiting 0.
 // Claude Code and Codex both honour this. Don't use exit code 2: Codex 0.166
 // ignores it and runs the command anyway (see docs/codex-mapping.md).
-function block(reason) {
+// `fix` replaces the "needs the user" line when the agent can fix the command itself.
+function block(reason, fix) {
   const message =
     `agent-team guard blocked this command: ${reason}\n` +
-    'This needs the user. Ask them to run it or to change the rule in the project\'s instructions file (CLAUDE.md / AGENTS.md) or guard settings.';
+    (fix || 'This needs the user. Ask them to run it or to change the rule in the project\'s instructions file (CLAUDE.md / AGENTS.md) or guard settings.');
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -78,19 +81,34 @@ function hasLocalBranch(name, cwd) {
   }
 }
 
+// git accepts any unambiguous prefix of a long option (`git push --mirr` is
+// --mirror, `--del` is --delete) and `--opt=value`. True when a long flag may be
+// `option`: it is `--` plus at least one letter and, without its `=value`, a
+// prefix of `option`. A prefix shared with another option is ambiguous to git,
+// which then refuses to run, so treating it as `option` only refuses a command
+// git would refuse anyway.
+function longFlagIs(flag, option) {
+  if (!/^--[^-=]/.test(flag)) return false;
+  const name = flag.split('=')[0];
+  return option.startsWith(name);
+}
+const anyLongFlag = (flags, ...options) => flags.some((f) => options.some((o) => longFlagIs(f, o)));
+// A short-option cluster containing `letter` (`-vd` is -v -d).
+const shortHas = (flags, letter) => flags.some((f) => /^-[a-zA-Z]+$/.test(f) && f.slice(1).includes(letter));
+
 function checkGitPush(args, cwd) {
   const flags = args.filter((a) => a.startsWith('-'));
   const positional = args.filter((a) => !a.startsWith('-'));
-  if (flags.some((f) => /^(-f|--force|--force-with-lease|--force-if-includes)(=|$)/.test(f) || /^-[a-zA-Z]*f/.test(f))) {
+  if (anyLongFlag(flags, '--force', '--force-with-lease', '--force-if-includes') || flags.some((f) => /^-[a-zA-Z]*f/.test(f))) {
     block('force-push');
   }
-  if (flags.includes('--mirror')) block('`git push --mirror` overwrites and deletes branches on the remote');
-  if (flags.includes('--prune')) block('`git push --prune` deletes branches on the remote');
-  if (flags.includes('--all') || flags.includes('--branches')) {
+  if (anyLongFlag(flags, '--mirror')) block('`git push --mirror` overwrites and deletes branches on the remote');
+  if (anyLongFlag(flags, '--prune')) block('`git push --prune` deletes branches on the remote');
+  if (anyLongFlag(flags, '--all', '--branches')) {
     const local = PROTECTED.find((b) => hasLocalBranch(b, cwd));
     if (local) block(`\`git push --all\` would push protected branch "${local}"`);
   }
-  const deleting = flags.some((f) => f === '-d' || f === '--delete');
+  const deleting = anyLongFlag(flags, '--delete') || shortHas(flags, 'd');
   const refspecs = positional.slice(1); // first positional is the remote
   for (const spec of refspecs) {
     if (spec.startsWith('+')) block(`force refspec "${spec}"`);
@@ -111,7 +129,12 @@ function checkGitPush(args, cwd) {
 // `git add -A` / `git add .` would commit agent worktrees under .claude/worktrees/
 // or .agent-team/worktrees/ as gitlinks. Block it only while that folder exists and isn't ignored.
 function checkGitAdd(args, cwd) {
-  const all = args.some((a) => a === '-A' || a === '--all' || a === '.' || a === ':/' || /^-[a-zA-Z]*A/.test(a));
+  // -A in a cluster; --all, its alias --no-ignore-removal, or an abbreviation
+  // of either; or a pathspec for the whole tree: `.`, `./`, `.\`, `:/`, `:/.`,
+  // `:(top)`, or `*` (PowerShell passes it to git unexpanded, and git's
+  // pathspec `*` matches every path).
+  const all = args.some((a) => /^-[a-zA-Z]*A/.test(a) || longFlagIs(a, '--all') || (a.length > 4 && longFlagIs(a, '--no-ignore-removal')) ||
+    /^(?:\.[\\/]*|:[\\/]\.?|:\(top\)[\\/.]*|\*)$/.test(a));
   if (!all) return;
   const git = (...a) => execFileSync('git', a, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
   let top;
@@ -126,22 +149,48 @@ function checkGitAdd(args, cwd) {
   }
 }
 
+// gh parses flags with pflag, so a boolean flag also takes a value glued on
+// with `=` (`--admin=true`, `--admin=1`). Any `=` form counts as the flag, even
+// `=false`: the guard refuses rather than parse the value.
+const isAdminFlag = (a) => /^--admin(?:=|$)/.test(a);
+
 function checkGhPrMerge(args, cwd) {
-  if (args.includes('--admin')) block('`gh pr merge --admin` bypasses branch protection');
+  if (args.some(isAdminFlag)) block('`gh pr merge --admin` bypasses branch protection');
   const { target, repo } = lib.prMergeTarget(args);
   requireUnprotectedBase('github', target, repo, cwd);
 }
 
+// `glab mr merge` has no flag that bypasses protection (no --admin), so only
+// the target branch is checked.
 function checkGlabMrMerge(args, cwd) {
   const { target, repo } = lib.mrMergeTarget(args);
   requireUnprotectedBase('gitlab', target, repo, cwd);
 }
 
+// The guard hook times out after 30 s (hooks/hooks.json), and a hook that times
+// out does not block: the command runs unguarded. So every forge lookup in one
+// guard run shares LOOKUP_BUDGET_MS (20 s), each call limited to
+// min(LOOKUP_MS, time left), and a lookup with under MIN_LOOKUP_MS left is not
+// started: the command is denied instead. AGENT_TEAM_GUARD_BUDGET_MS can only
+// lower the budget (tests); it never raises it.
+const LOOKUP_MS = 20000;
+const LOOKUP_BUDGET_MS = Math.min(20000, Number(process.env.AGENT_TEAM_GUARD_BUDGET_MS) || 20000);
+const MIN_LOOKUP_MS = 500;
+const lookupDeadline = Date.now() + LOOKUP_BUDGET_MS;
+
 // Ask the forge for the request's base (target) branch; block when it is
-// protected or unknown.
+// protected or unknown, or when there is no time left to ask (fail closed).
 function requireUnprotectedBase(which, target, repo, cwd) {
   const what = `${forge.noun(which)} ${target || '(current branch)'}`;
-  const info = forge.requestInfo(which, { target, repo }, cwd);
+  const left = lookupDeadline - Date.now();
+  if (left < MIN_LOOKUP_MS) {
+    const check = which === 'gitlab'
+      ? ['glab mr view', target, repo ? `--repo ${repo}` : '', '--output json'].filter(Boolean).join(' ') + ' (target_branch)'
+      : ['gh pr view', target, repo ? `--repo ${repo}` : '', '--json baseRefName'].filter(Boolean).join(' ');
+    block(`couldn't confirm the base of ${what} in time (the guard's ${Math.round(LOOKUP_BUDGET_MS / 100) / 10} s for forge lookups ran out before this one)`,
+      `Retry the command, or check the base with \`${check}\`.`);
+  }
+  const info = forge.requestInfo(which, { target, repo }, cwd, Math.min(LOOKUP_MS, left));
   if (!info) block(`could not confirm the base branch of ${what} — refusing to merge blind`);
   if (!info.base) block(`could not confirm the base branch of ${what}`);
   if (isProtected(info.base)) block(`${what} targets protected branch "${info.base}"; only the user merges into it`);
@@ -320,7 +369,18 @@ function main() {
   const cmd = input.tool_input && input.tool_input.command;
   if (typeof cmd !== 'string' || !/\b(git|gh|glab)(\.exe)?\b/.test(cmd)) return;
   const cwd = input.cwd || lib.projectDir(input);
-  for (const seg of lib.allSegments(cmd)) checkSegment(seg, cwd);
+  const segs = lib.allSegments(cmd);
+  // A redirection the shells read differently (see lib.segments) means the
+  // guard can't know which request, branch or endpoint the command names, so
+  // it refuses before any lookup instead of checking one reading.
+  if (segs.unsure.length) {
+    const { text, why } = segs.unsure[0];
+    block(why === 'glued'
+      ? `in \`${text}\` the word glued to the front of the redirection is a stream number to one shell and part of an argument to another, so the guard can't tell what this command merges or pushes`
+      : `the backslash in the redirection target \`${text}\` escapes the next character in bash but not in PowerShell, so the guard can't tell what this command merges or pushes`,
+    'Rewrite it and run it again: put a space before each redirection (`gh pr merge 5 >out.txt`), glue only a stream number 1-6 to it (`2>&1`, `2>/dev/null`), and quote file names that need a backslash.');
+  }
+  for (const seg of segs) checkSegment(seg, cwd);
 }
 
 main();

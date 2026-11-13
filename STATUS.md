@@ -1,89 +1,87 @@
-||||| 1 | in progress ||||| 1 | in progress ||||| 1 | in progress |||| medium (sonnet) / high | 2 | changes requested || #50 |||||| merged || #47 |||||| merged || #51 |||||| merged || #49 |||||| merged || #48 # Status
+# Status
 
-_Maintained by the Director. Last updated: 2026-10-31_
+_Maintained by the Director. Last updated: 2026-11-12_
 
 ## Current milestone
 
-**codex-director**: Codex works fully as Director (milestone B of `docs/codex-mapping.md`).
-Branch: `milestone/codex-director` · Issue: #28 · Started: 2026-10-31
+**ci-wait**: Stop the Director from spending its own turns waiting on CI, without weakening the green-CI merge gate.
+Branch: `milestone/ci-wait` · Issue: #81 · Started: 2026-11-11
 
 ## Tasks
 
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | Issue | PR |
 |---|---|---|---|---|---|---|---|
-| CD-0 | Breakdown | architect | large (opus) / high | 1 | done | #28 | |
-| CD-1 | Live spike: plugin hooks, matchers, skill names | implementer | medium (sonnet) / low | 1 | done | #28 | |
-| CD-2 | Review-logging diagnosis | scout | medium (sonnet) / medium | 1 | done | #28 | |
-| CD-3 | `models.js up/down` + routing.md | implementer | small (haiku) / medium | 1 | merged | #29 | #48 |
-| CD-4 | Extract record helpers to `records.js` | implementer | medium (sonnet) / medium | 1 | merged | #30 | #49 |
-| CD-5 | Fix review-logging gaps | implementer | medium (sonnet) / medium | 1 | merged | #31 | #54 |
-| CD-6 | Backfill missed records | implementer | medium (sonnet) / medium | 1 | merged | #32 | #56 |
-| CD-7 | Full Codex log parsing | implementer | medium (sonnet) / medium | 1 | merged | #33 | #55 |
-| CD-8 | Codex agent TOML generator | implementer | medium (sonnet) / medium | 1 | merged | #34 | #51 |
-| CD-9 | Tool-neutral agent prompts; `worktree=` key | implementer | small (haiku) / medium | 1 | merged | #35 | #47 |
-| CD-10 | SessionStart marker, Codex matchers, guard | implementer | medium (sonnet) / medium | 1 | merged | #36 | #53 |
-| CD-11 | Codex project hooks + shim | implementer | medium (sonnet) / high | 1 | merged | #37 | #60 |
-| CD-12 | team-init for Codex + AGENTS.md | implementer | small (haiku) / medium | 1 | merged | #38 | #62 |
-| CD-13 | `archive-logs.js` | implementer | medium (sonnet) / high | 2 | merged | #39 | #50 |
-| CD-14 | Director Codex section; close step archives | implementer | medium (sonnet) / high | 3 | merged | #40 | #59 |
-| CD-15 | Coach: archive input, Codex records | implementer | small (haiku) / low | 1 | merged | #41 | #58 |
-| CD-16 | Codex live test harness | implementer | medium (sonnet) / medium | 2 | merged | #42 | #64 |
-| CD-17 | codex-mapping.md: close "Still open" | implementer | small (haiku) / low | 2 | merged | #43 | #66 |
-| CD-18 | README + 0.4.0 | implementer | small (haiku) / low | 1 | merged | #44 | #63 |
-| CD-19 | Live verification, Claude + Codex | implementer | medium (sonnet) / low | 1 | done (8/8 pass) | #45 | |
-| CD-20 | Milestone final review | reviewer | large (opus) / high | 3 | approved | #46 | #69 |
-| CD-21 | Integrate PR #52 (Coach A fixes) | implementer | medium (sonnet) / medium | 1 | merged | #57 | #61 |
-| CD-22 | `log-event.js` reads JSON from stdin or a file | implementer | small (haiku) / medium | 2 | merged | #65 | #67 |
-| CD-23 | Final-review cleanups | implementer | medium (sonnet) / medium | 2 | merged | #68 | #69 |
+| CW-0 | Breakdown | architect | large (opus) / high | 1 | done | #81 | |
+| CW-1 | CI wait helper and forge status | implementer | large (opus) / high | 2 | merged | #82 | #90 |
+| CW-2 | Guard tests for auto-merge; fix `2>&1` | architect | large (opus) / high | 3 | merged | #83 | #89 |
+| CW-3 | Resolve queued auto-merges in the logs | implementer | medium (sonnet) / medium | 2 | merged | #84 | #94 |
+| CW-4 | Reviewer and Director prompts | implementer | large (opus) / high | 4 | merged | #85 | #91 |
+| CW-5 | Setup guidance, README, 0.6.0 | implementer | small (haiku) / medium | 2 | merged | #86 | #93 |
+| CW-6 | Live CI harness and transcript metrics | implementer | medium (sonnet) / high | 2 | merged | #87 | #92 |
+| CW-8 | Harness: milestone-PR CI metric, temp hardening | implementer | medium (sonnet) / medium | 2 | merged | #95 | #96 |
+| CW-7 | Live runs and before/after report | implementer | medium (sonnet) / medium | 4 | merged | #88 | #97 |
+| CW-9 | List check names in the first merge-gate call | implementer | medium (sonnet) / medium | 2 | merged | #98 | #99 |
+| CW-final | Final milestone review | reviewer | Fable (user-chosen) / high | 1 | done: 1 critical, 3 major, 15 minor | #81 | |
+| CW-10 | Final-review script fixes: guard `--admin=`, `--queue-check`, reconcile | implementer | large (opus) / high | 2 | merged | #100 | #103 |
+| CW-11 | Final-review doc fixes, 0017 items, carried items | implementer | medium (sonnet) / medium | 2 | merged | #101 | #102 |
 
-States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
+States: `planned` · `in progress` · `in review` · `changes requested` · `queued` · `merged` · `blocked`
 
-Waves: W1 CD-3, 4, 8, 9, 13 → W2 CD-5, 7, 10 → W3 CD-6, 11, 15 → W4 CD-12, 14 → W5 CD-16 → W6 CD-17, 18 → CD-19 → CD-20.
+Waves: W1 CW-1, CW-2, CW-6 → W2 CW-3, CW-4, CW-5 → CW-8 → W3 CW-7 → CW-9 (+ live re-run on both tools) → final review (Fable / high, started 2026-11-12) → CW-10 (scripts) ∥ CW-11 (docs) → milestone PR. All tasks merged 2026-11-12; 945 tests pass on the milestone head; no queued merges. Decision 0018: M1 and M3 treated as critical with C1.
 
-Vehicle: tasks the routing table puts in a session (CD-7, CD-11) run as background worktree subagents at the same tier (session unavailable; subagent fallback).
+Live runs (CW-7): the Director starts the four harness runs as background commands (each takes 20–40 min, longer than an agent's foreground shell cap). The headless Directors use the large tier on both tools (Claude `opus`, Codex `gpt-6.1-sol`) in every run, so before/after compare the same model. A CW-7 implementer analyses the JSON reports and writes the before/after report. Baseline runs (0.5.0, commit 0205ab8) start once CW-8 is merged; the after runs start once CW-4 is merged. Baseline runs started 2026-11-12 03:04 UTC (runs live-20261112t030358-claude-a684 and live-20261112t030359-codex-def4), harness at CW-8 head 5f9153f. After runs (0.6.0, commit 666ce58) started 03:24 UTC: live-20261112t032427-claude-b8d9 and live-20261112t032428-codex-b4c2. Baselines done: Claude 6 CI turns / 469k tokens, 4 foreground --watch, 5/5 reviews pending; Codex 13 CI turns / 760k tokens, 5 pending reviews, reported complete while a check was running. After runs done: Claude 6 CI turns / 466k tokens, Codex 8 / 544k; both 0 --watch, 0 pending reviews, complete after green checks (37 s / 65 s); both miss "≤1 CI turn per task PR" on the first task PR (2 turns), which CW-7 diagnoses. Cleanup left each run's `milestone/live-*` branch (ruleset). CW-9 re-runs (plugin at PR #99 head 54415b1, same harness and models, label `cw9`) started alongside its review. Claude re-run (live-20261112t041015-claude-6cc7): `--names` now shares the first gate call, one gate turn per task PR; the target still reads FAIL (#55, #56: 2) because an end-of-wave reconcile + STATUS bookkeeping turn names both PRs in sed/PR-body text, which the parser counts (CW-7 parser follow-up). 7 CI turns / 564k tokens, 0 --watch, 0 pending, complete +35 s. Codex re-run (live-20261112t041017-codex-f463): 1 CI turn on every task PR (#57, #58, #59, #62, #64), but the target reads FAIL because 6 no-PR reconcile turns are charged; 1 review `pending` without a stated wait (new miss); 12 CI turns / 827k tokens over 91 turns, 5 task PRs; complete +64 s. CW-7 fold-in fixes the parser attribution and diagnoses the pending review.
+
+Vehicle: CW-1 and CW-6 run as background worktree subagents at the table's tier (record 0013). Overrides: CW-2 effort high, CW-4 tier medium (record 0013).
 
 ## Decisions at intake
 
-- Codex records share the Claude log files with `tool: "codex"`; `codex-events.jsonl` stays a raw debug log (record 0004, amends 0003).
-- `SubagentStart` is not registered: SubagentStop plus the transcript cover it, and each new hook costs Codex users a trust step (record 0007).
-- Live tests copy Codex credentials into a temporary Codex home and delete them at cleanup.
-- The optional backfill script (CD-6) is in scope.
-- Final review: logs stay gitignored and are archived at close, the default for team-init projects too (record 0008). The Coach report from PR #52 is published as is.
+- Live runs use a new scratch repo on GitHub, created by the Director with `gh`. The user turns on "Allow auto-merge" and adds the required check names to its milestone ruleset; the Director does not change repo settings or rules.
+- Before/after: the same live harness runs once on 0.5.0 (baseline) and once on the new version, on Claude and on Codex.
+- 0011: `scripts/ci-wait.js` waits for CI with its own deadline (both forges, both shells).
+- 0012: one call per merge (gate + merge + comment), auto-merge only with named required checks, `head_sha` + `--match-head-commit`, reconcile appends resolution lines, milestone complete only on green PR checks.
+- The guard's `2>&1` bug (reads `2` as the PR number; reproduced on main) is fixed in this milestone (CW-2).
+- Fold-ins keep their incremental review; only a reviewed head is merged or queued.
+- GitLab: unit tests only; no live GitLab run.
+- CW-1: `ci-wait.js --once` makes N+2 calls for N PRs on one base (adds the classic-protection lookup) instead of 2 per PR; accepted, since skipping it would change the gate.
+- Scratch repo is private (user has Pro/Team). Headless live runs skip permissions inside the temp clone only; the guard hooks still run.
+- CW-4: after the one fallback CI wait (Claude background, Codex reviewer re-wait), still pending means tell the user; no further waits.
+- 0017: keep the single `--once` check on blocking reviews (marker required); checkpoints only when something is queued; harness reports no-PR turns separately (amends 0016). Confirmed by the user at close (2026-11-12).
+- 0016: both after runs missed "≤1 CI turn per task PR" on the first PR only, because of the one-time `--names` call (CW-7). Fix the prompt (CW-9: `--names` shares the first merge-gate call); the target stays as written; re-run live on both tools.
+- User: the milestone final review runs on Fable / high (user-chosen model, outside the routing table). Critical findings get fixed; other findings not implemented are reported to the user.
 
-## Live findings (CD-1, Codex CLI 0.166)
+## Final review: not fixed in this milestone (report to the user)
 
-- The CLI does not run plugin hooks, so `team-init` writes project `.codex/hooks.json` (CD-11).
-- Matchers are anchored: only `^(?:collaboration)?spawn_agent$` catches `collaborationspawn_agent`. The follow-up tool is `collaborationfollowup_task`; `send_input`/`resume_agent` don't exist.
-- Skills are invoked as `$agent-team:<skill>`.
-- `task_name` allows only `[a-z0-9_]`, so the link key is e.g. `cd_7_a1`.
-- Per-spawn `reasoning_effort` applies when the agent file pins only `model`.
-- SessionStart `additionalContext` reaches the model.
-- In the unelevated `workspace-write` sandbox `.git` is read-only (no worktree or commit), confirmed again by the CD-16 harness; the Director runs those git commands outside the sandbox with approval. The elevated sandbox is untested.
-- CD-16 harness: 16 of 17 rows pass (install, agent files, project hooks, trust recipe, stable trust hash, Director-first delegation lines, completions with model/effort/tokens, review verdict, guard blocks push, hooks-active line). The failing row is the sandbox `.git` limitation above.
+- PowerShell `$LASTEXITCODE` keeps a stale value if `node` can't start; `$LASTEXITCODE = 1;` before the gate would harden it (merging.md ~36; not reproducible).
+- GitLab `head_pipeline.sha` isn't compared with the MR head, so just after a push an older pipeline could be read (forge.js ~244; unconfirmed, needs a live GitLab run).
+- On a project with no CI, every review waits the 120 s grace before `none` (reviewer.md / ci-wait.js).
+- CW-10 review: `git add` exclude-only pathspecs (`':!x.md'`, `':(exclude)x.md'`) and `:/*` / `":(top)*"` still pass the whole-tree check (convenience guard against committing agent worktrees; `git add -n` showed them adding `.claude/worktrees/`).
+- CW-10 review: merging.md's head-moved bullet uses the state `merged (head moved)`, which isn't in the template's state list.
+- CW-10 review, unconfirmed glab: `glabCancels` passes a numeric project id as `--repo` (likely rejected by glab: a false warning, safe direction); a bare `glab mr merge` may default to auto-merge on recent glab, so it would be logged without `match_head` (needs `glab mr merge --help` on a current glab).
 
-## Follow-ups
+## Carried into the post-final-review fix batch (CW-11)
 
-- CD-3 review: the xlarge `auto: false` test also has `billing: credits`, so it doesn't isolate the tier rule (minor).
-- CD-8 review: `.codex/agents/` is not gitignored yet; CD-12 adds it with team-init.
-- Reviewer verdicts for CD-3, CD-4, CD-8 and CD-9 were not captured by the logger (the bug CD-5 fixes); the Director logged notes, and CD-6's backfill should recover them.
-- CD-10 review: note in 0007 that SessionStart also fires on resume/clear/compact (batched into CD-17).
-- CD-7: the Coach must dedupe delegations by `task_name` + `task.attempt`, preferring `source: "director"` (CD-15).
-- Batched into CD-17 (docs): 0006 should note that plugin-hook logging is skipped while project hooks are untrusted; `references/codex.md` "shell tool is named `Bash`" wording.
-- CD-11 review: `codex-hooks.js` merge collapses interleaved agent-team groups (edge case; generated files never interleave).
-- CD-21 review: a SendMessage resume without a TASK line merges into the previous turn (cumulative tokens, stale handback); untested. `agents/coach.md` says "0.3.1"; CD-18 rewords it for 0.4.0.
-- CD-19: the Codex live harness failed once on its first run (the small model skipped the spawns) and passed on the rerun; consider making its prompt more robust.
-
-## Logs
-
-The Director ran `reconcile-logs.js` (backfilled 63 completions the earlier logger missed) and archived the logs at close with `archive-logs.js codex-director` (live logs left in place).
+- SKILL.md:87 still says to put `--names` "on the queue call or the wait/followup call" in the pending case; merging.md and codex.md now say: on the merge call after the green report, or the Claude background wait (CW-9 incremental review).
+- tests/ci-docs.test.js no-bare-`;` test should assert it scanned at least one merge example line (CW-9 incremental review).
+- 0017: reviewer marker "not waited: changes requested" exact at the start of `summary`; harness records the verdict and accepts `pending` only from a timed-out wait with the time stated or a blocking verdict with the marker.
+- CW-7 review: the report's limits paragraph should name the remaining under-count gap (a here-string run through `& $c`, another variable or an alias).
+- 0017: run `reconcile-logs.js --merges` checkpoints only when STATUS.md has a `queued` row (SKILL.md, merging.md, codex.md, gitlab.md).
 
 ## Blocked
 
-- (none)
-
 ## Needs the user
 
-- Merge the milestone PR `milestone/codex-director` → `main` (open; the Director stops here), then publish the v0.4.0 release.
-- Delete the leftover CD-1 test folder (temporary Codex home with a copy of the Codex credentials, throwaway repo); the agent's delete was blocked by a permission check.
-- Close PR #52: folded into the milestone by CD-21 (#61), whose PR body has the kept/dropped table. The Director's close was blocked by a permission check.
-- Optional cleanup: the scratch folder the live verification left on a short path (scratch project, bare remote, test archive).
+- Scratch repo: the `protect-milestones` ruleset has "Restrict deletions" on, so the harness can't delete each run's `milestone/live-…` branch (the guard rightly blocks the Director from deleting it too). Either turn that rule off on the scratch repo, or delete the leftover `milestone/live-*` branches by hand after CW-7. They are harmless meanwhile.
+
+## Scratch repo
+
+`JoeEngineer/agent-team-ci-sample` (private): auto-merge on and `sample-ci` required on `milestone/*`, set by the user. The harness preflight passes.
+
+## Follow-ups (not in this milestone)
+
+- Guard, pre-existing: input redirections are not parsed, so `git push origin main<in` is allowed while bash pushes main (CW-2 review; listed in 0015).
+- Guard, pre-existing: an escaped double quote inside double quotes can hide a later merge (`"a \"b\" c" && gh pr merge 7`); PowerShell backtick escapes and variables as merge targets aren't modelled (CW-2 architect).
+- Guard over-block: a read-only `gh api graphql` query that names `branchProtectionRules` is refused as "changing branch protection".
+- CW-2 (0015) refuses harmless glued redirections in git/gh/glab commands (`git diff>x`); the message says to add a space.
+- Merge lines record no repo, so a PR merged with `-R other/repo` is reconciled against the current repo (CW-3).
+- CW-3 review minors: tests/ci-wait.test.js ~842 recovery control still uses `--call-timeout 1` (same slow-runner flake class); `mergeGates` logs `gh-checks` when both gates precede a merge (cosmetic).
+- Live harness parser (CW-7): PR numbers are taken from the whole call, not only the CI part (Codex turn 42 over-counts the milestone PR); a `task_notification` is attached only after a `result` event, so a background CI completion would go undetected. A slow-CI run is needed to see a non-zero notification count.

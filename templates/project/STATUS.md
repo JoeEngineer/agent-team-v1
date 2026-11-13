@@ -13,7 +13,15 @@ Branch: `milestone/<slug>` · Issue: #<n> · Started: <date>
 |---|---|---|---|---|---|---|
 | <SLUG>-1 | ... | implementer | medium (sonnet) / medium | 1 | in progress | |
 
-States: `planned` · `in progress` · `in review` · `changes requested` · `merged` · `blocked`
+States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` (auto-merge on, not yet merged) · `changes requested` · `merged` · `blocked`
+
+## CI
+
+Fill after the first CI run on the milestone (names come from `ci-wait.js --names <n>` in the first merge-gate call).
+
+- Required checks on `milestone/*`: <names, or none>
+- Auto-merge ("Allow auto-merge"; GitLab: "Pipelines must succeed"): on / off
+- If auto-merge isn't used, why: <reason>
 
 ## Blocked
 

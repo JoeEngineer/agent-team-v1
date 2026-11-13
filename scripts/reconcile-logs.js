@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Backfills completion and review records the SubagentStop hook missed, by
-// reading the subagent transcripts. Usage: node scripts/reconcile-logs.js [--dry-run]
+// reading the subagent transcripts. Usage: node scripts/reconcile-logs.js [--dry-run] [--merges]
 //
 // Claude Code subagent transcripts live at
 //   <projects root>/<project folder>/<session id>/subagents/agent-<agent id>.jsonl
@@ -10,6 +10,9 @@
 // Read-only on the transcripts: only .agent-team/logs of the project is written.
 // It may rewrite completions.jsonl/reviews.jsonl to add `stale_of` to lines whose
 // content belongs to another attempt; every other line is kept byte for byte.
+// --merges runs only the auto-merge step: for each `auto-merge-queued` line in
+// merges.jsonl, ask the forge and append a resolution line (see
+// records.resolveQueuedMerges). A plain run does it too, after the rest.
 // Exit code 1 when a log could not be rewritten (the log is then left as it was).
 // Idempotent: a backfilled turn carries the same dedupe markers the hook uses,
 // and a turn whose result/review already appears in completions.jsonl is skipped.
@@ -19,7 +22,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const lib = require('./lib');
-const { claimOnce, shortHash, logReview, appendOnce } = require('./records');
+const { claimOnce, shortHash, logReview, appendOnce, resolveQueuedMerges } = require('./records');
 const { readSubagentTranscript, readMeta, completionRecord } = require('./log-delegation');
 const { drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir: codexPendingDir } = require('./codex-log');
 
@@ -352,9 +355,27 @@ function reconcile({ dryRun = false } = {}) {
   return stats;
 }
 
+// Resolve queued auto-merges against the forge (one short line per PR).
+// explain (--merges): with nothing to resolve, say why, so "nothing queued"
+// and "no log at all" don't both look like empty output.
+function reconcileMerges({ dryRun = false, explain = false } = {}) {
+  const r = resolveQueuedMerges({}, { dryRun });
+  const pre = dryRun ? '[dry run] ' : '';
+  for (const l of r.lines) console.log(`${pre}${l}`);
+  if (explain && !r.open) {
+    if (!r.exists) {
+      console.log(`${pre}no merges.jsonl at ${r.file}; hooks may be off`);
+      console.error('reconcile-logs: no merge has been logged in this project; if merges were made, check that the agent-team hooks are on (the SessionStart line says "agent-team hooks: active")');
+    } else console.log(`${pre}no queued merges (${r.total} merge line${r.total === 1 ? '' : 's'} in ${r.file})`);
+  }
+  return r;
+}
+
 // Returns the exit code: 1 when a log could not be rewritten.
 function main(argv) {
   const dryRun = argv.includes('--dry-run');
+  // --merges: only the auto-merge step (fast: no transcripts are read).
+  if (argv.includes('--merges')) { reconcileMerges({ dryRun, explain: true }); return 0; }
   const s = reconcile({ dryRun });
   if (s.codex.checked) {
     console.log(`${dryRun ? '[dry run] ' : ''}Codex: ${s.codex.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ${s.codex.present} already present, ${s.codex.pending} pending`);
@@ -366,6 +387,7 @@ function main(argv) {
   s.errors.push(...ct.errors);
   if (s.noRoot) {
     console.log(`No Claude Code projects folder found (${s.noRoot}); nothing to reconcile for Claude Code.`);
+    reconcileMerges({ dryRun });
     return 0;
   }
   console.log(`${dryRun ? '[dry run] ' : ''}checked ${s.checked} agents: ` +
@@ -377,6 +399,7 @@ function main(argv) {
       ? `[dry run] ${s.stale} lines would be marked stale_of (content belongs to another attempt)`
       : `${s.stale} lines marked stale_of (content belongs to another attempt) in ${s.rewritten.join(', ')}; all other lines kept as they were`);
   }
+  reconcileMerges({ dryRun });
   for (const e of s.errors) console.error(`reconcile-logs: ${e}`);
   return s.errors.length ? 1 : 0;
 }

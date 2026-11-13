@@ -44,7 +44,11 @@ How each GitHub-facing piece of the `agent-team` plugin maps to GitLab (gitlab.c
 |---|---|---|---|
 | Open a task request | `gh pr create --base … --head …` | `glab mr create --target-branch … --source-branch … --yes` | 🧪 |
 | View as JSON | `gh pr view <n> --json number,state,autoMergeRequest,baseRefName` | `glab mr view <n> --output json` | 🧪 (current `glab` 📄) |
-| Merge | `gh pr merge <n> --squash --delete-branch` | `glab mr merge <n> --squash --remove-source-branch --yes` | 🧪 |
+| CI gate (first in the merge call) | `node scripts/ci-wait.js <n> --once --sha <sha>` | the same command | 🧪 |
+| Merge | `gh pr merge <n> --squash --delete-branch --match-head-commit <sha>` | `glab mr merge <n> --squash --remove-source-branch --yes --sha <sha>` (`--sha` refuses if the head moved: 📄) | 🧪 |
+| Queue merge after CI (gated) | `node scripts/ci-wait.js <n> --queue-check --sha <sha> && gh pr merge <n> --auto --squash --delete-branch --match-head-commit <sha>` | `node scripts/ci-wait.js <n> --queue-check --sha <sha> && glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <sha>` | 📄 |
+| Cancel queued merge | `gh pr merge <n> --disable-auto` | `glab api -X POST projects/:id/merge_requests/<n>/cancel_merge_when_pipeline_succeeds` (untested against a live instance; the MR page's "Cancel auto-merge" button if it fails) | 📄 |
+| Wait for CI (reviewer) | `node scripts/ci-wait.js <n> --sha <sha>` (reads `statusCheckRollup` from `gh pr view --json`) | `node scripts/ci-wait.js <n> --sha <sha>` polls `head_pipeline.status` from `glab mr view <n> --output json`; `--once` checks once; `--names` lists the job names | 🧪 |
 | Merge aliases | — | `glab mr accept`, `glab merge-request merge` | 🧪 guarded |
 | Diff | `gh pr diff <n>` | `glab mr diff <n>` | 📄 |
 | CI | `gh pr checks <n>` | `head_pipeline.status` from `glab mr view --output json`; `glab ci status --branch <b>` | 📄 |
@@ -112,6 +116,7 @@ Each is checked by `tests/live/gitlab-live.sh` against a real instance:
 - ❓ `glab mr create … --yes` creating without prompts, and `glab mr merge … --yes` merging (or queuing behind a pipeline) without prompts.
 - ❓ Outcome logging with a real pipeline running (`auto-merge-queued`) as well as without one (`merged`).
 - ❓ `glab api` placeholders (`:id`) resolving on a self-hosted host.
+- ❓ `glab mr merge <n> --auto-merge --sha <sha>` queuing behind a real pipeline, its `--sha` refusal when the head moved, and the `cancel_merge_when_pipeline_succeeds` call.
 - ❓ Which `glab` version first shipped `mr view --output json`. Today the docs only say 1.36 lacks it.
 
 Not covered by the live script: the Director's end-to-end flow on GitLab (issues, milestone MR, `Closes #N`). That needs a real milestone run.

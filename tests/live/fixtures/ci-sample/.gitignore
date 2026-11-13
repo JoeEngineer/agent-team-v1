@@ -1,0 +1,9 @@
+node_modules/
+.agent-team/logs/*
+!.agent-team/logs/.gitkeep
+.agent-team/worktrees/
+.claude/worktrees/
+.codex/agents/*-small.toml
+.codex/agents/*-medium.toml
+.codex/agents/*-large.toml
+.codex/agents/*-xlarge.toml

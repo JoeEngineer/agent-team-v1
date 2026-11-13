@@ -245,10 +245,18 @@ const driftMessage = (id, drift) => `agent-team: task ${id} changed ${Object.ent
 // Ask the forge what happened to the request instead of guessing from command
 // output: the Director often chains a merge with other commands whose output
 // mentions "error" or "failed". Returns forge.requestInfo's normalized shape,
-// or null if gh/glab can't answer.
-function prState(input, { forge: which = 'github', target, repo }) {
-  return forge.requestInfo(which, { target, repo }, input.cwd || lib.projectDir(input), 7000);
+// or null if gh/glab can't answer. `timeout` is the call's limit in ms.
+function prState(input, { forge: which = 'github', target, repo }, timeout = FORGE_CALL_MS) {
+  return forge.requestInfo(which, { target, repo }, input.cwd || lib.projectDir(input), timeout);
 }
+
+// The merge logger runs in a PostToolUse hook that Claude Code kills after 10 s
+// (hooks/hooks.json). All its forge calls in one run share HOOK_BUDGET_MS, each
+// capped at FORGE_CALL_MS; a call with less than MIN_CALL_MS left is not
+// started. Node's own start-up and the log writes fit in what is left.
+const FORGE_CALL_MS = 7000;
+const HOOK_BUDGET_MS = 7500;
+const MIN_CALL_MS = 500;
 
 function mergeOutcome(state) {
   if (!state) return 'unknown';
@@ -277,25 +285,423 @@ function sanitizeCommand(cmd) {
   return out.replace(ABS_PATH, '<path>');
 }
 
+// A boolean flag the way gh and glab (both pflag) read it: `--x`, or `--x=<v>`
+// where 0/f/false (any case) is off and anything else on; the last one wins.
+const PFLAG_FALSE = /^(?:0|f|false)$/i;
+function boolFlag(args, name) {
+  let on = false;
+  for (const a of args || []) {
+    if (a === name) on = true;
+    else if (a.startsWith(`${name}=`)) on = !PFLAG_FALSE.test(a.slice(name.length + 1));
+  }
+  return on;
+}
+
+// Flags of an auto-merge command: gh --auto; glab --auto-merge or
+// --when-pipeline-succeeds (each also as `=true`, not `=false`).
+function isAutoMerge(m) {
+  return m.forge === 'gitlab'
+    ? boolFlag(m.args, '--auto-merge') || boolFlag(m.args, '--when-pipeline-succeeds')
+    : boolFlag(m.args, '--auto');
+}
+
+// The commit the merge is pinned to: gh --match-head-commit, glab --sha.
+function matchHead(m) {
+  const flag = m.forge === 'gitlab' ? '--sha' : '--match-head-commit';
+  const args = m.args || [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === flag) return args[i + 1] || null;
+    if (args[i].startsWith(`${flag}=`)) return args[i].slice(flag.length + 1) || null;
+  }
+  return null;
+}
+
+// Split a command on its top-level joiners (&&, ||, ;, |, newline), outside
+// quotes. Each piece keeps the joiner that preceded it. A PowerShell guard
+// (`if ($LASTEXITCODE -eq 0) {`) is stripped from the piece it opens and counts as '&&'.
+function joinedPieces(cmd) {
+  const pieces = [];
+  let cur = '', joiner = null, quote = null;
+  const push = (next) => { pieces.push({ text: cur, joiner }); cur = ''; joiner = next; };
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (quote) { cur += c; if (c === quote) quote = null; continue; }
+    if (c === '"' || c === "'") { quote = c; cur += c; continue; }
+    if (c === '&' && cmd[i + 1] === '&') { push('&&'); i++; continue; }
+    if (c === '|' && cmd[i + 1] === '|') { push('||'); i++; continue; }
+    if (c === '|') { push('|'); continue; }
+    if (c === ';' || c === '\n') { push(';'); continue; }
+    cur += c;
+  }
+  push(null);
+  return pieces.map((pc) => {
+    const guard = /^\s*\}?\s*if\s*\(\s*\$LASTEXITCODE\s+-eq\s+0\s*\)\s*\{\s*/i.exec(pc.text);
+    const text = pc.text.replace(/^\s*\}\s*/, '');
+    return guard ? { text: pc.text.slice(guard[0].length), joiner: '&&' } : { text, joiner: pc.joiner };
+  }).filter((pc) => pc.text.trim());
+}
+
+// 'ci-wait' | 'ci-wait-queue' | 'gh-checks' when the piece's own command is a
+// CI gate, else null: node <...ci-wait.js> (or ci-wait itself) or gh pr checks,
+// not a word in an argument (`cat scripts/ci-wait.js`). 'ci-wait-queue' is
+// `ci-wait.js --queue-check`: it gates an auto-merge queue call, and its exit 0
+// does not mean CI is green (pending passes), so it never gates a direct merge.
+function gateOf(text) {
+  const seg = lib.segments(text)[0];
+  if (!seg) return null;
+  const isNode = /^(?:.*[/\x5c])?node(?:\.exe)?$/i.test(seg[0]);
+  const ciWait = /(?:^|[/\x5c])ci-wait(?:\.js)?$/;
+  // `ci-wait.js --names` only lists check names; it checks nothing, so it is never a gate.
+  if (((isNode && seg[1] && ciWait.test(seg[1])) || ciWait.test(seg[0])) && !seg.includes('--names')) {
+    return seg.includes('--queue-check') ? 'ci-wait-queue' : 'ci-wait';
+  }
+  if (/^(?:.*[/\x5c])?gh(?:\.exe)?$/.test(seg[0])) {
+    const gh = lib.ghParts(seg);
+    if (gh && gh[0] === 'pr' && gh[1] === 'checks') return 'gh-checks';
+  }
+  return null;
+}
+
+// Per merge in lib.findMerges order: the CI gate that ran before it in the same
+// command and that the merge depends on ('&&' or PowerShell's
+// `if ($LASTEXITCODE -eq 0)`; ';' and '||' do not gate), or null.
+function mergeGates(cmd) {
+  const gates = [];
+  let gate = null;
+  for (const pc of joinedPieces(cmd)) {
+    if (pc.joiner !== '&&') gate = null;
+    const own = gateOf(pc.text);
+    const n = lib.findMerges(pc.text).length;
+    for (let i = 0; i < n; i++) gates.push(gate);
+    if (own) gate = own;
+  }
+  // A heredoc or odd quoting can make the pieces disagree with findMerges: then no gate.
+  const total = lib.findMerges(cmd).length;
+  return gates.length === total ? gates : new Array(total).fill(null);
+}
+
+const forgeOf = (r) => r.forge || 'github';
+// The unresolved queued lines that still need an answer: the latest queued line
+// of each PR (an older one is superseded and resolved without the forge).
+function unresolvedQueued(rows) {
+  const latest = new Map();
+  for (const r of rows) if (r.outcome === 'auto-merge-queued') latest.set(`${forgeOf(r)}:${r.pr}`, r);
+  return openQueued(rows).filter((r) => latest.get(`${forgeOf(r)}:${r.pr}`) === r);
+}
+// The id a resolution of queued line q carries: forge, PR and ts, so two PRs
+// queued in the same millisecond are told apart.
+const resolutionKey = (q) => `${forgeOf(q)}:${q.pr}:${q.ts}`;
+// merges.jsonl rows that queued an auto-merge and that no later line resolves:
+// no line has their resolution_id (or, for a line written without one, the
+// same forge and PR and `resolves_ts` equal to their ts).
+function openQueued(rows) {
+  const resolved = new Set();
+  for (const r of rows) {
+    if (r.resolution_id) resolved.add(r.resolution_id);
+    else if (r.resolves_ts) resolved.add(`${forgeOf(r)}:${r.pr}:${r.resolves_ts}`);
+  }
+  return rows.filter((r) => r.outcome === 'auto-merge-queued' && !resolved.has(resolutionKey(r)));
+}
+
+// Does the head the forge reports match the pinned one? The pin may be a
+// prefix; with either side unknown there is nothing to compare.
+const sameHead = (pinned, head) => !pinned || !head || String(head).toLowerCase().startsWith(String(pinned).toLowerCase());
+
+// CI state of a requestStatus result as text: "CI red (build, unit)", "CI pending".
+function ciText(st) {
+  const { ci, failing } = ciOf(st);
+  return ci === 'red' ? `CI red${failing.length ? ` (${failing.join(', ')})` : ''}` : `CI ${ci === 'none' ? 'has no checks' : ci}`;
+}
+
+// What happened to queued line q, from a requestStatus(..., { resolution: true })
+// result of its request: { fields, text, warn } for the resolution line, or
+// null while auto-merge is still on. warn: a merge at another head than the
+// reviewed match_head (decision 0012, risk B2).
+function resolutionOf(q, st, label) {
+  const outcome_source = forge.viewCommand(forgeOf(q));
+  if (st.state === 'MERGED') {
+    if (!sameHead(q.match_head, st.head_sha)) {
+      return {
+        fields: { outcome: 'merged', merged_at: st.merged_at, outcome_source, head_moved: true, merged_head: st.head_sha },
+        text: `WARNING: ${label} merged at ${st.head_sha}, not the reviewed ${q.match_head}: check it`,
+        warn: true,
+      };
+    }
+    return { fields: { outcome: 'merged', merged_at: st.merged_at, outcome_source }, text: `${label}: merged${st.merged_at ? ` at ${st.merged_at}` : ''}` };
+  }
+  if (st.state === 'CLOSED') return { fields: { outcome: 'closed', merged_at: null, outcome_source }, text: `${label}: closed without merging` };
+  if (!st.auto_merge) return { fields: { outcome: 'auto-merge-cancelled', merged_at: null, outcome_source }, text: `${label}: auto-merge was cancelled; ${ciText(st)}` };
+  return null;
+}
+
+// glab has no flag to cancel "merge when pipeline succeeds": it is an API call.
+// -> [{ forge, target, repo }] for each POST `glab api ... merge_requests/<n>/cancel_merge_when_pipeline_succeeds`.
+// repo: the project path when the endpoint names one, null for `:id` (the current repo).
+function glabCancels(cmd) {
+  const out = [];
+  for (const seg of lib.allSegments(cmd)) {
+    const gl = lib.glabParts(seg);
+    if (!gl || gl[0] !== 'api') continue;
+    const post = gl.some((t, i) => /^(?:-X|--method)$/i.test(t) && /^POST$/i.test(gl[i + 1] || '')) ||
+      gl.some((t) => /^(?:-X|--method=)POST$/i.test(t));
+    if (!post) continue;
+    for (const t of gl) {
+      const m = /merge_requests\/(\d+)\/cancel_merge_when_pipeline_succeeds/.exec(t);
+      if (!m) continue;
+      const p = /(?:^|\/)projects\/([^/?\s]+)\/merge_requests\//.exec(t);
+      let repo = p && !/^[:{]/.test(p[1]) ? p[1] : null;
+      if (repo) { try { repo = decodeURIComponent(repo); } catch { /* keep as is */ } }
+      out.push({ forge: 'gitlab', target: m[1], repo });
+    }
+  }
+  return out;
+}
+
+// Log every merge in a shell command to merges.jsonl, asking the forge what
+// happened. Returns the text for the Director (warnings), or undefined. Each
+// warning also goes to stderr as soon as it is known, so a hook killed later
+// still leaves it in the hook log.
 function logMerges(input, tool = 'claude') {
   const cmd = (input.tool_input && input.tool_input.command) || '';
   // Cheap pre-check only; flags may sit between the words (`glab mr -R g/p merge`).
-  if (!/\b(?:gh|glab)(?:\.exe)?\b[\s\S]*\b(?:merge|accept)\b/.test(cmd)) return;
+  if (!/\b(?:gh|glab)(?:\.exe)?\b[\s\S]*(?:\b(?:merge|accept)\b|cancel_merge_when_pipeline_succeeds)/.test(cmd)) return undefined;
+  const chained = lib.segments(cmd).length > 1;
+  const gates = mergeGates(cmd);
+  const cwd = input.cwd || lib.projectDir(input);
+  const warnings = [];
+  const warn = (text) => { warnings.push(text); process.stderr.write(`${text}\n`); };
+  // One deadline for every forge call of this run: the limit for the next call,
+  // or 0 when there is no longer time to start one.
+  const deadline = Date.now() + HOOK_BUDGET_MS;
+  const callMs = () => {
+    const left = deadline - Date.now();
+    return left < MIN_CALL_MS ? 0 : Math.min(FORGE_CALL_MS, left);
+  };
+  const NOT_CHECKED = 'not checked: the hook\'s time for forge calls ran out';
+  const mergesFile = () => path.join(lib.logDir(input), 'merges.jsonl');
+  const mineOf = (which, pr) => (r) => forgeOf(r) === which && String(r.pr) === String(pr);
+
+  // A cancel of a queued auto-merge (`gh pr merge --disable-auto`, glab's
+  // cancel_merge_when_pipeline_succeeds call). The command may have failed, so
+  // ask the forge before writing anything: only a request that is open with
+  // auto-merge off is logged as cancelled. A merged or closed one gets that
+  // resolution instead; one still queued, or a forge that can't answer, leaves
+  // the queued line open and warns (a push now could be auto-merged unreviewed).
+  const cancelled = (m, target) => {
+    const which = m.forge;
+    const noun = forge.noun(which);
+    const what = which === 'gitlab' ? 'the glab cancel_merge_when_pipeline_succeeds call' : '`gh pr merge --disable-auto`';
+    const checkOf = (pr) => (which === 'gitlab'
+      ? `glab mr view ${pr == null ? '' : `${pr} `}--output json (merge_when_pipeline_succeeds)`
+      : `gh pr view ${pr == null ? '' : `${pr} `}--json autoMergeRequest`);
+    const labelOf = (pr) => `${noun} ${pr == null ? '(current branch)' : pr}`;
+    const ms = callMs();
+    if (!ms) {
+      warn(`agent-team: WARNING: auto-merge may still be on for ${labelOf(target)}: ${what} ran, but it was ${NOT_CHECKED}. ` +
+        `Verify with \`${checkOf(target)}\` before any push to this ${noun}; the queued line in merges.jsonl stays open.`);
+      return;
+    }
+    const st = forge.requestStatus(which, target, cwd, ms, undefined, { resolution: true, repo: m.repo || null });
+    const pr = st.ok && st.number != null ? st.number : target;
+    const label = labelOf(pr);
+    const known = st.ok && ['OPEN', 'MERGED', 'CLOSED'].includes(st.state);
+    if (!known || (st.state === 'OPEN' && st.auto_merge)) {
+      const why = !st.ok ? `${forge.viewCommand(which)} couldn't answer (${st.error})`
+        : !known ? `${forge.viewCommand(which)} reported state ${st.state}`
+          : `${forge.viewCommand(which)} says auto-merge is still on`;
+      warn(`agent-team: WARNING: auto-merge may still be on for ${label}. ${what} ran, but ${why}. ` +
+        `Do not push to this ${noun} until \`${checkOf(pr)}\` shows auto-merge off; the queued line in merges.jsonl stays open.`);
+      return;
+    }
+    const rows = readJsonl(mergesFile());
+    const mine = mineOf(which, pr);
+    const open = openQueued(rows).filter(mine);
+    // The latest open queued line; failing that the latest queued line, so a
+    // reconcile that already resolved it makes this cancellation a no-op (same id).
+    const all = rows.filter((r) => r.outcome === 'auto-merge-queued' && mine(r));
+    const q = open.length ? open[open.length - 1] : (all.length ? all[all.length - 1] : null);
+    const common = {
+      ...base(input, tool),
+      command: sanitizeCommand(cmd).slice(0, 300),
+      pr: pr == null ? null : String(pr),
+      ...milestoneField((q && q.milestone) || milestoneOfBase(st)),
+    };
+    const tail = {
+      resolves_ts: q ? q.ts : null,
+      ...(q ? { resolution_id: resolutionKey(q) } : {}),
+      ...(which === 'gitlab' ? { forge: 'gitlab' } : {}),
+      chained,
+    };
+    if (st.state === 'OPEN') {
+      const rec = { ...common, outcome: 'auto-merge-cancelled', cancelled_by: 'director', outcome_source: forge.viewCommand(which), ...tail };
+      // Same id as reconcile's resolution of this queued line, written under the
+      // same lock: whichever writer comes second adds nothing.
+      if (q) appendOnce(input, 'merges.jsonl', 'resolution_id', rec);
+      else lib.appendJsonl(input, 'merges.jsonl', rec);
+      return;
+    }
+    // Merged or closed before the cancel: nothing was queued to cancel. Resolve
+    // the queued line with what happened; with no queued line there is nothing
+    // to write (the merge itself was logged when it ran).
+    if (!q) return;
+    const res = resolutionOf(q, st, label);
+    appendOnce(input, 'merges.jsonl', 'resolution_id', { ...common, ...res.fields, note: 'checked after a cancel', ...tail });
+    if (res.warn) warn(`agent-team: ${res.text}`);
+  };
+
   // Only real `gh pr merge` / `glab mr merge` segments count, not the words
   // inside a quoted string.
-  for (const m of lib.findMerges(cmd)) {
-    const state = prState(input, m);
+  lib.findMerges(cmd).forEach((m, i) => {
+    // `gh pr merge N --disable-auto` cancels a queued merge; it is not a merge.
+    if (m.forge === 'github' && boolFlag(m.args, '--disable-auto')) return cancelled(m, m.target);
+    const ms = callMs();
+    const state = ms ? prState(input, m, ms) : null;
+    const auto = isAutoMerge(m);
+    if (!ms) {
+      const view = (m.forge === 'gitlab' ? ['glab mr view', m.target, '--output json'] : ['gh pr view', m.target, '--json state,autoMergeRequest']).filter(Boolean).join(' ');
+      warn(`agent-team: WARNING: the outcome of ${forge.noun(m.forge)} ${m.target || '(current branch)'}'s merge was ${NOT_CHECKED}; it is logged as unknown. ` +
+        `Verify with \`${view}\`${auto ? ': if auto-merge is queued, reconcile-logs.js will not track it' : ''}.`);
+    }
+    const outcome = mergeOutcome(state);
+    const pr = state && state.number != null ? String(state.number) : m.target;
+    let head = auto ? matchHead(m) : null;
+    let carried = null;
+    // A plain merge attempt on a PR whose auto-merge is still queued logs the
+    // queue again. Keep the reviewed head the queue is pinned to, so this line
+    // superseding the queued one doesn't lose reconcile's head-moved check.
+    if (!auto && outcome === 'auto-merge-queued') {
+      const pinned = openQueued(readJsonl(mergesFile())).filter((r) => mineOf(m.forge, pr)(r) && r.match_head);
+      if (pinned.length) { head = pinned[pinned.length - 1].match_head; carried = pinned[pinned.length - 1].ts; }
+    }
+    // --queue-check passes on pending CI: it gates a queue call, never a direct merge.
+    let gate = gates[i];
+    let ignored = null;
+    if (gate === 'ci-wait-queue' && !auto) {
+      ignored = gate;
+      gate = null;
+      if (outcome === 'merged') {
+        warn(`agent-team: WARNING: ${forge.noun(m.forge)} ${pr} was merged directly after \`ci-wait.js --queue-check\`, which passes on pending CI; it is not a green gate. ` +
+          'Check its CI now. Gate a direct merge with `ci-wait.js <n> --once --sha <head_sha>`.');
+      }
+    }
     lib.appendJsonl(input, 'merges.jsonl', {
       ...base(input, tool),
       command: sanitizeCommand(cmd).slice(0, 300),
-      pr: state && state.number != null ? String(state.number) : m.target,
+      pr,
       ...milestoneField(milestoneOfBase(state)),
-      outcome: mergeOutcome(state),
+      outcome,
       outcome_source: state ? forge.viewCommand(m.forge) : 'none',
       ...(m.forge === 'gitlab' ? { forge: 'gitlab' } : {}),
-      chained: lib.segments(cmd).length > 1,
+      ...(auto ? { auto: true } : {}),
+      ...(head ? { match_head: head } : {}),
+      ...(carried ? { match_head_from_ts: carried } : {}),
+      ...(gate ? { gate } : {}),
+      ...(ignored ? { gate_ignored: ignored } : {}),
+      ...(ms ? {} : { note: NOT_CHECKED }),
+      chained,
     });
+  });
+  for (const c of glabCancels(cmd)) cancelled(c, c.target);
+  return warnings.length ? warnings.join('\n') : undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Resolving queued auto-merges. An `auto-merge-queued` line in merges.jsonl says
+// only that the merge was queued. resolveQueuedMerges appends a line saying what
+// happened afterwards; the queued line is never rewritten.
+// ---------------------------------------------------------------------------
+
+const MAX_RESOLVE_PRS = 50;
+
+// CI state of a requestStatus result: { ci: 'pending'|'green'|'red'|'none'|'unknown', failing: [names] }.
+function ciOf(status) {
+  if (status.pipeline) return { ci: forge.gitlabPipelineCi(status.pipeline.status).ci, failing: [] };
+  if (!status.checks.length) return { ci: 'none', failing: [] };
+  const failing = status.checks.filter((c) => c.state === 'fail').map((c) => c.name);
+  if (failing.length) return { ci: 'red', failing };
+  return { ci: status.checks.some((c) => c.state === 'pending') ? 'pending' : 'green', failing: [] };
+}
+
+// Appends a resolution line for each `auto-merge-queued` line whose outcome is
+// now known. Returns { lines: [string], resolved, skipped, calls, file, exists,
+// total, open }: file is merges.jsonl's path, exists whether it is there, total
+// its line count and open the number of PRs with an unresolved queued line. At
+// most one forge call per PR whose latest queued line is unresolved, at most
+// `limit` PRs per run, oldest first. `run` stands in for the gh/glab runner (tests).
+function resolveQueuedMerges(input, { dryRun = false, run, limit = MAX_RESOLVE_PRS } = {}) {
+  const file = path.join(lib.logPath(input), 'merges.jsonl');
+  const rows = readJsonl(file);
+  const out = { lines: [], resolved: 0, skipped: 0, calls: 0, file, exists: fs.existsSync(file), total: rows.length, open: 0 };
+  const cwd = input.cwd || lib.projectDir(input);
+  const version = lib.guidanceVersion();
+  const append = (q, fields) => {
+    const rec = {
+      ts: new Date().toISOString(),
+      tool: q.tool || 'claude',
+      guidance_version: q.guidance_version || version,
+      reconciled_by: version,
+      pr: q.pr,
+      ...milestoneField(q.milestone),
+      ...(forgeOf(q) === 'gitlab' ? { forge: 'gitlab' } : {}),
+      ...fields,
+      resolves_ts: q.ts,
+      resolution_id: resolutionKey(q),
+    };
+    return dryRun ? true : appendOnce(input, 'merges.jsonl', 'resolution_id', rec);
+  };
+
+  // Group by PR, oldest group first: the PR's latest queued line (resolved or
+  // not) and its older unresolved ones. An older unresolved line is superseded.
+  const latest = new Map();
+  for (const r of rows) if (r.outcome === 'auto-merge-queued') latest.set(`${forgeOf(r)}:${r.pr}`, r);
+  const groups = new Map();
+  for (const q of openQueued(rows)) {
+    const key = `${forgeOf(q)}:${q.pr}`;
+    if (!groups.has(key)) groups.set(key, { old: [], last: null });
+    if (latest.get(key) === q) groups.get(key).last = q; else groups.get(key).old.push(q);
   }
+  out.open = groups.size;
+  let budget = limit;
+  for (const { old, last: q } of groups.values()) {
+    const first = q || old[0];
+    const label = `${forge.noun(forgeOf(first))} ${first.pr}`;
+    // Older queued lines of a PR that has a newer one: superseded, no forge call.
+    for (const o of old) {
+      if (append(o, { outcome: 'auto-merge-cancelled', merged_at: null, outcome_source: 'none', note: 'superseded' })) out.resolved++;
+      out.lines.push(`${label}: earlier queued line (${o.ts}) superseded by a newer one`);
+    }
+    if (!q) continue;
+    const cli = forgeOf(q);
+    // A plain merge of the same PR after the queue: it is already logged as a
+    // merge line, so this resolution carries superseded_by_ts and is not counted again.
+    const direct = rows.find((r) => r.ts > q.ts && r.outcome === 'merged' && !r.resolves_ts && forgeOf(r) === cli && String(r.pr) === String(q.pr));
+    if (direct) {
+      if (append(q, { outcome: 'merged', merged_at: null, outcome_source: 'none', note: 'merged directly', superseded_by_ts: direct.ts })) out.resolved++;
+      out.lines.push(`${label}: merged directly (line ${direct.ts})`);
+      continue;
+    }
+    if (budget <= 0) { out.skipped++; continue; }
+    budget--;
+    out.calls++;
+    const st = forge.requestStatus(cli, q.pr, cwd, 20000, run, { resolution: true });
+    if (!st.ok || !['OPEN', 'MERGED', 'CLOSED'].includes(st.state)) {
+      out.lines.push(`${label}: unknown (${cli === 'gitlab' ? 'glab' : 'gh'} couldn't answer)`);
+      continue;
+    }
+    // Merged (at the reviewed head or not), closed, or auto-merge off. The
+    // cancelled line also gives the CI state, so a red PR can be sent back
+    // without another CI turn.
+    const res = resolutionOf(q, st, label);
+    if (res) {
+      if (append(q, res.fields)) out.resolved++;
+      out.lines.push(res.text);
+    } else {
+      const moved = !sameHead(q.match_head, st.head_sha);
+      out.lines.push(`${label}: still queued, ${ciText(st)}${moved ? '; head moved since queued: disable auto-merge now' : ''}`);
+    }
+  }
+  if (out.skipped) out.lines.push(`${out.skipped} more PR(s) skipped (limit ${limit} per run); run again`);
+  return out;
 }
 
 // Why an attempt after the first exists. A followup is not an attempt (kind=followup).
@@ -369,6 +775,6 @@ function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
-  cardDrift, driftMessage, sanitizeCommand,
+  cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
   ATTEMPT_REASONS, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

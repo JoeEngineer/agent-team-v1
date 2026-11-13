@@ -201,6 +201,25 @@ function inArithmetic(cmd, i) {
   return opens > closes;
 }
 
+// End of the word that starts at cmd[i]: the target of a redirection (`out.txt`,
+// `/dev/null`, `$null`, `"a b"`, `1`, `-`). Stops before a character that
+// starts something else (`;` `&` `|` `<` `>` `(` `)` a backtick or whitespace),
+// so a command after the redirection is still read.
+// A backslash does not escape the next character here, on purpose: PowerShell
+// reads `\` literally, so in `>a\;gh pr merge 5` it runs the merge after the
+// `;`. Bash would write to a file named `a;gh` instead, so for bash this reads
+// one command too many, which is the safe side for a guard.
+function skipRedirectTarget(cmd, i) {
+  let q = null;
+  for (; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (q) { if (c === q) q = null; continue; }
+    if (c === '"' || c === "'") { q = c; continue; }
+    if (/[\s;&|<>()`]/.test(c)) break;
+  }
+  return i;
+}
+
 // Split a command line into segments on && || ; | and newlines, then tokenize
 // each segment with basic single/double quote handling. Newlines inside quotes
 // stay in the token, and heredoc bodies (after `<<WORD`, `<<'WORD'`, `<<-WORD`)
@@ -209,12 +228,42 @@ function inArithmetic(cmd, i) {
 // command substitution), a backslash or backtick before a newline joins the two
 // lines, `>` ends a token (`main>out.txt`), and the braces of a block
 // (`{git push}`) are dropped while `HEAD@{1}` and `${x}` keep theirs.
+// Output redirections are not arguments and do not end a segment: `>f`, `>>f`,
+// `N>f`, `N>&M`, `>&N`, `>&f`, `>|f`, `&>f`, `&>>f` are dropped along with
+// their target, so `gh pr merge --squash 2>&1` has no number, and `2>&1` is not
+// a `2` followed by a `&` break and a `1`.
+//
+// Words glued to a redirection, and the invariant a guard relies on: a word
+// written right before a redirection operator, with no space (`2>&1`, `7>f`,
+// `""5>f`, `5&>f`, `main>f`), is dropped as a stream number only when its raw
+// text is exactly one digit 1-6 and the operator starts with `>`. That is the
+// one glued form every supported shell reads the same way: a file descriptor
+// in bash, a stream in PowerShell 5.1 (`N>f`, `N>>f`, `N>&1`; its other `N>&M`
+// and `N>|` forms don't parse, so nothing runs), a handle in cmd. Every other
+// glued word is read differently by some shell, or depends on rules this
+// parser doesn't model (quotes, escapes, variables, globs). Bash takes any
+// unquoted digit string as a file descriptor but a quoted, escaped or variable
+// word as an argument, `5\>f` as the argument `5>f`, and `*` as a glob;
+// PowerShell takes only 1-6 and `*`; cmd takes the last digit. Such a word is recorded in the
+// returned array's non-enumerable `unsure` list, and so is a redirection target
+// whose raw text ends in a backslash or has one before a quote (`>out\ 5`:
+// bash escapes the space and merges the current branch, PowerShell merges PR 5).
+// A guard must refuse a command whose `unsure` list is not empty instead of
+// checking any reading of it. The segments still hold bash's reading (an
+// unquoted glued number dropped as a file descriptor, any other glued word kept
+// as an argument) for callers such as the merge logger that only describe a
+// command that already ran.
 // Not read: `$(…)` inside a double-quoted string.
 function segments(cmd) {
   const out = [];
+  const unsure = []; // { text, why } for each redirection the shells read differently
   let cur = [], tok = '', quote = null, hasTok = false;
+  // Where the current raw word starts in cmd (-1: between words). The glued-word
+  // check reads the raw text, quotes and backslashes included, so `""5`, `5""`,
+  // `\5` and `{5` never pass for the digit 5.
+  let wordStart = -1;
   const heredocs = []; // delimiters waiting for the end of the current line
-  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; };
+  const pushTok = () => { if (hasTok) cur.push(tok); tok = ''; hasTok = false; wordStart = -1; };
   const pushSeg = () => { pushTok(); if (cur.length) out.push(cur); cur = []; };
   for (let i = 0; i < cmd.length; i++) {
     const c = cmd[i];
@@ -222,15 +271,35 @@ function segments(cmd) {
       if (c === quote) quote = null; else tok += c;
       continue;
     }
-    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
     if (c === '\\' || c === '`') {
       // Line continuation (sh: backslash, PowerShell: backtick).
       const nl = cmd[i + 1] === '\n' ? 1 : (cmd[i + 1] === '\r' && cmd[i + 2] === '\n' ? 2 : 0);
       if (nl) { i += nl; continue; }
       if (c === '`') { pushSeg(); continue; }
     }
+    if (wordStart < 0 && !/[\s;&|()>]/.test(c)) wordStart = i;
+    if (c === '"' || c === "'") { quote = c; hasTok = true; continue; }
     if (c === '(' || c === ')') { pushSeg(); continue; }
-    if (c === '>') { pushTok(); continue; }
+    if (c === '>' || (c === '&' && cmd[i + 1] === '>')) {
+      // A redirection: the operator, then its target, dropped.
+      let j = i + (c === '&' ? 2 : 1);
+      if (cmd[j] === '>') j++;
+      if (cmd[j] === '&' || cmd[j] === '|') j++;
+      const op = cmd.slice(i, j);
+      let k = j;
+      while (cmd[k] === ' ' || cmd[k] === '\t') k++;
+      const end = skipRedirectTarget(cmd, k);
+      const glued = wordStart < 0 ? '' : cmd.slice(wordStart, i);
+      if (glued && !(c === '>' && /^[1-6]$/.test(glued))) unsure.push({ text: glued + op, why: 'glued' });
+      // Bash's reading: an unquoted number before `>` is a file descriptor;
+      // `&>` takes none, so a word before it is an argument.
+      if (c === '>' && /^\d+$/.test(glued)) { tok = ''; hasTok = false; }
+      pushTok();
+      const target = cmd.slice(k, end);
+      if (/\\(?:["']|$)/.test(target)) unsure.push({ text: op + target, why: 'escape' });
+      i = end - 1;
+      continue;
+    }
     if (c === '{' && !hasTok) continue;
     if (c === '}' && !tok.includes('{')) continue;
     if (c === '<' && cmd[i + 1] === '<' && cmd[i + 2] !== '<' && cmd[i - 1] !== '<' && !inArithmetic(cmd, i)) {
@@ -267,6 +336,7 @@ function segments(cmd) {
     tok += c; hasTok = true;
   }
   pushSeg();
+  Object.defineProperty(out, 'unsure', { value: unsure, enumerable: false });
   return out;
 }
 
@@ -293,13 +363,23 @@ function nestedCommands(tokens) {
 }
 
 // segments(cmd), plus the segments of any command string passed to another
-// shell (see nestedCommands), a few levels deep.
+// shell (see nestedCommands), a few levels deep. The `unsure` list (see
+// segments) covers the nested commands too.
 function allSegments(cmd, depth = 0) {
   const out = [];
-  for (const seg of segments(cmd || '')) {
+  const segs = segments(cmd || '');
+  const unsure = [...segs.unsure];
+  for (const seg of segs) {
     out.push(seg);
-    if (depth < 3) for (const inner of nestedCommands(seg)) out.push(...allSegments(inner, depth + 1));
+    if (depth < 3) {
+      for (const inner of nestedCommands(seg)) {
+        const nested = allSegments(inner, depth + 1);
+        out.push(...nested);
+        unsure.push(...nested.unsure);
+      }
+    }
   }
+  Object.defineProperty(out, 'unsure', { value: unsure, enumerable: false });
   return out;
 }
 
@@ -402,12 +482,17 @@ function mrMergeTarget(args) {
 // { forge: 'github' | 'gitlab', target, repo, args }.
 function findMerges(cmd) {
   const out = [];
-  for (const seg of allSegments(cmd)) {
-    const gh = ghParts(seg);
-    if (gh && gh[0] === 'pr' && gh[1] === 'merge') out.push({ forge: 'github', ...prMergeTarget(gh.slice(2)), args: gh.slice(2) });
-    const gl = glabParts(seg);
-    if (gl && isGlabMr(gl[0]) && isGlabMerge(gl[1])) out.push({ forge: 'gitlab', ...mrMergeTarget(gl.slice(2)), args: gl.slice(2) });
-  }
+  for (const seg of allSegments(cmd)) out.push(...segmentMerges(seg));
+  return out;
+}
+
+// The merges in one segment's tokens, as findMerges returns them.
+function segmentMerges(seg) {
+  const out = [];
+  const gh = ghParts(seg);
+  if (gh && gh[0] === 'pr' && gh[1] === 'merge') out.push({ forge: 'github', ...prMergeTarget(gh.slice(2)), args: gh.slice(2) });
+  const gl = glabParts(seg);
+  if (gl && isGlabMr(gl[0]) && isGlabMerge(gl[1])) out.push({ forge: 'gitlab', ...mrMergeTarget(gl.slice(2)), args: gl.slice(2) });
   return out;
 }
 
@@ -427,5 +512,5 @@ module.exports = {
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
-  glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges,
+  glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,
 };
