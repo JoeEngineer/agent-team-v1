@@ -365,6 +365,12 @@ if (SAVED_PROJECT_DIR !== undefined) process.env.CLAUDE_PROJECT_DIR = SAVED_PROJ
   test('guard: a command that only mentions merge-task.js in a quoted string, or has no request number, is not looked up', () => {
     const quoted = guard('echo "run merge-task.js 7 later"', fakeGh('', 1));
     assert(!denied(quoted), 'a quoted mention is not a merge');
+    // The file named as an argument of another command, with a number after it: no lookup, no deny.
+    for (const cmd of ['git log scripts/merge-task.js -n 5', 'git diff HEAD~1 -- scripts/merge-task.js 7', 'wc -l scripts/merge-task.js 12 && git status']) {
+      assert(!denied(guard(cmd, fakeGh('', 1))), `not a merge: ${cmd}`);
+    }
+    // Run directly (a shebang call) it is checked like the node form.
+    assert(denied(guard(`scripts/merge-task.js 7 --sha ${SHA} --task T-1 && git status`, fakeGh('{"number":7,"state":"OPEN","baseRefName":"main"}'))), 'direct call into main');
     const bare = guard('node scripts/merge-task.js --help', fakeGh('', 1));
     assert(!denied(bare), 'no request number: the script refuses it itself');
   });

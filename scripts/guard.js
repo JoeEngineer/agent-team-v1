@@ -348,6 +348,9 @@ const MERGE_TASK = /(?:^|[\\/])merge-task(?:\.js)?$/;
 function checkMergeTask(tokens, cwd) {
   const at = tokens.findIndex((t) => MERGE_TASK.test(t));
   if (at < 0) return;
+  // Only when the script is what runs: first in the segment, or right after
+  // `node`. `git log scripts/merge-task.js -n 5` names the file and merges nothing.
+  if (at > 0 && !/(?:^|[\\/])node(?:\.exe)?$/i.test(tokens[at - 1])) return;
   const target = tokens.slice(at + 1).find((t) => /^\d+$/.test(t));
   if (!target) return; // the script itself refuses a call with no request number
   requireUnprotectedBase(forge.detect(cwd), target, null, cwd);
