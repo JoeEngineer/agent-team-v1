@@ -2,7 +2,7 @@
 id: 0020
 title: Guidance in layers, one home per rule, size budgets (1.0.0)
 date: 2026-11-13
-status: proposed            # implemented on milestone/v1; the user approved the direction, not yet the details
+status: accepted            # the user confirmed it on 2026-11-13, after merging #105
 milestone: v1
 task: none
 decided_by: architect       # a single Claude session, not a Director run
