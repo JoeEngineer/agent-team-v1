@@ -1,5 +1,5 @@
 // Pins the CI-wait setup wording in the README, the team-init skill, the GitLab
-// mapping and the project templates (0.6.0). Node built-ins only.
+// mapping and the project templates. Node built-ins only.
 'use strict';
 
 const fs = require('fs');
@@ -128,169 +128,38 @@ test('templates: the CI line says names and auto-merge are recorded in STATUS.md
   }
 });
 
-test('director docs: --names rides the first merge-gate call with a plain ; and is never a call of its own (decision 0016)', () => {
-  const dskill = read('skills/director/SKILL.md');
-  const merging = read('skills/director/references/merging.md');
-  const sh = 'node "<plugin root>/scripts/ci-wait.js" --names <n>; node "<plugin root>/scripts/ci-wait.js" <n> --once --sha <head_sha> && gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha> && gh pr comment <n>';
-  const ps = 'node "<plugin root>\\scripts\\ci-wait.js" --names <n>; node "<plugin root>\\scripts\\ci-wait.js" <n> --once --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --squash --delete-branch --match-head-commit <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr comment <n>';
-  assert(merging.includes(sh), 'sh prefixed shape');
-  assert(merging.includes(ps), 'PowerShell prefixed shape');
-  assert(merging.includes('there is no merge call yet. If the names are already in `STATUS.md`\'s CI block, no `--names` is needed'), 'pending case');
-  assert(dskill.includes('prefix that PR\'s merge call with `node "<plugin root>/scripts/ci-wait.js" --names <n>;`'), 'SKILL prefix rule');
-  assert(dskill.includes('Never run `--names` as a call of its own.'), 'SKILL never standalone');
-  // Every `ci-wait.js" --names <n>` command in the two files is followed by `;`, so none stands alone.
-  for (const [name, text] of [['SKILL.md', dskill], ['merging.md', merging]]) {
-    const all = text.match(/ci-wait\.js" --names <n>/g) || [];
-    const prefixed = text.match(/ci-wait\.js" --names <n>;/g) || [];
-    assert(all.length >= 1, `${name}: no --names command at all`);
-    eq(prefixed.length, all.length, `${name}: a --names command without the ; prefix`);
-  }
-  // README mentions are descriptive: each says the Director runs it inside its first merge call.
-  const readme = read('README.md');
-  const mentions = readme.match(/ci-wait\.js" --names <n>`[^.]*/g) || [];
+// The Director's and the role agents' own files are covered by
+// tests/guidance.test.js (rule inventory, budgets, single source) since 1.0.0.
+
+test('README: each --names mention says the Director runs it inside its merge call; merge-task.js is in the scripts list', () => {
+  const mentions = README.match(/ci-wait\.js" --names <n>`[^.]*/g) || [];
   eq(mentions.length, 2, 'README --names command mentions');
   for (const m of mentions) assert(m.includes('(the Director runs this inside its first merge call)'), `README standalone --names: ${m.slice(0, 80)}`);
-  // The pending case never asks the reviewer to run --names.
-  assert(read('skills/director/references/codex.md').includes('don\'t ask it to run `--names`'), 'codex pending case');
-  assert(merging.includes('put the `--names <n>;` prefix on the merge call that follows the green report; on Claude, put it on the background wait command'), 'merging pending case');
+  assert(README.includes('| `scripts/merge-task.js` | Merges one reviewed task PR or MR into its milestone branch in one call'), 'merge-task row');
+  assert(README.includes('The Director then merges in one call, `scripts/merge-task.js`'), 'How it works names the script');
+  assert(README.includes('[`docs/guidance.md`](docs/guidance.md)'), 'links the guidance doc');
 });
 
-test('director docs: no sh merge example puts a bare ; between the gate and the merge', () => {
-  let scanned = 0;
-  for (const f of ['SKILL.md', 'references/merging.md', 'references/gitlab.md', 'references/codex.md']) {
-    const text = read('skills/director/' + f);
-    const gates = text.match(/--once[^\n`]*/g) || [];
-    for (const g of gates) {
-      if (!/(gh pr merge|glab mr merge)/.test(g)) continue; // not a merge example line
-      if (g.includes('$LASTEXITCODE')) continue; // the PowerShell shape
-      scanned++;
-      assert(!/--once[^&;\n]*;\s*(gh pr merge|glab mr merge)/.test(g), `${f}: ; between the gate and the merge: ${g.slice(0, 100)}`);
-    }
+test('README: says to re-run codex-agents.js after upgrading, and that 1.0.0 is not yet verified live', () => {
+  assert(README.includes('after upgrading to 1.0.0 in particular, so the agent TOMLs carry the rewritten role text'), 'codex-agents rerun');
+  const limits = README.slice(README.indexOf('## Limits and known gaps'), README.indexOf('## License'));
+  assert(limits.includes('\n- **Shorter guidance and the merge script (1.0.0):**'), '1.0.0 bullet in Limits');
+  assert(limits.includes('not yet against live runs'), 'the unverified part is stated');
+});
+
+test('README: a queue example, where shown, is gated by --queue-check on the same line (decision 0018)', () => {
+  const queue = /(gh pr merge|glab mr merge)[^`|]*? --auto(-merge)?(?![\w-])/;
+  const gated = /--queue-check --sha <[a-z_]+>\s*(&&|;\s*if \(\$LASTEXITCODE -eq 0\)\s*\{)\s*$/;
+  for (const line of README.split('\n')) {
+    const m = queue.exec(line);
+    if (m) assert(gated.test(line.slice(0, m.index)), `ungated queue call in README: ${line.slice(0, 120)}`);
   }
-  assert(scanned >= 1, `scanned ${scanned} sh merge example lines; a reformat must not make this test vacuous`);
-  // The check bites: a bad sh shape would match.
-  assert(/--once[^&;\n]*;\s*(gh pr merge|glab mr merge)/.test('ci-wait.js 5 --once --sha a; gh pr merge 5'), 'detector works');
+  // the detector bites
+  assert(queue.test('gh pr merge 5 --auto --squash') && !gated.test(''), 'bare queue call is caught');
+  assert(!queue.test('gh pr merge <n> --disable-auto'), '--disable-auto is not a queue call');
 });
 
-// Decision 0018: every queue call is gated by --queue-check on the same line.
-const QUEUE_FILES = ['skills/director/SKILL.md', 'skills/director/references/merging.md', 'skills/director/references/gitlab.md',
-  'skills/director/references/codex.md', 'README.md'];
-function ungatedQueueCalls(text) {
-  const bad = [];
-  let seen = 0;
-  for (const line of text.split('\n')) {
-    const re = /(gh pr merge|glab mr merge)[^\n`|]*?\s--auto(-merge)?(?![\w-])/g;
-    let m;
-    while ((m = re.exec(line))) {
-      seen++;
-      const before = line.slice(0, m.index);
-      // gated: the queue-check command, then `&&` (sh) or `; if ($LASTEXITCODE -eq 0) {` (PowerShell 5.1), right before the merge
-      if (!/--queue-check --sha <[a-z_]+>\s*(&&|;\s*if \(\$LASTEXITCODE -eq 0\)\s*\{)\s*$/.test(before)) bad.push(line.slice(0, 140));
-    }
-  }
-  return { bad, seen };
-}
-
-test('director docs: every --auto / --auto-merge queue call is gated by --queue-check (decision 0018)', () => {
-  let total = 0;
-  for (const f of QUEUE_FILES) {
-    const r = ungatedQueueCalls(read(f));
-    eq(r.bad.length, 0, `${f}: ungated queue call: ${r.bad.join(' | ')}`);
-    total += r.seen;
-  }
-  assert(total >= 7, `expected at least 7 gated queue examples across the docs, scanned ${total}`);
-  // each of the Director docs that show a queue call shows it gated, in the shell shapes the docs use
-  const merging = read('skills/director/references/merging.md');
-  assert(merging.includes('--queue-check --sha <head_sha> && gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha>'), 'sh');
-  assert(merging.includes('--queue-check --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --auto --squash --delete-branch --match-head-commit <head_sha> }'), 'PowerShell 5.1');
-  assert(merging.includes('--queue-check --sha <head_sha> && glab mr merge <n> --auto-merge --squash --remove-source-branch --yes --sha <head_sha>'), 'GitLab');
-  assert(read('skills/director/references/codex.md').includes('--queue-check --sha <head_sha>; if ($LASTEXITCODE -eq 0) { gh pr merge <n> --auto'), 'codex PowerShell');
-  // the detector bites on bare and half-gated shapes, and accepts the gated ones
-  eq(ungatedQueueCalls('gh pr merge 5 --auto --squash').bad.length, 1, 'bare gh');
-  eq(ungatedQueueCalls('glab mr merge 5 --auto-merge --squash --yes').bad.length, 1, 'bare glab');
-  eq(ungatedQueueCalls('node "x/ci-wait.js" 5 --once --sha <head_sha> && gh pr merge 5 --auto').bad.length, 1, 'the merge gate is not the queue-check');
-  eq(ungatedQueueCalls('node "x/ci-wait.js" <n> --queue-check --sha <head_sha>; gh pr merge <n> --auto').bad.length, 1, 'bare ; after the queue-check');
-  eq(ungatedQueueCalls('node "x/ci-wait.js" <n> --queue-check --sha <head_sha> && gh pr merge <n> --auto').bad.length, 0, 'gated sh');
-  eq(ungatedQueueCalls('gh pr merge <n> --disable-auto').seen, 0, '--disable-auto is not a queue call');
-});
-
-test('director docs: queue-check exits say what the Director does; the STATUS note is not the gate', () => {
-  const skill = read('skills/director/SKILL.md');
-  const codex = read('skills/director/references/codex.md');
-  const gitlab = read('skills/director/references/gitlab.md');
-  assert(skill.includes('the queue-check decides, and a wrong note costs a failed queue call, never an ungated merge'), 'SKILL note');
-  assert(skill.includes('Exit 5: don\'t queue, use the no-auto-merge fallback and say why in `STATUS.md`; 1: red, send it back; 4: head moved; 2: ask the user.'), 'SKILL exits');
-  assert(codex.includes('Exit 5 (not queueable) means don\'t queue: use the followup below'), 'codex exit 5');
-  assert(gitlab.includes('exit 5 (not queueable, for example "Pipelines must succeed" off) means don\'t queue and use the fallback'), 'gitlab exit 5');
-});
-
-test('director docs: SKILL puts --names on the merge call after the green report or the background wait, never the queue call; the reviewer never runs it', () => {
-  const skill = read('skills/director/SKILL.md');
-  assert(!skill.includes('on the queue call or the wait/followup call'), 'stale clause');
-  assert(skill.includes('put it on the merge call that follows the green report, or on Claude on the background wait. The reviewer is never asked to run `--names`.'), 'new clause');
-});
-
-test('director docs: reconcile-logs --merges runs only when STATUS.md has a queued row (decision 0017)', () => {
-  for (const f of ['skills/director/SKILL.md', 'skills/director/references/merging.md', 'skills/director/references/gitlab.md']) {
-    const text = read(f);
-    assert(/only when `STATUS\.md` has a `queued` row|when `STATUS\.md` has a `queued` row, `reconcile-logs\.js --merges`/.test(text), `${f}: queued-row condition`);
-    assert(!text.includes('before the next merge when something is queued'), `${f}: old checkpoint wording`);
-  }
-  assert(read('skills/director/SKILL.md').includes('with nothing queued, skip it'), 'SKILL skip');
-  assert(read('skills/director/references/merging.md').includes('With nothing queued, skip it (decision 0017)'), 'merging skip');
-  assert(read('skills/director/references/gitlab.md').includes('run only when `STATUS.md` has a `queued` row'), 'gitlab queued row');
-});
-
-test('merging.md: names section is above, merged queued PR gets branch cleanup and comment, head_sha is asked for, no-CI milestone close', () => {
-  const merging = read('skills/director/references/merging.md');
-  assert(merging.includes('described under "First task PR: the names" above'), 'names are above');
-  assert(!merging.includes('"First task PR: the names" below'), 'stale below');
-  assert(merging.indexOf('**First task PR: the names.**') < merging.indexOf('described under "First task PR: the names" above'), 'precondition: the names section really comes first');
-  assert(merging.includes('`--delete-branch` may do nothing with `--auto` (unconfirmed), so if the PR\'s `task/*` branch still exists, delete it'), 'branch cleanup');
-  assert(merging.includes('post the comment "Merged by the Director after reviewer approval'), 'merged comment');
-  assert(merging.includes('If the review block has no `head_sha`, ask the reviewer for it; never substitute the PR\'s current head.'), 'head_sha');
-  assert(merging.includes('`ci-wait.js <milestone PR> --once --sha <head_sha> --allow-none`'), 'no-CI milestone');
-  assert(merging.includes('"no CI" stated'), 'no CI stated');
-  assert(read('skills/director/SKILL.md').includes('with "no CI" stated'), 'SKILL no-CI close');
-  assert(read('README.md').includes('after upgrading to 0.6.0 in particular, so the reviewer TOML carries the new CI-wait text'), 'README codex-agents rerun');
-});
-
-test('reviewer.md: a blocking verdict with pending CI starts summary with the not-waited marker (decision 0017)', () => {
-  const rv = read('agents/reviewer.md');
-  assert(rv.includes('`summary` must start with exactly `not waited: changes requested` (`not waited: rejected` for `reject`)'), 'marker rule');
-  assert(rv.includes('with `summary` starting with the `not waited:` marker'), 'pending definition');
-});
-
-test('director docs: backticks balance on every line outside fenced code blocks', () => {
-  const odd = (text) => {
-    const bad = [];
-    let fenced = false;
-    text.split('\n').forEach((l, i) => {
-      if (/^\s*```/.test(l)) { fenced = !fenced; return; }
-      if (!fenced && ((l.match(/`/g) || []).length % 2)) bad.push(i + 1);
-    });
-    return bad;
-  };
-  for (const f of ['SKILL.md', 'references/merging.md', 'references/gitlab.md', 'references/codex.md']) {
-    eq(odd(read('skills/director/' + f)).join(','), '', `${f}: lines with an odd number of backticks`);
-  }
-  eq(odd('a `b` c\n(1)`nothing is queued (when `x` row)').join(','), '2', 'detector flags a stray backtick');
-});
-
-test('merging.md and coach.md describe the CW-10 reconcile and logger lines (head moved at merge, empty --merges, unconfirmed cancel, new merge fields)', () => {
-  const merging = read('skills/director/references/merging.md');
-  assert(merging.includes('`WARNING: PR <n> merged at <X>, not the reviewed <Y>: check it`') && merging.includes('It is not a clean merge') && merging.includes('tell the user'), 'head moved at merge');
-  assert(merging.includes('`no queued merges (N merge lines in <path>)`'), 'nothing queued');
-  assert(merging.includes('`no merges.jsonl at <path>; hooks may be off`') && merging.includes('Tell the user the hooks may be off'), 'missing log');
-  assert(merging.includes('`auto-merge may still be on for PR <n>`') && merging.includes('`gh pr view <n> --json autoMergeRequest`'), 'unconfirmed cancel');
-  assert(merging.includes('no pipeline on the MR head') && merging.includes('the request is not open'), 'exit 5 causes');
-  const coach = read('agents/coach.md');
-  for (const word of ['`ci-wait`', '`gh-checks`', '`ci-wait-queue`', '`gate_ignored: "ci-wait-queue"`', '`head_moved: true`', '`merged_head`', '`match_head_from_ts`', '`note: "checked after a cancel"`']) {
-    assert(coach.includes(word), `coach.md names ${word}`);
-  }
-});
-
-test('plugin manifests are 0.6.0', () => {
-  eq(JSON.parse(read('plugin.json')).version, '0.6.0', 'plugin.json version');
-  eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '0.6.0', '.claude-plugin/plugin.json version');
+test('plugin manifests are 1.0.0', () => {
+  eq(JSON.parse(read('plugin.json')).version, '1.0.0', 'plugin.json version');
+  eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '1.0.0', '.claude-plugin/plugin.json version');
 });

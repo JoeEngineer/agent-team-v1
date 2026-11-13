@@ -1,6 +1,6 @@
 # Decision records
 
-Write one for every real decision: choosing between approaches, changing scope, accepting a known risk, overriding the routing table, stopping an escalation, or deviating from the user's tasking. Not for routine routing that follows the table — the delegation log already covers that.
+Write one for every real decision: choosing between approaches, changing scope, accepting a known risk, overriding the routing table, stopping an escalation, or deviating from the user's tasking. Routine routing that follows the table needs none; the delegation log covers it.
 
 **File:** `docs/decisions/NNNN-short-title.md` (next free number, 4 digits).
 
@@ -31,6 +31,12 @@ Which one, and the main reason.
 What this makes easier/harder; what to watch for.
 ```
 
-After writing it, run `node "${CLAUDE_PLUGIN_ROOT}/scripts/log-event.js" decision '{"id":"0007","task":"AUTH-3","decided_by":"director","model":"opus","effort":"high","title":"..."}'` so it also lands in `.agent-team/logs/decisions.jsonl` for the Coach. In PowerShell, or for JSON with quotes or newlines, pass `-` and pipe the JSON on stdin (see `codex.md`).
+Then log it, so it also lands in `.agent-team/logs/decisions.jsonl` for the Coach:
 
-Use the model id from your own system context for `model`. If you don't know your effort level, write `unknown` — don't guess.
+```
+node "<plugin root>/scripts/log-event.js" decision - <<'EOF'
+{"id":"0007","task":"AUTH-3","decided_by":"director","model":"opus","effort":"high","title":"..."}
+EOF
+```
+
+Use the model id from your own system context for `model`. If you don't know your effort level, write `unknown`; don't guess. PowerShell form: `codex.md`, "Logging from PowerShell".
