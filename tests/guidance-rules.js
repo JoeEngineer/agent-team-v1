@@ -76,6 +76,7 @@ module.exports = [
   // 1.0.1: a live Codex run stopped the whole milestone when the ruleset refused a direct STATUS.md push.
   // 1.0.1: a live Codex run read `gh pr checks` and the branch rules itself on two PRs before merging.
   ['D-45', SKILL, /don't read a PR's checks, check names or branch rules yourself/, 'CI belongs to the reviewer and the merge script; the Director does not read checks, names or rules itself'],
+  ['D-46', SKILL, /it says when one retry is in order/, 'A guard block is handled as its message says: one retry when it says so, otherwise the user', 'guard'],
   ['D-44', SKILL, /send them through a PR into the milestone branch/, 'A refused direct push of the records is not a blocker: the records go through a PR into the milestone branch'],
 
   // ---- Merging --------------------------------------------------------------

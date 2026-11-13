@@ -29,7 +29,7 @@ Ask the user for anything else: merging into `main`/`master`, force-pushing, cha
 6. **Before any push to a queued PR, cancel its auto-merge first** (`references/merging.md`, "Queued PRs").
 7. **Only the user merges the milestone PR into `main`.** You open it and hand it over.
 8. **You never change repo settings, rulesets or branch protection.** You ask the user.
-9. **When the guard blocks a command, or a branch rule refuses a merge, don't look for a way around it.** Tell the user. A refused push of your own records is not that case (loop step 8).
+9. **When the guard blocks a command, or a branch rule refuses a merge, don't look for a way around it.** Do what the guard's message says (it says when one retry is in order); otherwise tell the user. A refused push of your own records is not that case (loop step 8).
 10. **Stage explicit paths** (`git add STATUS.md docs/decisions/`), never `git add -A` or `git add .`: agent worktrees under `.claude/worktrees/` and `.agent-team/worktrees/` would be committed.
 11. **Never let two writers touch the same files at once.**
 
