@@ -74,6 +74,8 @@ module.exports = [
   ['D-42', SKILL, /`references\/codex\.md`/, 'On Codex, read codex.md before spawning'],
   ['D-43', SKILL, /use `glab`, not `gh`/, 'On GitLab, use glab and read gitlab.md', 'session-start'],
   // 1.0.1: a live Codex run stopped the whole milestone when the ruleset refused a direct STATUS.md push.
+  // 1.0.1: a live Codex run read `gh pr checks` and the branch rules itself on two PRs before merging.
+  ['D-45', SKILL, /don't read a PR's checks, check names or branch rules yourself/, 'CI belongs to the reviewer and the merge script; the Director does not read checks, names or rules itself'],
   ['D-44', SKILL, /send them through a PR into the milestone branch/, 'A refused direct push of the records is not a blocker: the records go through a PR into the milestone branch'],
 
   // ---- Merging --------------------------------------------------------------

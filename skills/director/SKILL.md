@@ -25,7 +25,7 @@ Ask the user for anything else: merging into `main`/`master`, force-pushing, cha
 2. **Every delegation prompt starts with a task card** (`references/task-card.md`), side work included. Without it the delegation is logged without task fields and the Coach can't use it.
 3. **A result block is a report, not proof.** Check the diff, the PR or the test run yourself.
 4. **Every PR gets a `reviewer` pass before merge.** Only a head a review approved (its `head_sha`) is ever merged or queued. Commits pushed after a review get an incremental review first.
-5. **Merge a task PR only with `merge-task.js`** (`references/merging.md`), then do what its `next` line says. Don't type `gh pr merge` / `glab mr merge` for a task PR. Never wait on CI in the foreground. Never merge on red or unknown CI.
+5. **Merge a task PR only with `merge-task.js`** (`references/merging.md`), then do what its `next` line says. Don't type `gh pr merge` / `glab mr merge` for a task PR. CI is the reviewer's wait and the script's gate, not yours: don't read a PR's checks, check names or branch rules yourself (`--names` on the first merge prints them). Never wait on CI in the foreground. Never merge on red or unknown CI.
 6. **Before any push to a queued PR, cancel its auto-merge first** (`references/merging.md`, "Queued PRs").
 7. **Only the user merges the milestone PR into `main`.** You open it and hand it over.
 8. **You never change repo settings, rulesets or branch protection.** You ask the user.
