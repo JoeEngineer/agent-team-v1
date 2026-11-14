@@ -5,7 +5,7 @@ _Last updated: 2026-11-13. This milestone was done by one Claude session working
 ## Current milestone
 
 **v1**: Rewrite the guidance for all roles to be shorter without losing intent, so it costs less context and survives compaction. Version 1.0.0.
-Branch: `milestone/v1` (from `main` at 03fd01f) · Issue: none · Started: 2026-11-13
+Branch: `milestone/v1` (from `main` at 03fd01f) · Issue: none · Started: 2026-11-13 · **Merged into `main` as #105 on 2026-11-13** (tag `v1.0.0`)
 
 Previous milestone: **ci-wait** (0.6.0), merged into `main` as #104.
 
@@ -13,12 +13,12 @@ Previous milestone: **ci-wait** (0.6.0), merged into `main` as #104.
 
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
-| V1-1 | `scripts/merge-task.js`: gate, merge, comment and log in one call; guard check; tests | (inline) | Fable 5.2 | 1 | done, not reviewed | |
-| V1-2 | Director `SKILL.md` and references rewritten in layers, one home per rule | (inline) | Fable 5.2 | 1 | done, not reviewed | |
-| V1-3 | Role files: `reviewer`, `implementer` tightened; `coach` regrouped by log file | (inline) | Fable 5.2 | 1 | done, not reviewed | |
-| V1-4 | SessionStart note after a compaction | (inline) | Fable 5.2 | 1 | done, not reviewed | |
-| V1-5 | Rule inventory, size budgets and single-source tests replace the sentence-matching tests | (inline) | Fable 5.2 | 1 | done, not reviewed | |
-| V1-6 | 1.0.0 manifests, README, `docs/guidance.md`, decisions 0019 and 0020, live-harness parser | (inline) | Fable 5.2 | 1 | done, not reviewed | |
+| V1-1 | `scripts/merge-task.js`: gate, merge, comment and log in one call; guard check; tests | (inline) | Fable 5.2 | 1 | merged (#105) | |
+| V1-2 | Director `SKILL.md` and references rewritten in layers, one home per rule | (inline) | Fable 5.2 | 1 | merged (#105) | |
+| V1-3 | Role files: `reviewer`, `implementer` tightened; `coach` regrouped by log file | (inline) | Fable 5.2 | 1 | merged (#105) | |
+| V1-4 | SessionStart note after a compaction | (inline) | Fable 5.2 | 1 | merged (#105) | |
+| V1-5 | Rule inventory, size budgets and single-source tests replace the sentence-matching tests | (inline) | Fable 5.2 | 1 | merged (#105) | |
+| V1-6 | 1.0.0 manifests, README, `docs/guidance.md`, decisions 0019 and 0020, live-harness parser | (inline) | Fable 5.2 | 1 | merged (#105) | |
 
 States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked`
 
@@ -35,12 +35,11 @@ Result: `node tests/run.js` passes on the branch head. What a Claude + GitHub Di
 
 ## Needs the user
 
-- **Review the branch.** Nothing was pushed and no PR is open. Decisions 0019 and 0020 are marked `proposed`.
-- **Behaviour changes to accept or reject** (decision 0019): a queued PR is commented on when queued, not after it merges; queueing on pending CI is automatic when the queue check passes; `merge-task.js` merges into `milestone/*` only.
-- **Live verification.** The rewrite was checked against the rule inventory and unit tests only. Run `tests/live/` on Claude and Codex and compare `guidance_version` 0.6.0 with 1.0.0 before using 1.0.0 for a real milestone.
+- **Merge #107 (1.0.1).** The live CI-wait harness was run on 1.0.0 on 2026-11-13 (Claude and Codex). It found three wording regressions, fixed in #107, which also holds the report (`docs/coach/2026-11-13-v1-live.md`). On 1.0.1 both Directors complete the test milestone. Not covered by those runs: compaction, the queued and waiting merge paths, GitLab.
+- **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
 
 ## Recent decisions
 
-- 0019: one script merges a task PR (proposed)
-- 0020: guidance in layers, one home per rule, size budgets (proposed)
+- 0019: one script merges a task PR (accepted by the user 2026-11-13)
+- 0020: guidance in layers, one home per rule, size budgets (accepted by the user 2026-11-13)

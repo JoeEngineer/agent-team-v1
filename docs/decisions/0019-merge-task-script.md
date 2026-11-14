@@ -2,7 +2,7 @@
 id: 0019
 title: One script merges a task PR (gate, merge, comment, log)
 date: 2026-11-13
-status: proposed            # implemented on milestone/v1; the user has not reviewed the details yet
+status: accepted            # the user confirmed it on 2026-11-13, after merging #105
 milestone: v1
 task: none
 decided_by: architect       # a single Claude session, not a Director run; see Context
@@ -13,7 +13,7 @@ effort: unknown
 ## Context
 In 0.6.0 the Director assembled each merge by hand: `ci-wait.js --once --sha` chained to `gh pr merge` chained to `gh pr comment`, in a bash form and a PowerShell 5.1 form, on GitHub and GitLab, with a queue variant and a `--names` prefix. It then read six exit codes and looked up what each meant. That procedure took about half of `merging.md` (15 KB), was restated in `SKILL.md`, `codex.md` and `gitlab.md`, and was pinned by tests that matched whole sentences. `merging.md` is not re-attached after a compaction, so the most safety-critical procedure was also the one most likely to be lost.
 
-The user asked on 2026-11-13 for the guidance to be rewritten to be more succinct without losing intent, as 1.0.0, and was away while it was done. The choices below were made without them.
+The user asked on 2026-11-13 for the guidance to be rewritten to be more succinct without losing intent, as 1.0.0, and was away while it was done. The choices below were made without them. On their return they merged #105 and accepted this record, including the three behaviour changes under Consequences ("I would have chosen the same options").
 
 ## Options
 1. **Keep the chained command, shorten the prose around it.** No code change. The two shell forms, the queue variant and the exit-code table all stay.
@@ -34,7 +34,7 @@ Typed `gh pr merge` / `glab mr merge` commands are still guarded and logged as b
 
 ## Consequences
 - `merging.md` halves, the PowerShell command forms are gone from the guidance, and the per-result instructions arrive only when they apply.
-- **Changed behaviour to review:**
+- **Changed behaviour (accepted by the user on 2026-11-13):**
   - A queued PR now gets its comment when it is queued ("Auto-merge queued by the Director…"), not after it merges. The checkpoint no longer posts one.
   - Queueing on pending is automatic when the queue check passes. In 0.6.0 the Director chose to make the queue call; the check that decided was the same.
   - The script only merges into `milestone/*`. A project whose instructions widen the Director's merge authority to other branches has to type the merge.
