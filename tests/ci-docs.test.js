@@ -140,11 +140,13 @@ test('README: each --names mention says the Director runs it inside its merge ca
   assert(README.includes('[`docs/guidance.md`](docs/guidance.md)'), 'links the guidance doc');
 });
 
-test('README: says to re-run codex-agents.js after upgrading, and that 1.0.0 is not yet verified live', () => {
+test('README: says to re-run codex-agents.js after upgrading, and what the 1.0.1 live runs did and did not cover', () => {
   assert(README.includes('after upgrading to 1.0.0 in particular, so the agent TOMLs carry the rewritten role text'), 'codex-agents rerun');
   const limits = README.slice(README.indexOf('## Limits and known gaps'), README.indexOf('## License'));
   assert(limits.includes('\n- **Shorter guidance and the merge script (1.0.0):**'), '1.0.0 bullet in Limits');
-  assert(limits.includes('not yet against live runs'), 'the unverified part is stated');
+  assert(limits.includes('\n- **Live runs and three wording fixes (1.0.1):**'), '1.0.1 bullet in Limits');
+  assert(limits.includes('Not covered by those runs: compaction, the queued and waiting merge paths, GitLab'), 'what the live runs did not cover is stated');
+  assert(fs.existsSync(path.join(ROOT, 'docs', 'coach', '2026-11-13-v1-live.md')), 'the live-run report exists');
 });
 
 test('README: a queue example, where shown, is gated by --queue-check on the same line (decision 0018)', () => {
@@ -159,7 +161,7 @@ test('README: a queue example, where shown, is gated by --queue-check on the sam
   assert(!queue.test('gh pr merge <n> --disable-auto'), '--disable-auto is not a queue call');
 });
 
-test('plugin manifests are 1.0.0', () => {
-  eq(JSON.parse(read('plugin.json')).version, '1.0.0', 'plugin.json version');
-  eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '1.0.0', '.claude-plugin/plugin.json version');
+test('plugin manifests are 1.0.1', () => {
+  eq(JSON.parse(read('plugin.json')).version, '1.0.1', 'plugin.json version');
+  eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '1.0.1', '.claude-plugin/plugin.json version');
 });

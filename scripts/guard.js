@@ -184,15 +184,22 @@ const lookupDeadline = Date.now() + LOOKUP_BUDGET_MS;
 function requireUnprotectedBase(which, target, repo, cwd) {
   const what = `${forge.noun(which)} ${target || '(current branch)'}`;
   const left = lookupDeadline - Date.now();
+  const check = which === 'gitlab'
+    ? ['glab mr view', target, repo ? `--repo ${repo}` : '', '--output json'].filter(Boolean).join(' ') + ' (target_branch)'
+    : ['gh pr view', target, repo ? `--repo ${repo}` : '', '--json baseRefName'].filter(Boolean).join(' ');
   if (left < MIN_LOOKUP_MS) {
-    const check = which === 'gitlab'
-      ? ['glab mr view', target, repo ? `--repo ${repo}` : '', '--output json'].filter(Boolean).join(' ') + ' (target_branch)'
-      : ['gh pr view', target, repo ? `--repo ${repo}` : '', '--json baseRefName'].filter(Boolean).join(' ');
     block(`couldn't confirm the base of ${what} in time (the guard's ${Math.round(LOOKUP_BUDGET_MS / 100) / 10} s for forge lookups ran out before this one)`,
       `Retry the command, or check the base with \`${check}\`.`);
   }
   const info = forge.requestInfo(which, { target, repo }, cwd, Math.min(LOOKUP_MS, left));
-  if (!info) block(`could not confirm the base branch of ${what} — refusing to merge blind`);
+  // The lookup itself failed: the CLI is missing or logged out, the request
+  // doesn't exist, or the network dropped. Still a block (fail closed); the
+  // message says that one retry is not a way around the guard, because a live
+  // unattended run stopped a whole milestone on a single failed lookup.
+  if (!info) {
+    block(`could not confirm the base branch of ${what} — refusing to merge blind`,
+      `The lookup failed; that can be a network or login hiccup. Check it with \`${check}\`. If that answers and the base is not a protected branch, run the same command again once: a retry is not a way around the guard. If it still can't be confirmed, this needs the user.`);
+  }
   if (!info.base) block(`could not confirm the base branch of ${what}`);
   if (isProtected(info.base)) block(`${what} targets protected branch "${info.base}"; only the user merges into it`);
 }

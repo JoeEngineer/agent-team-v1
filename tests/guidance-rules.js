@@ -46,7 +46,7 @@ module.exports = [
   ['D-14', SKILL, /cancel its auto-merge first/, 'Before any push to a queued PR, cancel its auto-merge'],
   ['D-15', SKILL, /Only the user merges the milestone PR into `main`/, 'Only the user merges the milestone PR into main', 'guard'],
   ['D-16', SKILL, /never change repo settings, rulesets or branch protection/, 'The Director never changes repo settings, rulesets or branch protection', 'guard'],
-  ['D-17', SKILL, /don't look for a way around it/, 'A refusal by the guard or a branch rule is reported, never worked around'],
+  ['D-17', SKILL, /or a branch rule refuses a merge, don't look for a way around it/, 'A guard block, or a merge a branch rule refuses, is reported, never worked around'],
   ['D-18', SKILL, /never `git add -A` or `git add \.`/, 'Stage explicit paths; never git add -A or git add .', 'guard'],
   ['D-19', SKILL, /Never let two writers touch the same files/, 'Two writers never touch the same files at once'],
   ['D-20', SKILL, /Create `milestone\/<slug>` from `main`/, 'Intake: goal, criteria, out of scope; milestone branch and issue; architect for a non-trivial breakdown'],
@@ -73,6 +73,11 @@ module.exports = [
   ['D-41', SKILL, /agent-team hooks: active/, 'Hooks check at start; without hooks, warn the user and log by hand'],
   ['D-42', SKILL, /`references\/codex\.md`/, 'On Codex, read codex.md before spawning'],
   ['D-43', SKILL, /use `glab`, not `gh`/, 'On GitLab, use glab and read gitlab.md', 'session-start'],
+  // 1.0.1: a live Codex run stopped the whole milestone when the ruleset refused a direct STATUS.md push.
+  // 1.0.1: a live Codex run read `gh pr checks` and the branch rules itself on two PRs before merging.
+  ['D-45', SKILL, /don't read a PR's checks, check names or branch rules yourself/, 'CI belongs to the reviewer and the merge script; the Director does not read checks, names or rules itself'],
+  ['D-46', SKILL, /it says when one retry is in order/, 'A guard block is handled as its message says: one retry when it says so, otherwise the user', 'guard'],
+  ['D-44', SKILL, /send them through a PR into the milestone branch/, 'A refused direct push of the records is not a blocker: the records go through a PR into the milestone branch'],
 
   // ---- Merging --------------------------------------------------------------
   ['M-01', MERGING, /"verdict": "approve"/, 'A task PR is merged only after a reviewer verdict of approve'],

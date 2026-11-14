@@ -375,3 +375,21 @@ if (SAVED_PROJECT_DIR !== undefined) process.env.CLAUDE_PROJECT_DIR = SAVED_PROJ
     assert(!denied(bare), 'no request number: the script refuses it itself');
   });
 }
+
+// ---- a failed base lookup: still blocked, and the message allows one retry ---
+{
+  const { run, fakeGh } = require('./helpers');
+  const proj = tmpProject();
+  const reasonOf = (r) => { try { return JSON.parse(r.stdout).hookSpecificOutput; } catch { return {}; } };
+  test('guard: a failed base lookup is denied, names the check to run, and says one retry is not a way around the guard', () => {
+    for (const command of [`node "/p/scripts/merge-task.js" 106 --sha ${SHA} --task T-3`, 'gh pr merge 106 --squash']) {
+      const out = reasonOf(run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: proj }, proj, fakeGh('', 1)));
+      eq(out.permissionDecision, 'deny', `still denied: ${command}`);
+      const why = out.permissionDecisionReason;
+      assert(/could not confirm the base branch of PR 106 — refusing to merge blind/.test(why), why);
+      assert(why.includes('gh pr view 106 --json baseRefName'), 'names the check');
+      assert(/run the same command again once: a retry is not a way around the guard/.test(why), 'allows one retry');
+      assert(/If it still can't be confirmed, this needs the user\./.test(why), 'then the user');
+    }
+  });
+}

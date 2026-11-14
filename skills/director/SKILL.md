@@ -25,11 +25,11 @@ Ask the user for anything else: merging into `main`/`master`, force-pushing, cha
 2. **Every delegation prompt starts with a task card** (`references/task-card.md`), side work included. Without it the delegation is logged without task fields and the Coach can't use it.
 3. **A result block is a report, not proof.** Check the diff, the PR or the test run yourself.
 4. **Every PR gets a `reviewer` pass before merge.** Only a head a review approved (its `head_sha`) is ever merged or queued. Commits pushed after a review get an incremental review first.
-5. **Merge a task PR only with `merge-task.js`** (`references/merging.md`), then do what its `next` line says. Don't type `gh pr merge` / `glab mr merge` for a task PR. Never wait on CI in the foreground. Never merge on red or unknown CI.
+5. **Merge a task PR only with `merge-task.js`** (`references/merging.md`), then do what its `next` line says. Don't type `gh pr merge` / `glab mr merge` for a task PR. CI is the reviewer's wait and the script's gate, not yours: don't read a PR's checks, check names or branch rules yourself (`--names` on the first merge prints them). Never wait on CI in the foreground. Never merge on red or unknown CI.
 6. **Before any push to a queued PR, cancel its auto-merge first** (`references/merging.md`, "Queued PRs").
 7. **Only the user merges the milestone PR into `main`.** You open it and hand it over.
 8. **You never change repo settings, rulesets or branch protection.** You ask the user.
-9. **When the guard or a branch rule refuses something, don't look for a way around it.** Tell the user.
+9. **When the guard blocks a command, or a branch rule refuses a merge, don't look for a way around it.** Do what the guard's message says (it says when one retry is in order); otherwise tell the user. A refused push of your own records is not that case (loop step 8).
 10. **Stage explicit paths** (`git add STATUS.md docs/decisions/`), never `git add -A` or `git add .`: agent worktrees under `.claude/worktrees/` and `.agent-team/worktrees/` would be committed.
 11. **Never let two writers touch the same files at once.**
 
@@ -47,7 +47,7 @@ Ask the user for anything else: merging into `main`/`master`, force-pushing, cha
    - `approve` with `ci` `green` or `pending`, or `none` with `tests_passed: true`: run `merge-task.js`.
    - `ci: red`: don't merge. Send it back to the implementer with the failing check names. If the reviewer approved and explained why the failure isn't this PR's fault, ask the user.
    - `ci: unknown`: don't merge, don't queue and don't wait. Ask the user.
-8. **Record.** Update `STATUS.md` after every delegation and result. Write a decision record for every real decision (`references/decisions.md`). Commit `STATUS.md` and `docs/decisions/` to the milestone branch regularly, and only those: the logs under `.agent-team/logs/` are gitignored, written by hooks (add an event only with `scripts/log-event.js`), and archived at close.
+8. **Record.** Update `STATUS.md` after every delegation and result. Write a decision record for every real decision (`references/decisions.md`). Commit `STATUS.md` and `docs/decisions/` to the milestone branch regularly, and only those: the logs under `.agent-team/logs/` are gitignored, written by hooks (add an event only with `scripts/log-event.js`), and archived at close. Where the milestone branch requires status checks, the forge refuses a direct push of the records. That is the rule working, not a blocker: put them on a branch and send them through a PR into the milestone branch like any other change. One before the milestone PR is enough.
 9. **Close** when every task is merged (`references/merging.md`, "Closing the milestone"): resolve anything queued, open the milestone → `main` PR, run the final `reviewer` pass, archive the logs, check the PR's CI once, and report "complete" only on green.
 
 ## References
