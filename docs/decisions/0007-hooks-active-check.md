@@ -1,6 +1,8 @@
 # 0007: Hooks-active check at SessionStart
 
-Status: accepted
+Status: accepted. Amended by [0021](0021-enabled-per-project.md) (1.0.2): the
+line is printed only in a project set up for agent-team, and in a git worktree
+the marker is written to the main checkout.
 
 ## Context
 Hooks fail silently: if they are not installed, not trusted (Codex), or not
