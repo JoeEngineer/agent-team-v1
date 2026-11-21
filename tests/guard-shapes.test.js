@@ -96,6 +96,7 @@ test('push --all is blocked while a protected branch exists locally', () => {
   git('init', '-q', '-b', 'main');
   git('commit', '-q', '--allow-empty', '-m', 'init');
   git('switch', '-q', '-c', 'task/T-9');
+  fs.mkdirSync(path.join(dir, '.agent-team')); // set up for agent-team, so the guard acts
   assert(denied(guard('git push --all origin', dir)), '--all with a local main');
   assert(denied(guard('git push --branches origin', dir)), '--branches with a local main');
   eq(guard('git push origin task/T-9', dir).stdout, '', 'a named task branch still goes through');
@@ -134,6 +135,7 @@ test('abbreviated --all / --branches (--al, --br) are blocked while a protected 
   git('init', '-q', '-b', 'main');
   git('commit', '-q', '--allow-empty', '-m', 'init');
   git('switch', '-q', '-c', 'task/T-9');
+  fs.mkdirSync(path.join(dir, '.agent-team')); // set up for agent-team, so the guard acts
   for (const cmd of ['git push --al origin', 'git push --branc origin', 'git status; if ($LASTEXITCODE -eq 0) { git push --al origin }']) {
     assert(denied(guard(cmd, dir)), `${cmd} with a local main`);
   }

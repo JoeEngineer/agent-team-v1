@@ -89,8 +89,34 @@ for (const [name, cmd] of allowed) {
 test('blocks bare push while on main', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-main-'));
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  fs.mkdirSync(path.join(dir, '.agent-team')); // set up for agent-team, so the guard acts
   const r = run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push' }, cwd: dir }, dir);
   assertBlocked(r, 'bare push on main');
+});
+
+test('the guard does nothing in a project that is not set up for agent-team', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-off-'));
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  fs.mkdirSync(path.join(dir, '.claude', 'worktrees', 'x'), { recursive: true });
+  const g = (command, env) => run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command }, cwd: dir }, dir, env);
+  const cmds = ['git push', 'git push --force origin main', 'gh pr merge 5 --admin', 'gh release create v1', 'gh repo edit --visibility public', 'git add -A', 'glab mr merge 3', 'gh pr merge 5 7>out'];
+  for (const cmd of cmds) {
+    const r = g(cmd);
+    eq(r.status, 0, 'exit');
+    eq(r.stdout, '', `no decision for ${cmd}`);
+    eq(r.stderr, '', `nothing on stderr for ${cmd}`);
+  }
+  assert(!fs.existsSync(path.join(dir, '.agent-team')), 'nothing created');
+  // The same commands are blocked once the project is set up: by the project's
+  // own (Codex) hooks running the guard, by its own plugin setting, or by
+  // team-init's folder.
+  assertBlocked(g('git push', { AGENT_TEAM_HOOK_SOURCE: 'project' }), 'project hook source');
+  fs.writeFileSync(path.join(dir, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'agent-team@agent-team': true } }));
+  assertBlocked(g('git push'), 'enabled in .claude/settings.json');
+  fs.rmSync(path.join(dir, '.claude', 'settings.json'));
+  assertAllowed(g('git push'), 'off again');
+  fs.mkdirSync(path.join(dir, '.agent-team'));
+  for (const cmd of ['git push', 'git push --force origin main', 'gh pr merge 5 --admin', 'gh release create v1']) assertBlocked(g(cmd), cmd);
 });
 
 test('git add -A / . blocked while .claude/worktrees/ exists unignored; allowed otherwise', () => {

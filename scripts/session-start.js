@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // SessionStart hook: tells the model (and the user) that agent-team hooks are
 // running, and leaves a marker file the Director can check as a fallback.
+// Silent in a project that is not set up for agent-team (lib.enabledHere).
 // Never throws; always exits 0.
 'use strict';
 
@@ -12,6 +13,10 @@ try {
   const input = lib.readStdin();
   const tool = lib.detectTool(input);
   const version = lib.guidanceVersion();
+
+  // The plugin may be installed for every project of a user. In a project not
+  // set up for agent-team the guard is off, so say nothing.
+  if (!lib.enabledHere(input)) process.exit(0);
 
   const root = path.join(lib.projectDir(input), '.agent-team');
   // Only write the marker where agent-team is already in use.

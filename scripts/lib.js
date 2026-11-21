@@ -55,8 +55,7 @@ function logDir(input) {
 // (.claude/settings*.json), or its Codex hooks call the shim. The plugin can be
 // installed for every project of a user; the logger uses this to stay out of
 // the ones that never set it up.
-function inUse(input) {
-  const root = projectDir(input);
+function inUse(input, root = projectDir(input)) {
   if (fs.existsSync(path.join(root, '.agent-team'))) return true;
   const mentions = (rel, needle) => {
     try { return fs.readFileSync(path.join(root, ...rel), 'utf8').includes(needle); } catch { return false; }
@@ -64,6 +63,37 @@ function inUse(input) {
   return mentions(['.claude', 'settings.json'], 'agent-team@') ||
     mentions(['.claude', 'settings.local.json'], 'agent-team@') ||
     mentions(['.codex', 'hooks.json'], 'agent-team-hook.js');
+}
+
+// The main checkout of a linked git worktree, or null when `dir` is the main
+// checkout, is not in a repo, or git is missing.
+function mainCheckout(dir) {
+  try {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    }).trim();
+    if (!common) return null;
+    const abs = path.resolve(dir, common);
+    if (path.basename(abs) !== '.git') return null;
+    const main = path.dirname(abs);
+    return path.resolve(main) === path.resolve(dir) ? null : main;
+  } catch {
+    return null;
+  }
+}
+
+// Should the guard and the SessionStart line act in this project? The plugin is
+// enabled per project: a user-level install does nothing in a project that was
+// never set up (team-init). True when the hook came from the project's own
+// hooks (the Codex shim), or the project is in use, or it is a git worktree of
+// a checkout that is in use (a worktree has no ignored files, so a project
+// that ignores `.agent-team/` shows no sign of it there).
+function enabledHere(input) {
+  if (process.env.AGENT_TEAM_HOOK_SOURCE === 'project') return true;
+  if (inUse(input)) return true;
+  const root = projectDir(input);
+  const main = mainCheckout(root);
+  return !!main && inUse(input, main);
 }
 
 function appendJsonl(input, file, record) {
@@ -509,7 +539,7 @@ function detectTool(input, env = process.env) {
 }
 
 module.exports = {
-  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, appendJsonl, guidanceVersion,
+  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, enabledHere, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
   glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,
