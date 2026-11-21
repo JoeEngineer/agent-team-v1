@@ -17,6 +17,8 @@
 //   - `git add -A` / `git add .` while unignored agent worktrees exist
 //   - a redirection that bash, PowerShell and cmd read differently (`7>out`,
 //     `""5>out`, `5&>out`, `>out\ 5`), in any command that runs git, gh or glab
+// Only in a project set up for agent-team (lib.enabledHere); in any other
+// project the guard does nothing.
 // This is a guardrail against mistakes, not a sandbox: a determined command can evade
 // simple parsing. Server-side branch protection is the real enforcement.
 'use strict';
@@ -392,6 +394,10 @@ function main() {
   if (input.hook_event_name && input.hook_event_name !== 'PreToolUse') return;
   const cmd = input.tool_input && input.tool_input.command;
   if (typeof cmd !== 'string' || !/\b(git|gh|glab)(\.exe)?\b|merge-task/.test(cmd)) return;
+  // The plugin may be installed for every project of a user. The guard acts
+  // only in a project set up for agent-team (lib.enabledHere); elsewhere the
+  // command runs as if the plugin were not installed.
+  if (!lib.enabledHere(input)) return;
   const cwd = input.cwd || lib.projectDir(input);
   const segs = lib.allSegments(cmd);
   // A redirection the shells read differently (see lib.segments) means the

@@ -38,10 +38,43 @@ function projectDir(input) {
   return found;
 }
 
+// The main checkout of a linked git worktree, or null when `dir` is the main
+// checkout or not the root of a checkout. Read from git's own files, with no
+// process spawn, because the logger asks on every hook call: in a linked
+// worktree `.git` is a file naming the worktree's git folder, and that
+// folder's `commondir` file points at the main checkout's `.git`. (A
+// submodule's `.git` is a file too, but its git folder has no `commondir`.)
+const MAIN_CHECKOUTS = new Map();
+function mainCheckout(dir) {
+  if (MAIN_CHECKOUTS.has(dir)) return MAIN_CHECKOUTS.get(dir);
+  let found = null;
+  try {
+    const dotGit = path.join(dir, '.git');
+    const m = fs.statSync(dotGit).isFile() && /^gitdir:\s*(.+)$/m.exec(fs.readFileSync(dotGit, 'utf8'));
+    if (m) {
+      const gitDir = path.resolve(dir, m[1].trim());
+      const common = path.resolve(gitDir, fs.readFileSync(path.join(gitDir, 'commondir'), 'utf8').trim());
+      if (path.basename(common) === '.git' && path.resolve(path.dirname(common)) !== path.resolve(dir)) found = path.dirname(common);
+    }
+  } catch { /* not a linked worktree */ }
+  MAIN_CHECKOUTS.set(dir, found);
+  return found;
+}
+
+// The folder that holds `.agent-team/`: the project folder, or the main
+// checkout when the project folder is a linked git worktree. A worktree is
+// removed when its task ends, and `.agent-team/logs/` is ignored, so lines
+// written inside one would be deleted with it. Every session and agent of a
+// project therefore writes to the main checkout's logs.
+function logRoot(input) {
+  const root = projectDir(input);
+  return mainCheckout(root) || root;
+}
+
 // The logs folder path, without creating it. Use this for reads and checks, so
 // looking for a log never leaves a folder behind.
 function logPath(input) {
-  return path.join(projectDir(input), '.agent-team', 'logs');
+  return path.join(logRoot(input), '.agent-team', 'logs');
 }
 
 function logDir(input) {
@@ -52,18 +85,33 @@ function logDir(input) {
 
 // Does this project use agent-team? True when it has an .agent-team folder
 // (team-init, or an earlier log line), or its own settings turn the plugin on
-// (.claude/settings*.json), or its Codex hooks call the shim. The plugin can be
-// installed for every project of a user; the logger uses this to stay out of
-// the ones that never set it up.
+// (.claude/settings*.json), or its Codex hooks call the shim; or when it is a
+// git worktree of a checkout where one of those holds (a worktree has no
+// ignored files, so a project that ignores `.agent-team/` shows no sign of it
+// there). The plugin can be installed for every project of a user; the hooks
+// use this to stay out of the ones that never set it up.
 function inUse(input) {
-  const root = projectDir(input);
-  if (fs.existsSync(path.join(root, '.agent-team'))) return true;
-  const mentions = (rel, needle) => {
-    try { return fs.readFileSync(path.join(root, ...rel), 'utf8').includes(needle); } catch { return false; }
+  const usedAt = (root) => {
+    if (fs.existsSync(path.join(root, '.agent-team'))) return true;
+    const mentions = (rel, needle) => {
+      try { return fs.readFileSync(path.join(root, ...rel), 'utf8').includes(needle); } catch { return false; }
+    };
+    return mentions(['.claude', 'settings.json'], 'agent-team@') ||
+      mentions(['.claude', 'settings.local.json'], 'agent-team@') ||
+      mentions(['.codex', 'hooks.json'], 'agent-team-hook.js');
   };
-  return mentions(['.claude', 'settings.json'], 'agent-team@') ||
-    mentions(['.claude', 'settings.local.json'], 'agent-team@') ||
-    mentions(['.codex', 'hooks.json'], 'agent-team-hook.js');
+  const root = projectDir(input);
+  if (usedAt(root)) return true;
+  const main = mainCheckout(root);
+  return !!main && usedAt(main);
+}
+
+// Should the guard and the SessionStart line act in this project? The plugin is
+// enabled per project: a user-level install does nothing in a project that was
+// never set up (team-init). True when the hook came from the project's own
+// hooks (the Codex shim), or the project is in use.
+function enabledHere(input) {
+  return process.env.AGENT_TEAM_HOOK_SOURCE === 'project' || inUse(input);
 }
 
 function appendJsonl(input, file, record) {
@@ -509,7 +557,7 @@ function detectTool(input, env = process.env) {
 }
 
 module.exports = {
-  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, inUse, appendJsonl, guidanceVersion,
+  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
   glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,

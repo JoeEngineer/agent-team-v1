@@ -3,7 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, execFileSync } = require('child_process');
 const { ROOT, bareProject: tmpProject, run, test, assert, eq } = require('./helpers');
 const lib = require('../scripts/lib');
 
@@ -37,22 +37,87 @@ test('Codex input reports codex', () => {
   eq(JSON.parse(fs.readFileSync(marker(dir), 'utf8')).tool, 'codex', 'marker tool');
 });
 
-test('no folders created when .agent-team is missing; output still printed', () => {
+test('project not set up for agent-team: silent, and no folders created', () => {
   const dir = tmpProject();
-  const r = run('session-start.js', claudeIn, dir);
-  eq(r.status, 0, 'exit');
-  assert(r.stdout.includes('agent-team hooks: active'), 'context printed');
+  for (const input of [claudeIn, codexIn, { ...claudeIn, source: 'compact' }]) {
+    const r = run('session-start.js', input, dir);
+    eq(r.status, 0, 'exit');
+    eq(r.stdout, '', 'nothing printed');
+  }
   assert(!fs.existsSync(path.join(dir, '.agent-team')), '.agent-team not created');
 });
 
-test('garbage and empty stdin: exit 0, still prints output', () => {
+test('set up by the project settings, by its Codex hooks, or run from the project hooks: line printed', () => {
+  const viaSettings = tmpProject();
+  fs.mkdirSync(path.join(viaSettings, '.claude'));
+  fs.writeFileSync(path.join(viaSettings, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'agent-team@agent-team': true } }));
+  assert(run('session-start.js', claudeIn, viaSettings).stdout.includes('agent-team hooks: active'), 'settings.json');
+  assert(!fs.existsSync(path.join(viaSettings, '.agent-team')), '.agent-team not created');
+  const viaCodex = tmpProject();
+  fs.mkdirSync(path.join(viaCodex, '.codex'));
+  fs.writeFileSync(path.join(viaCodex, '.codex', 'hooks.json'), '{"hooks":{"x":"node .codex/agent-team-hook.js guard"}}');
+  assert(run('session-start.js', codexIn, viaCodex).stdout.includes('agent-team hooks: active'), 'codex hooks.json');
+  const viaShim = tmpProject();
+  assert(run('session-start.js', codexIn, viaShim, { AGENT_TEAM_HOOK_SOURCE: 'project' }).stdout.includes('agent-team hooks: active'), 'project hook source');
+});
+
+test('a git worktree of a set-up checkout counts as set up, even when .agent-team/ is ignored', () => {
+  const gitIn = (cwd) => (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd });
+  const force = (cwd) => run('guard.js', { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git push --force' }, cwd }, cwd);
+  const main = tmpProject();
+  const git = gitIn(main);
+  fs.writeFileSync(path.join(main, '.gitignore'), '.agent-team/\nwt/\n');
+  git('add', '.gitignore');
+  git('commit', '-q', '-m', 'init');
+  fs.mkdirSync(path.join(main, '.agent-team'));
+  const wt = path.join(main, 'wt', 'a');
+  git('worktree', 'add', '-q', '-b', 'task/T-2', wt);
+  assert(!fs.existsSync(path.join(wt, '.agent-team')), 'the worktree has no .agent-team of its own');
+  assert(run('session-start.js', claudeIn, wt).stdout.includes('agent-team hooks: active'), 'line printed in the worktree');
+  assert(force(wt).stdout.includes('"permissionDecision":"deny"'), 'guard acts in the worktree');
+  // The marker and the logs go to the main checkout, not into the worktree.
+  eq(JSON.parse(fs.readFileSync(marker(main), 'utf8')).session_id, 's1', 'marker in the main checkout');
+  assert(!fs.existsSync(path.join(wt, '.agent-team')), 'session start leaves no .agent-team in the worktree');
+  const logged = spawnSync('node', [path.join(ROOT, 'scripts', 'log-event.js'), 'note', '{"text":"from a worktree"}'], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: wt } });
+  eq(logged.status, 0, logged.stderr);
+  assert(fs.readFileSync(path.join(main, '.agent-team', 'logs', 'notes.jsonl'), 'utf8').includes('from a worktree'), 'note in the main checkout');
+  assert(!fs.existsSync(path.join(wt, '.agent-team')), 'logging leaves no .agent-team in the worktree');
+  // Codex has no CLAUDE_PROJECT_DIR: the project is the git root of the cwd.
+  const env = { ...process.env };
+  delete env.CLAUDE_PROJECT_DIR;
+  const codexNote = spawnSync('node', [path.join(ROOT, 'scripts', 'log-event.js'), 'note', '{"text":"codex cwd"}'], { cwd: wt, encoding: 'utf8', env });
+  eq(codexNote.status, 0, codexNote.stderr);
+  assert(fs.readFileSync(path.join(main, '.agent-team', 'logs', 'notes.jsonl'), 'utf8').includes('codex cwd'), 'cwd in a worktree: note in the main checkout');
+  // A worktree that has its own (tracked) .agent-team folder still logs to the main checkout.
+  fs.mkdirSync(path.join(wt, '.agent-team', 'logs'), { recursive: true });
+  spawnSync('node', [path.join(ROOT, 'scripts', 'log-event.js'), 'note', '{"text":"own folder"}'], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: wt } });
+  assert(fs.readFileSync(path.join(main, '.agent-team', 'logs', 'notes.jsonl'), 'utf8').includes('own folder'), 'still the main checkout');
+  eq(fs.readdirSync(path.join(wt, '.agent-team', 'logs')).length, 0, 'nothing written in the worktree');
+  eq(lib.mainCheckout(main), null, 'the main checkout has no other main checkout');
+  // A worktree of a checkout that is not set up stays off.
+  const bare = tmpProject();
+  const git2 = gitIn(bare);
+  git2('commit', '-q', '--allow-empty', '-m', 'init');
+  const wt2 = path.join(bare, 'wt2');
+  git2('worktree', 'add', '-q', '-b', 'task/T-3', wt2);
+  eq(run('session-start.js', claudeIn, wt2).stdout, '', 'silent');
+  eq(force(wt2).stdout, '', 'guard off');
+});
+
+test('garbage and empty stdin: exit 0, still prints output where set up, silent where not', () => {
   const dir = tmpProject();
+  const bare = tmpProject();
+  fs.mkdirSync(path.join(dir, '.agent-team'));
   for (const input of ['{not json', '']) {
-    const r = spawnSync('node', [path.join(ROOT, 'scripts', 'session-start.js')], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: dir } });
+    const at = (d) => spawnSync('node', [path.join(ROOT, 'scripts', 'session-start.js')], { input, encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: d } });
+    const r = at(dir);
     eq(r.status, 0, 'exit');
     assert(r.stdout.includes('"additionalContext"'), 'context printed');
+    const b = at(bare);
+    eq(b.status, 0, 'exit, not set up');
+    eq(b.stdout, '', 'silent, not set up');
   }
-  assert(!fs.existsSync(path.join(dir, '.agent-team')), 'nothing created');
+  assert(!fs.existsSync(path.join(bare, '.agent-team')), 'nothing created');
 });
 
 test('unwritable marker location does not fail the hook', () => {
@@ -94,5 +159,5 @@ test('after a compaction the Director is told to re-read STATUS.md and the refer
   eq(ctx(run('session-start.js', claudeIn, dir)), `agent-team hooks: active (claude, ${version})`, 'startup: no note');
   eq(ctx(run('session-start.js', { ...claudeIn, source: 'resume' }, dir)), `agent-team hooks: active (claude, ${version})`, 'resume: no note');
   const unused = tmpProject();
-  eq(ctx(run('session-start.js', compact, unused)), `agent-team hooks: active (claude, ${version})`, 'no .agent-team: no note');
+  eq(run('session-start.js', compact, unused).stdout, '', 'no .agent-team: nothing at all');
 });
