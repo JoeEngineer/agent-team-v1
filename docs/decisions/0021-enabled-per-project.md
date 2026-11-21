@@ -37,7 +37,16 @@ where `lib.enabledHere` is true:
   shows no sign of it there.
 
 Anywhere else the guard returns without a decision and the SessionStart hook
-prints nothing.
+prints nothing. The logger's own check (`lib.inUse`) counts such a worktree too.
+
+**Logs live in the main checkout.** `.agent-team/logs/` is ignored and a
+worktree is removed when its task ends, so lines written inside a worktree
+would be deleted with it. `lib.logPath` / `lib.logDir`, the SessionStart
+marker and `archive-logs.js` therefore use the main checkout's `.agent-team/`
+when the project folder is a linked worktree (`lib.logRoot`). On Claude Code
+the logs of worktree agents and sessions already landed there; on Codex the
+project folder is the git root of the working folder, so a session or shim run
+from a worktree wrote into the worktree.
 
 ## Consequences
 
@@ -52,8 +61,12 @@ prints nothing.
   is the team's own (a role agent or a task card). That creates `.agent-team/`,
   which turns the guard on there from then on.
 - The guard checks `enabledHere` only for commands that mention git, gh, glab
-  or merge-task, so other shell calls pay nothing. In a project that is not set
-  up the check costs one extra `git rev-parse`.
+  or merge-task. The worktree lookup reads git's own files (`.git`, then
+  `commondir`) and spawns no process, because the logger asks on every hook
+  call.
+- A Director that itself runs in a worktree finds the logs in the main
+  checkout, not under its own folder. The scripts resolve that for it; a path
+  typed by hand has to name the main checkout.
 
 ## Alternatives
 

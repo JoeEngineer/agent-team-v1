@@ -18,7 +18,8 @@ try {
   // set up for agent-team the guard is off, so say nothing.
   if (!lib.enabledHere(input)) process.exit(0);
 
-  const root = path.join(lib.projectDir(input), '.agent-team');
+  // In a git worktree this is the main checkout's folder (lib.logRoot).
+  const root = path.join(lib.logRoot(input), '.agent-team');
   // Only write the marker where agent-team is already in use.
   if (fs.existsSync(root)) {
     try {

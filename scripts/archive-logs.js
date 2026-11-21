@@ -79,7 +79,9 @@ function main() {
   const date = localDate();
   const dest = path.join(root, project, `${date}-${o.milestone}`);
 
-  const logDir = path.join(projectDir, '.agent-team', 'logs');
+  // Run from a git worktree, archive the main checkout's logs: that is where
+  // every session and agent of the project writes (lib.logRoot).
+  const logDir = path.join(require('./lib').mainCheckout(projectDir) || projectDir, '.agent-team', 'logs');
   if (!fs.existsSync(logDir) || !fs.statSync(logDir).isDirectory()) fail('no .agent-team/logs folder found');
   const files = fs.readdirSync(logDir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith('.jsonl')).map((e) => e.name).sort();

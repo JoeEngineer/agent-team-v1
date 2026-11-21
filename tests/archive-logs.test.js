@@ -43,6 +43,17 @@ test('archive: README counts lines with a top-level milestone (reviews, merges, 
   assert(md.includes('`delegations.jsonl`: 2 line(s), 1 for milestone `m1`'), md);
 });
 
+test('archive: run from a git worktree, archives the main checkout\'s logs', () => {
+  const p = project({ 'delegations.jsonl': rec('m1') });
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...a], { cwd: p });
+  git('commit', '-q', '--allow-empty', '-m', 'init');
+  const wt = path.join(tmp(), 'wt');
+  git('worktree', 'add', '-q', '-b', 'task/T-2', wt);
+  const r = arch(wt, ['m1', '--project', 'proj']);
+  eq(r.status, 0, r.stderr);
+  assert(fs.existsSync(path.join(destOf(r), 'delegations.jsonl')), 'the main checkout\'s log was copied');
+});
+
 test('archive: copies, writes README, leaves originals', () => {
   const content = [rec('m1'), rec('m2', '0.2.1'), 'not json', ''].join('\n');
   const p = project({ 'a.jsonl': content, 'empty.jsonl': '' });

@@ -75,6 +75,25 @@ test('a git worktree of a set-up checkout counts as set up, even when .agent-tea
   assert(!fs.existsSync(path.join(wt, '.agent-team')), 'the worktree has no .agent-team of its own');
   assert(run('session-start.js', claudeIn, wt).stdout.includes('agent-team hooks: active'), 'line printed in the worktree');
   assert(force(wt).stdout.includes('"permissionDecision":"deny"'), 'guard acts in the worktree');
+  // The marker and the logs go to the main checkout, not into the worktree.
+  eq(JSON.parse(fs.readFileSync(marker(main), 'utf8')).session_id, 's1', 'marker in the main checkout');
+  assert(!fs.existsSync(path.join(wt, '.agent-team')), 'session start leaves no .agent-team in the worktree');
+  const logged = spawnSync('node', [path.join(ROOT, 'scripts', 'log-event.js'), 'note', '{"text":"from a worktree"}'], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: wt } });
+  eq(logged.status, 0, logged.stderr);
+  assert(fs.readFileSync(path.join(main, '.agent-team', 'logs', 'notes.jsonl'), 'utf8').includes('from a worktree'), 'note in the main checkout');
+  assert(!fs.existsSync(path.join(wt, '.agent-team')), 'logging leaves no .agent-team in the worktree');
+  // Codex has no CLAUDE_PROJECT_DIR: the project is the git root of the cwd.
+  const env = { ...process.env };
+  delete env.CLAUDE_PROJECT_DIR;
+  const codexNote = spawnSync('node', [path.join(ROOT, 'scripts', 'log-event.js'), 'note', '{"text":"codex cwd"}'], { cwd: wt, encoding: 'utf8', env });
+  eq(codexNote.status, 0, codexNote.stderr);
+  assert(fs.readFileSync(path.join(main, '.agent-team', 'logs', 'notes.jsonl'), 'utf8').includes('codex cwd'), 'cwd in a worktree: note in the main checkout');
+  // A worktree that has its own (tracked) .agent-team folder still logs to the main checkout.
+  fs.mkdirSync(path.join(wt, '.agent-team', 'logs'), { recursive: true });
+  spawnSync('node', [path.join(ROOT, 'scripts', 'log-event.js'), 'note', '{"text":"own folder"}'], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: wt } });
+  assert(fs.readFileSync(path.join(main, '.agent-team', 'logs', 'notes.jsonl'), 'utf8').includes('own folder'), 'still the main checkout');
+  eq(fs.readdirSync(path.join(wt, '.agent-team', 'logs')).length, 0, 'nothing written in the worktree');
+  eq(lib.mainCheckout(main), null, 'the main checkout has no other main checkout');
   // A worktree of a checkout that is not set up stays off.
   const bare = tmpProject();
   const git2 = gitIn(bare);

@@ -88,4 +88,4 @@ EOF
 
 ## Hooks check
 
-At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running, or the project is not set up (the guard and that line are off until `team-init` has run): warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on the forge's branch rules.
+In a git worktree, `.agent-team/logs/` means the main checkout's folder. At the start, look for an `agent-team hooks: active` line in your context. If it is missing, or `.agent-team/logs/.pending/hooks-alive.json` is stale, the hooks are not running, or the project is not set up (the guard and that line are off until `team-init` has run): warn the user, log delegations and reviews by hand with `scripts/log-event.js`, and rely on the forge's branch rules.
