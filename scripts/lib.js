@@ -174,6 +174,10 @@ function parseTaskCard(prompt) {
       if (i > 0) card[pair.slice(0, i)] = pair.slice(i + 1);
     }
     if (card.attempt && /^\d+$/.test(card.attempt)) card.attempt = Number(card.attempt);
+    if (card.flags !== undefined) {
+      const flags = card.flags.split(',').map((f) => f.trim()).filter(Boolean);
+      if (flags.length) card.flags = flags; else delete card.flags;
+    }
   }
   const why = prompt.match(/^\s*WHY\s+(.+)$/m);
   if (why) card.why = why[1].trim();
