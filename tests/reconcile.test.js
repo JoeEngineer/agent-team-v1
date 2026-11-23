@@ -155,7 +155,7 @@ test('reconcile: Codex pending stops support dry-run and recovery without a Clau
     ev('session_meta', { agent_path: '/root/rc_9_a1' }) +
     ev('event_msg', { type: 'task_started', turn_id: 'child-turn' }) +
     ev('turn_context', { turn_id: 'child-turn', model: 'actual-model', effort: 'low' }));
-  const input = { hook_event_name: 'SubagentStop', session_id: 'parent', turn_id: 'child-turn', agent_id: 'child', agent_transcript_path: file, last_assistant_message: REVIEW('approve') };
+  const input = { hook_event_name: 'SubagentStop', session_id: 'parent', turn_id: 'child-turn', agent_id: 'child', agent_type: 'reviewer-medium', agent_transcript_path: file, last_assistant_message: REVIEW('approve') };
   run('log-delegation.js', input, proj);
   eq(readLog(proj, 'completions.jsonl').length, 0, 'waiting for matching completion');
   const waiting = reconcile(s, ['--dry-run']);

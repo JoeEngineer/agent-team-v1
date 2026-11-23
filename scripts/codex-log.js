@@ -365,7 +365,7 @@ function completionRecord(input, t) {
     // 'missing': the stop carried no report (for example a turn cut off by a usage limit).
     report_source: report ? 'hook-input' : 'missing',
     result: lib.lastFencedJson(report, 'result-json'),
-    review: lib.lastFencedJson(report, 'review-json'),
+    review: lib.reviewFor(report, input.agent_type, task),
   };
 }
 
@@ -381,7 +381,7 @@ function fillFromTranscript(original, t) {
   if (t.interruptionMessage) record.interruption_message = t.interruptionMessage;
   if (record.report_source === 'missing' && t.lastMessage) {
     record.result = lib.lastFencedJson(t.lastMessage, 'result-json');
-    record.review = lib.lastFencedJson(t.lastMessage, 'review-json');
+    record.review = lib.reviewFor(t.lastMessage, record.agent, record.task);
     record.report_source = 'transcript';
   }
   if (record.tier == null && record.resolved_model) {
@@ -411,10 +411,12 @@ function finishPending(input, file, { dryRun = false } = {}) {
     if (dryRun) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
     if (!existing) lib.appendJsonl(input, 'completions.jsonl', record);
     const sess = { ...input, session_id: record.session_id };
-    const reviewAdded = record.review ? records.logReview(sess, record, record.review, 'codex') : false;
+    // An ambiguous review, or a reply of a delegation that is not a review, writes no row and is not retried.
+    const wantsRow = record.review && !records.isAmbiguous(record.review) && lib.isReviewDelegation(record.agent, record.task);
+    const reviewAdded = wantsRow ? records.logReview(sess, record, record.review, 'codex') : false;
     // If a concurrent review writer owns the lock, leave the snapshot for a
     // later run rather than losing the completion's separate review record.
-    if (record.review && !reviewAdded) {
+    if (wantsRow && !reviewAdded) {
       const reviewId = records.reviewIdentity(sess, record, record.review, 'codex');
       if (reviewId && !records.readJsonl(path.join(lib.logDir(input), 'reviews.jsonl')).some((r) => r.review_id === reviewId)) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
     }

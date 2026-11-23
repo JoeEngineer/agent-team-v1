@@ -214,6 +214,84 @@ function lastFencedJson(text, tag) {
   }
 }
 
+// The review in a reply, taken only when it is unambiguous. Logged verdicts
+// decide whether a milestone can close, so a `review-json` fence quoted in a
+// diff, a nested fence or a `>` quote must never be read as the verdict.
+//
+// A review block counts when it is a top-level fence (the fence line at column
+// 0, backticks, not inside another fence of any length, not in a `>` quote)
+// and the last non-blank content of the reply. Fences follow CommonMark: a
+// fence opens with three or more backticks or tildes (up to three spaces of
+// indent) and closes on a line of the same character, at least as long, with
+// nothing after it; an unterminated fence runs to the end of the reply.
+//
+// Returns:
+//   null                              no review-json fence anywhere in the reply
+//   the parsed JSON, or { _unparsed } the one qualifying block
+//   { _ambiguous: true, count }       review-json fences were there but none
+//                                     qualifies, or two or more are top-level;
+//                                     count is the top-level blocks found
+// One pass over the text, one line at a time: no regex runs across the text.
+function reviewJson(text) {
+  if (typeof text !== 'string' || !text) return null;
+  const mentioned = text.includes('```review-json') || text.includes('~~~review-json');
+  if (!mentioned) return null;
+  const n = text.length;
+  let fence = null;         // the open fence: { ch, len, review, bodyStart }
+  const blocks = [];        // closed top-level review blocks: { body, closeLine }
+  let lineNo = 0;
+  let lastContent = -1;     // the last line with anything but blanks on it
+  let pos = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
+  while (pos < n) {
+    let end = pos;
+    while (end < n) { const c = text.charCodeAt(end); if (c === 10 || c === 13) break; end++; }
+    const line = text.slice(pos, end);
+    let next = end;
+    if (next < n) next += text.charCodeAt(end) === 13 && text.charCodeAt(end + 1) === 10 ? 2 : 1;
+    // Indent in columns (a tab goes to the next multiple of 4) and the first non-blank character.
+    let col = 0, i = 0;
+    for (; i < line.length; i++) {
+      const c = line[i];
+      if (c === ' ') col++;
+      else if (c === '\t') col += 4 - (col % 4);
+      else break;
+    }
+    if (i < line.length) {
+      lastContent = lineNo;
+      const ch = line[i];
+      let run = 0;
+      if (ch === '`' || ch === '~') { while (i + run < line.length && line[i + run] === ch) run++; }
+      if (fence) {
+        // CommonMark's closing rule: same character, at least as long, nothing else on the line.
+        if (col <= 3 && run >= fence.len && ch === fence.ch && line.slice(i + run).trim() === '') {
+          if (fence.review) blocks.push({ body: text.slice(fence.bodyStart, pos), closeLine: lineNo });
+          fence = null;
+        }
+      } else if (col <= 3 && run >= 3) {
+        const info = line.slice(i + run).trim();
+        // A backtick fence's info string can't hold a backtick (that is inline code).
+        if (ch !== '`' || !info.includes('`')) {
+          fence = { ch, len: run, review: col === 0 && ch === '`' && info === 'review-json', bodyStart: next };
+        }
+      }
+    }
+    pos = next;
+    lineNo++;
+  }
+  // A `>` quote starts with ">" and an indent of four columns fails the column
+  // test, so neither opens a fence: a fence quoted there is not the reply's own.
+  // An unterminated fence is never a block; its lines count as content.
+  if (blocks.length === 1 && blocks[0].closeLine === lastContent) {
+    const body = blocks[0].body.trim();
+    try {
+      return JSON.parse(body);
+    } catch {
+      return { _unparsed: body.slice(0, 500) };
+    }
+  }
+  return { _ambiguous: true, count: blocks.length };
+}
+
 // Best-effort usage numbers from a subagent tool response.
 function usageFrom(resp) {
   if (!resp || typeof resp !== 'object') return {};
@@ -565,10 +643,27 @@ function detectTool(input, env = process.env) {
 const REVIEWER_AGENT_TYPES = ['agent-team:reviewer', 'agent-team:security-reviewer'];
 const REVIEW_TASK_TYPES = ['review', 'security-review'];
 
+// Is this delegation a review? A reviewer agent (Claude's `agent-team:reviewer`
+// and `agent-team:security-reviewer`, or Codex's `reviewer-<tier>` and
+// `security-reviewer-<tier>`), or a card whose type is a review type.
+const CODEX_REVIEWER = /^(?:security-)?reviewer-[a-z]+$/;
+function isReviewDelegation(agentType, task) {
+  return REVIEWER_AGENT_TYPES.includes(agentType) || (typeof agentType === 'string' && CODEX_REVIEWER.test(agentType)) ||
+    !!(task && REVIEW_TASK_TYPES.includes(task.type));
+}
+
+// The review in a reply, for this delegation. Only a review delegation gets the
+// `_ambiguous` marker: any other agent may quote a review-json fence (in a diff,
+// a test, a decision) without having written a review, so there it is no review.
+function reviewFor(text, agentType, task) {
+  const review = reviewJson(text);
+  return review && review._ambiguous && !isReviewDelegation(agentType, task) ? null : review;
+}
+
 module.exports = {
-  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES,
+  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor,
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
-  agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
+  agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
   glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,
 };

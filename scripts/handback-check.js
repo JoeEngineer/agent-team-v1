@@ -20,16 +20,23 @@ function check(input) {
   const agentType = input.agent_type || '';
   if (!agentType.startsWith('agent-team:')) return null;
   const message = lib.responseText((input.tool_input || {}).message) || '';
-  // lastFencedJson returns { _unparsed } for a block that isn't valid JSON.
-  const parsed = (tag) => { const v = lib.lastFencedJson(message, tag); return v && !v._unparsed; };
-  if (parsed('result-json') || parsed('review-json')) return null;
+  // Both readers return { _unparsed } for a block that isn't valid JSON. The
+  // review reader also returns { _ambiguous } when its fence is not one
+  // top-level block at the end of the message (the logger would read no review).
+  const read = (v) => v && !v._unparsed && !v._ambiguous;
+  // Only a reviewer agent gets the ambiguity reading; the hook sees no card here,
+  // so an agent of another type that quotes a review-json fence is not asked about it.
+  const review = lib.reviewFor(message, agentType, null);
+  if (read(lib.lastFencedJson(message, 'result-json')) || read(review)) return null;
   const agentId = input.agent_id || 'unknown';
   let claimed = false;
   for (let n = 1; n <= MAX_NUDGES && !claimed; n++) claimed = claimOnce(input, `handback-${agentId}-${n}`);
   if (!claimed) return null;
   const block = lib.REVIEWER_AGENT_TYPES.includes(agentType) ? 'review-json' : 'result-json';
   const fenced = /```(result|review)-json/.test(message);
-  const why = fenced ? `its \`${block}\` block is not valid JSON` : `it has no \`${block}\` block`;
+  const why = review && review._ambiguous
+    ? 'its `review-json` block is not exactly one fence at column 0, outside any other fence or quote, as the last thing in the message'
+    : fenced ? `its \`${block}\` block is not valid JSON` : `it has no \`${block}\` block`;
   return `agent-team: SubagentHandback not sent: ${why}. Call SubagentHandback again with your full report, ending with the fenced \`${block}\` block your instructions describe (valid JSON, no placeholders). The Director and the logs read your result only from that block.`;
 }
 
