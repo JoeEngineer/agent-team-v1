@@ -42,7 +42,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #152 |
 | FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #156 |
-| FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 2 (fold-in) | changes requested | #157 |
+| FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #157 |
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
@@ -87,6 +87,11 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
     - The Codex reviewer-name regex in `lib.isReviewDelegation` must track the roles in `codex-agents.js`.
     - An uncarded review sent to a non-reviewer agent now writes no row.
   - The Coach and README text for `_ambiguous` and the bridge row fields goes to FU-13 and FU-14.
+- **Follow-ups from FU-11 and FU-12 (PRs #156, #157), minor:**
+  - Ladder step 1 could say that its send-back at large/high is step 3's one send-back. Step 3 says so now.
+  - The R-18 comment in `tests/guidance-rules.js` still reads for one failure.
+  - `merging.md` "First CI run" step 1 says "require the check names". It should say "add them as required status checks", the forge setting's name.
+  - The core set is at 33,797 of 33,800 bytes: the next guidance addition needs a cut or a new budget decision.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Accept or reject: scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
