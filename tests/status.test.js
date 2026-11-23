@@ -891,10 +891,16 @@ test('grant: a line before the slug\'s first line that is not a JSON object exit
     r = grantIn(project(doc, `${line}\n${intake('m1', ['architect'])}\n`));
     eq(r.code, 19, `${label}: ${r.out}`);
   }
-  // Controls: blank lines are not lines, and a bad line after the slug's first line is never reached.
+  // A bad line after the slug's first line is refused too (decision 0029, amended): every line
+  // for the slug counts now, so a line that could have been one is never skipped.
   r = grantIn(project(doc, `\n${intake('zz', ['coach'])}\n\n${intake('m1', ['architect'])}\n{"milestone":"m\n`));
-  eq(r.code, 0, `a torn line after the first line for the slug: ${r.out}`);
-  deq(r.json.grant.roles, ['architect'], 'the first line holds');
+  eq(r.code, 19, `a torn line after the first line for the slug: ${r.out}`);
+  assert(/line 5 of .*is not a JSON object/.test(r.json.reason), r.out);
+  eq(r.json.grant, undefined, 'no grant is printed');
+  // Control: blank lines are not lines.
+  r = grantIn(project(doc, `\n${intake('zz', ['coach'])}\n\n${intake('m1', ['architect'])}\n\n`));
+  eq(r.code, 0, `blank lines around the lines: ${r.out}`);
+  deq(r.json.grant.roles, ['architect'], 'the line for the slug');
   r = grantIn(project(doc, `${intake('m1', ['bogus'])}\n`));
   eq(r.code, 19, `bad role in the log: ${r.out}`);
   r = grantIn(project(doc, `${intake('m1', ['architect'], 'huge')}\n`));
@@ -996,13 +1002,23 @@ test('grant: two Current milestone headings or two bold slug lines exit 17, whic
   eq(one.code, 0, `one slug (a bold label inside a bullet is not a slug line): ${one.out}`);
 });
 
-test('grant: a later line for the same slug is ignored, whether it widens or narrows', () => {
+// Decision 0026 item 1 as amended by decision 0029: the first line wins among lines that agree.
+// A later line that grants something else used to be ignored; it now stops the grant, because the
+// line that came first cannot be told from the user's answer (tests/fu22-intake-line.test.js).
+test('grant: a later line for the same slug that grants something else exits 23, whether it widens or narrows', () => {
   const dir = project(STATUS_DOC('m1', 'architect, coach at close', 'xlarge/high'), `${intake('m1', ['architect'])}\n${intake('m1', ['architect', 'coach'], 'xlarge')}\n`);
   let r = grantIn(dir);
-  eq(r.code, 16, `the first line (architect, none) is the answer: ${r.out}`);
-  deq(r.json.grant, { roles: ['architect'], second_review: 'none' }, 'first line wins');
+  eq(r.code, 23, `a later widening line: ${r.out}`);
+  deq(r.json.grant, NOTHING, 'nothing is granted, not the first line and not the narrower');
+  eq(r.json.log, null, 'neither line is the log\'s answer');
+  deq(r.json.log_lines, [{ line: 1, roles: ['architect'], second_review: 'none' }, { line: 2, roles: ['architect', 'coach'], second_review: 'xlarge' }], 'both are listed');
   r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'])}\n${intake('m1', [])}\n`));
-  eq(r.code, 0, `a later narrowing line is ignored too: ${r.out}`);
+  eq(r.code, 23, `a later narrowing line: ${r.out}`);
+  deq(r.json.grant, NOTHING, 'nothing is granted');
+  // A later line that says the same is a repeat: the first line still holds.
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'])}\n${intake('m2', ['coach'])}\n${intake('m1', ['architect'])}\n`));
+  eq(r.code, 0, `a repeat of the first line: ${r.out}`);
+  deq(r.json.grant, { roles: ['architect'], second_review: 'none' }, 'the grant both lines state');
 });
 
 test('grant: CRLF in the log and the file, and a slug with regex metacharacters', () => {

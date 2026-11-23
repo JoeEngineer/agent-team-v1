@@ -18,8 +18,16 @@ Builds on decision 0022 (the per-milestone xlarge grant).
 > The user rejected the residuals below (decision 0028). 0029 fixes three of them
 > and states the fourth as out of the plugin's reach. It also splits the
 > `security reviews` role in two, changes item 4 (any line that is not a JSON
-> object, before the slug's first line, now exits 19) and adds exit 22. The text
-> below is kept as decided; where 0029 differs, 0029 holds.
+> object now exits 19, wherever it stands) and adds exits 22, 23 and 24.
+>
+> **Item 1 is narrowed (0029, amendment of 2026-11-23).** The first line for the
+> slug wins only while every line for the slug grants the same. Lines that grant
+> different things exit 23 and grant nothing until the user removes the foreign
+> ones by hand. A later line is therefore no longer ignored: it can stop the
+> grant, and it can never widen it. First-line-wins was the user's choice, so
+> this narrowing is for the user to confirm.
+>
+> The text below is kept as decided; where 0029 differs, 0029 holds.
 
 ## Context
 
@@ -93,10 +101,12 @@ it passes only when the head differs from the reviewed commit in nothing, or in
 | 16 | `grant`: the block and the first line differ; use the narrower; ask the user |
 | 17 | `grant`: `STATUS.md` is unreadable for the grant (unknown word, repeated line, two headings, two bold slug lines) |
 | 18 | `grant`: the block grants something and the log has no line for the slug |
-| 19 | `grant`: the log is unreadable, or the first line for the slug is torn, has bad fields, or repeats the `milestone` key |
+| 19 | `grant`: the log is unreadable, or the first line for the slug is torn, has bad fields, or repeats the `milestone` key (since decision 0029: any line of the log that is not a JSON object, and any line for the slug with bad fields) |
 | 20 | `grant`: `## Current milestone` names a slug other than `--milestone` |
 | 21 | `set`: the temp file path already exists; nothing was written or followed |
 | 22 | `grant`: `CLAUDE_PROJECT_DIR` names a different project from the cwd's (decision 0029) |
+| 23 | `grant`: the log holds lines for the slug that grant different things; no grant until the user removes the foreign ones (decision 0029, amendment) |
+| 24 | `grant`: git tracks the log; no grant until the user untracks it (decision 0029, amendment) |
 
 ## Consequences
 

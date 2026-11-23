@@ -28,6 +28,7 @@ const SCOUT = 'agents/scout.md';
 const COACH = 'agents/coach.md';
 const SECREV = 'agents/security-reviewer.md';
 const MERGE_TASK = 'scripts/merge-task.js';
+const LOG_EVENT = 'scripts/log-event.js';
 const MILESTONE = 'skills/milestone/SKILL.md';
 const COACH_SKILL = 'skills/coach/SKILL.md';
 
@@ -155,6 +156,12 @@ module.exports = [
   ['S-09', MERGE_TASK, /only the user merges into it/, 'A protected base is refused', 'merge-task'],
   ['S-10', MERGE_TASK, /milestone\/\* only/, 'A base outside milestone/* is refused', 'merge-task'],
 
+  // ---- Just-in-time: printed by log-event.js milestone when a slug's intake lines disagree ---
+  ['S-11', LOG_EVENT, /\(exit 23\) until the user removes \$\{list\} from that file by hand/, 'Intake lines that disagree: status.js grant grants nothing for the slug (exit 23) until the user removes the foreign line, named by its line number, by hand'],
+  ['S-12', LOG_EVENT, /<- foreign line: not the answer you logged/, 'Each line that is not the answer just logged is marked as a foreign line, by number and with what it grants'],
+  ['S-13', LOG_EVENT, /Use no grant for this milestone until then/, 'While the lines disagree the milestone uses no grant'],
+  ['S-14', LOG_EVENT, /do not remove a line yourself\. Then log your line again/, 'The user removes the line, never the Director; logging the line again with exit 0 is the all-clear'],
+
   // ---- Routing --------------------------------------------------------------
   ['R-01', ROUTING, /Pass `model` and `effort` from this table on every spawn/, 'model and effort are passed on every spawn', 'logger'],
   ['R-02', ROUTING, /\| review \| any \| reviewer \| medium \| high \| subagent \|/, 'The routing table (review row as the witness)'],
@@ -275,9 +282,13 @@ module.exports = [
   ['MS-11', MILESTONE, /`security-review-close` \("close security review": the milestone-close row/, 'The option "close security review" is logged as security-review-close and covers only the close row of the grant table'],
   ['MS-14', MILESTONE, /and `security-review-task` together \("all security reviews": the close row and/, 'The option "all security reviews" is logged as both security-review-close and security-review-task and covers both security rows'],
   ['MS-15', MILESTONE, /If yours is refused \(exit 1\), record no grant and read the message/, 'A refused intake milestone line: no grant is recorded and the message is read'],
-  ['MS-16', MILESTONE, /A slug that already has a line: it prints that line; show it to the user and ask/, 'A refused duplicate prints the existing line; the user is shown it and asked'],
-  ['MS-17', MILESTONE, /A rejected line: fix your line and log it again\./, 'A rejected intake line is fixed and logged again'],
-  ['MS-18', MILESTONE, /A damaged log or a foreign `CLAUDE_PROJECT_DIR`: ask the user/, 'A damaged log or a foreign CLAUDE_PROJECT_DIR at intake goes to the user'],
+  ['MS-16', MILESTONE, /until the user removes the foreign line by hand/, 'Intake lines that disagree (a line was there before the Director\'s, from an agent or committed in the repository): the Director\'s line is written next to it and status.js grant grants nothing for the slug (exit 23) until the user removes the foreign line by hand'],
+  ['MS-19', MILESTONE, /The milestone must not use any grant until then/, 'While a slug\'s intake lines disagree, the milestone uses no grant'],
+  ['MS-20', MILESTONE, /never remove a line yourself\. Then log your line again: exit 0 is the only all-clear/, 'The user removes the foreign line, never the Director; the Director then logs its line again, and only exit 0 clears it'],
+  ['MS-21', MILESTONE, /Log the line for every milestone, also when nothing was asked or granted/, 'The intake line is logged for every milestone, also when nothing was asked or granted'],
+  ['MS-22', MILESTONE, /means the line was there before you logged it: tell the user/, 'An intake line already there at a first intake is reported to the user, even though it says the same'],
+  ['MS-17', MILESTONE, /fix your line and log it again\./, 'A rejected intake line (an unknown role or key) is fixed and logged again'],
+  ['MS-18', MILESTONE, /A damaged log, a log git tracks, or a foreign `CLAUDE_PROJECT_DIR`:\*\* ask the user/, 'A damaged log, a log that git tracks, or a foreign CLAUDE_PROJECT_DIR at intake goes to the user'],
   ['MS-12', MILESTONE, /`coach` \("coach \(run for this milestone\)"\) and `hard-fix` \("hard-fix escalation"\)/, 'The grant\'s log names (security-review, architect, coach, hard-fix) stand for the question\'s four options; the log name coach is unchanged by the label'],
   ['MS-13', MILESTONE, /architect, coach \(run for this milestone\), hard-fix escalation\?/, 'The intake question labels the coach option "coach (run for this milestone)", as the grant table and the STATUS template do'],
   ['CS-01', COACH_SKILL, /Run the Coach at xlarge\/medium this time\?/, 'A standalone Coach run asks about xlarge/medium when it is mapped and not disabled'],
