@@ -57,6 +57,10 @@ const SESSION_SETTINGS = new Set([
   'mcp__ccd_session_mgmt__set_session_effort',
 ]);
 const isBridge = (t) => /^mcp__(codex-bridge|antigravity-bridge)__/.test(t) && !/check_runway|_check$/.test(t);
+// A reviewer reports review-json: the general and the security reviewer, or a card of either review type.
+const REVIEW_AGENTS = new Set(['agent-team:reviewer', 'agent-team:security-reviewer']);
+const REVIEW_TYPES = new Set(['review', 'security-review']);
+const isReviewTask = (task) => !!(task && REVIEW_TYPES.has(task.type));
 const isShell = (t) => t === 'Bash' || t === 'PowerShell';
 
 // The delegation record for this agent, to pick up the routing the Director chose.
@@ -183,16 +187,27 @@ function onPostSessionSetting(input) {
 function onPostBridge(input) {
   const ti = input.tool_input || {};
   const text = lib.responseText(input.tool_response);
-  lib.appendJsonl(input, 'delegations.jsonl', {
+  const model = ti.model || 'default';
+  const task = lib.parseTaskCard(ti.prompt || ti.task || ti.instructions);
+  const record = {
     ...base(input),
     kind: 'bridge',
     agent: input.tool_name.replace(/^mcp__/, '').replace(/__.*/, ''),
-    model: ti.model || 'default',
+    model,
     effort: ti.effort || ti.reasoning_effort || 'default',
-    task: lib.parseTaskCard(ti.prompt || ti.task || ti.instructions),
+    task,
     duration_ms: takeDuration(input),
     result: lib.lastFencedJson(text, 'result-json'),
-  });
+  };
+  // A review that came back through a bridge is logged as a review, with the
+  // bridge's model, so reviews from both families can be compared. A block
+  // that doesn't parse is kept as _unparsed and writes no row.
+  const review = lib.lastFencedJson(text, 'review-json');
+  if (review) {
+    record.review = review;
+    if (task.id && !review._unparsed) logReview(input, record, review);
+  }
+  lib.appendJsonl(input, 'delegations.jsonl', record);
 }
 
 // SendMessage to an existing agent with a task card is a new attempt of that
@@ -348,7 +363,7 @@ function onSubagentStop(input) {
   // lags, so re-read it up to 4 x 500 ms. Other agents may end without a block
   // and shouldn't pay the wait on every stop. The delay is overridable for tests.
   const expectBlock = (agentType && agentType.startsWith('agent-team:')) ||
-    (delegation && delegation.task && delegation.task.type === 'review');
+    (delegation && isReviewTask(delegation.task));
   if (expectBlock && !hasBlock(report)) {
     // AGENT_TEAM_STOP_RETRY_MS is a test-only override of the 500 ms retry
     // delay. It is clamped to 1000 ms so a large value can't block the hook.
@@ -380,7 +395,7 @@ function onSubagentStop(input) {
   // quiet. That second stop still writes its own completion line (its report
   // differs); readers use the last line per agent_id + turn.
   if (agentType && agentType.startsWith('agent-team:') && !hasBlock(report) && !input.stop_hook_active) {
-    const isReview = agentType === 'agent-team:reviewer' || !!(delegation && delegation.task && delegation.task.type === 'review');
+    const isReview = REVIEW_AGENTS.has(agentType) || isReviewTask(delegation && delegation.task);
     const block = isReview ? 'review-json' : 'result-json';
     return `agent-team: your reply ended without its \`${block}\` block. End your reply with your \`${block}\` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.`;
   }
