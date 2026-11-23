@@ -1,4 +1,4 @@
-# Status
+|||| xlarge (fable) / high, user's yes for this task; attempt 1 was large (opus) / high | 2 (escalation) | changes requested | #122 ||||| 2 (fold-in) | in review | #119 ||||| 2 (fold-in) | in review | #120 |||||| merged | #121 # Status
 
 _Last updated: 2026-11-22. Milestone security-review is a Director run._
 
@@ -37,8 +37,8 @@ Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed 
 
 ## CI
 
-- Required checks on `milestone/*`: not set for this branch
-- Auto-merge: not used
+- Required checks on `milestone/*`: none set. The head runs `test (ubuntu-latest, node 18)`, `test (ubuntu-latest, node 26)`, `test (windows-latest, node 18)`, `test (windows-latest, node 26)`; the user was asked on 2026-11-22 to add them as required checks
+- Auto-merge: not allowed on the repo
 
 ## Blocked
 
