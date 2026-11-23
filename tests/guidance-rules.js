@@ -289,6 +289,7 @@ module.exports = [
   ['MS-22', MILESTONE, /means the line was there before you logged it: tell the user/, 'An intake line already there at a first intake is reported to the user, even though it says the same'],
   ['MS-17', MILESTONE, /fix your line and log it again\./, 'A rejected intake line (an unknown role or key) is fixed and logged again'],
   ['MS-18', MILESTONE, /A damaged log, a log git tracks, or a foreign `CLAUDE_PROJECT_DIR`:\*\* ask the user/, 'A damaged log, a log that git tracks, or a foreign CLAUDE_PROJECT_DIR at intake goes to the user'],
+  ['MS-23', MILESTONE, /Nothing was written: once it is fixed, log your line again; only exit 0 clears it/, 'After a refusal that wrote nothing (a damaged log, a tracked log, a foreign CLAUDE_PROJECT_DIR) and the user fixing it, the Director logs its intake line again; only exit 0 clears it'],
   ['MS-12', MILESTONE, /`coach` \("coach \(run for this milestone\)"\) and `hard-fix` \("hard-fix escalation"\)/, 'The grant\'s log names (security-review, architect, coach, hard-fix) stand for the question\'s four options; the log name coach is unchanged by the label'],
   ['MS-13', MILESTONE, /architect, coach \(run for this milestone\), hard-fix escalation\?/, 'The intake question labels the coach option "coach (run for this milestone)", as the grant table and the STATUS template do'],
   ['CS-01', COACH_SKILL, /Run the Coach at xlarge\/medium this time\?/, 'A standalone Coach run asks about xlarge/medium when it is mapped and not disabled'],

@@ -193,12 +193,21 @@ const HOOK_ONLY = [
   'model', 'effort', 'tier', 'agent', 'reviewer_model', 'reviewer_effort', 'requested_model', 'requested_effort', 'reviewer_tier',
   'timestamp', 'created_at', 'started_at', 'completed_at', 'duration_ms',
 ];
+// Fields only a Director-written line (log-event.js review) may take from the block when the
+// card gave none: its identity is the Director's own words. On the hook, reconcile and codex
+// paths the card and the hook know these, and a block never fills them.
+const CARD_FIELDS = ['task_id', 'review_task_id', 'attempt', 'pr', 'milestone', 'role', 'session_id'];
+// A key the way a reader sees it: NFKC, lowercase, no format or space characters.
+// A fullwidth "tool" or one with a zero-width character in it reads as "tool": never copied onto the row.
+const foldKey = (k) => String(k).normalize('NFKC').toLowerCase().replace(/[\p{Cf}\s]/gu, '');
 function withReview(known, review, hookOnly = HOOK_ONLY) {
   const row = { ...known };
   const shadowed = {};
+  const reserved = new Set([...hookOnly, ...Object.keys(known)].map(foldKey));
   for (const [key, value] of Object.entries(review && typeof review === 'object' ? review : {})) {
-    if (known[key] == null && !hookOnly.includes(key)) row[key] = value;
-    else if (JSON.stringify(known[key]) !== JSON.stringify(value)) shadowed[key] = value;
+    const lookalike = !(key in known) && !hookOnly.includes(key) && reserved.has(foldKey(key));
+    if (known[key] == null && !hookOnly.includes(key) && !lookalike) row[key] = value;
+    else if (lookalike || JSON.stringify(known[key]) !== JSON.stringify(value)) shadowed[key] = value;
   }
   if (Object.keys(shadowed).length) row.review_shadowed = shadowed;
   return row;
@@ -268,7 +277,8 @@ function logReview(input, record, review, tool = 'claude', extra = {}) {
     // The caller's own fields (a Director line's `source`), set by code, not by the block.
     ...extra,
   };
-    const row = withReview(known, review);
+  const director = extra.source === 'director';
+  const row = withReview(known, review, director ? HOOK_ONLY : [...HOOK_ONLY, ...CARD_FIELDS]);
   if (verdictConflict(review)) row.verdict_conflict = true;
   if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
   lib.appendJsonl(input, 'reviews.jsonl', row);
@@ -860,7 +870,7 @@ function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
 
 module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, reviewIdentity,
-  readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
+  readJsonl, withRecordLock, appendOnce, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
   ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, isAmbiguous, ambiguousNudge, ambiguousDirectorNudge, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

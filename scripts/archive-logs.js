@@ -351,20 +351,35 @@ function main() {
 
   let removed = 0;
   for (const x of stale) {
-    try { fs.unlinkSync(x.p); removed++; } catch { /* ignore */ }
+    try {
+      // Listed a moment ago: a name that is a link now is left alone.
+      if (fs.lstatSync(x.p).isSymbolicLink()) continue;
+      fs.unlinkSync(x.p);
+      removed++;
+    } catch { /* ignore */ }
   }
   let cleared = 0;
   const skipped = [];
+  const linked = [];
   if (o.clear) {
     // Test hooks, set only by tests/archive-logs.test.js: AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY=<file>
     // appends to that live log after verification; AGENT_TEAM_ARCHIVE_TEST_UNLINK_FAIL=1 makes the delete throw.
     const appendTo = process.env.AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY;
     if (appendTo) lib.safeAppend(path.join(logDir, appendTo), 'late write\n');
+    // AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY=<file> gives that log a second name after verification (same content).
+    const linkIt = process.env.AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY;
+    if (linkIt) fs.linkSync(path.join(logDir, linkIt), path.join(logDir, `${linkIt}.second-name`));
     for (const f of files) {
       const src = path.join(logDir, f);
       let unchanged = false;
       try { unchanged = sha256(src) === verified.get(f); } catch { unchanged = false; }
       if (!unchanged) { skipped.push(f); continue; } // changed or gone since verification: keep it
+      // The name must still be a plain file with one name: a link made since the check is not deleted through.
+      try { lib.checkLogFile(src); } catch (err) {
+        if (!err || err.code !== lib.REFUSED) throw err;
+        linked.push(f);
+        continue;
+      }
       try {
         if (process.env.AGENT_TEAM_ARCHIVE_TEST_UNLINK_FAIL === '1') throw Object.assign(new Error('test'), { code: 'EPERM' });
         fs.unlinkSync(src);
@@ -379,6 +394,8 @@ function main() {
   console.log(`.pending: deleted ${removed} stale, kept ${pending.length - removed}.`);
   if (o.clear) console.log(`Cleared ${cleared} live log file(s).`);
   for (const f of skipped) console.log(`Not cleared (changed since the copy was verified): ${f}`);
+  for (const f of linked) console.error(`Not cleared (now a link, or a file with another name): ${f}`);
+  if (linked.length) process.exitCode = 1;
   if (unresolvedNote) console.log(unresolvedNote);
   console.log(dest);
 }

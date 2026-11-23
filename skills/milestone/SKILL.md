@@ -36,7 +36,7 @@ The logger keeps one answer per slug. If yours is refused (exit 1), record no gr
 
 - **Lines that disagree.** The slug already had a line that grants something else, logged by an agent or committed in the repository. Your line is written next to it, and `status.js grant` grants nothing for the slug (exit 23) until the user removes the foreign line by hand. The milestone must not use any grant until then. Show the user the lines the message lists and ask them to remove the foreign one from `.agent-team/logs/milestones.jsonl`; never remove a line yourself. Then log your line again: exit 0 is the only all-clear.
 - **A rejected line** (an unknown role or key): fix your line and log it again.
-- **A damaged log, a log git tracks, or a foreign `CLAUDE_PROJECT_DIR`:** ask the user. The message says what they must repair, untrack or change.
+- **A damaged log, a log git tracks, or a foreign `CLAUDE_PROJECT_DIR`:** ask the user. The message says what they must repair, untrack or change. Nothing was written: once it is fixed, log your line again; only exit 0 clears it.
 
 Exit 0 with "already has this intake line" at a first intake means the line was there before you logged it: tell the user. How the grant is used: the director skill's `references/routing.md`, "The xlarge grant".
 

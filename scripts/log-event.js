@@ -46,6 +46,10 @@ const records = require('./records');
 
 const DELEGATION_KINDS = ['subagent', 'resume', 'followup'];
 const PAUSE_REASONS = ['user', 'runway', 'usage_limit'];
+const REVIEW_TOOLS = ['claude', 'codex'];
+const plainString = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\u0000-\u001f\u007f]/.test(v);
+// The refusals that write nothing end with this: the Director's intake line is not in the log yet.
+const RELOG = 'once the problem is fixed, log this line again; only exit 0 clears it.';
 const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review', 'pause', 'resume']);
 
 const USAGE = [
@@ -82,6 +86,8 @@ function readJson(file) {
 function lastTurnContext(file) {
   const out = { model: null, effort: null };
   let text;
+  // The path comes from a log: opened only inside the Codex sessions folder.
+  if (!require('./codex-log').inCodexSessions(file)) return out;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return out; }
   for (const line of text.split(/\r?\n/)) {
     if (!line.includes('turn_context')) continue;
@@ -177,13 +183,13 @@ function logMilestone(data, session) {
   const cwd = process.cwd();
   const foreign = lib.foreignProjectDir(cwd);
   if (foreign) {
-    console.error(`CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${foreign.root}); the intake line would land where \`status.js grant\` does not read. Nothing was written. Run from the project folder.`);
+    console.error(`CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${foreign.root}); the intake line would land where \`status.js grant\` does not read. Nothing was written. Run from the project folder; ${RELOG}`);
     return 1;
   }
   const root = lib.grantLogRoot(cwd);
   const tracked = status.trackedProblem(root);
   if (tracked) {
-    console.error(`${tracked}. Nothing was written. Write no grant; ask the user.`);
+    console.error(`${tracked}. Nothing was written. Write no grant; ask the user; ${RELOG}`);
     return 1;
   }
   const file = path.join(root, status.LOG_REL);
@@ -191,7 +197,7 @@ function logMilestone(data, session) {
   const read = () => {
     try { return status.readLog(file, slug); } catch (err) {
       if (!(err instanceof status.Refusal)) throw err;
-      console.error(`cannot tell whether "${slug}" already has an intake line: ${err.message}. Nothing more was written. Write no grant; ask the user.`);
+      console.error(`cannot tell whether "${slug}" already has an intake line: ${err.message}. Nothing more was written. Write no grant; ask the user; ${RELOG}`);
       return undefined;
     }
   };
@@ -276,11 +282,20 @@ function main(argv) {
   if (kind === 'milestone') return logMilestone(data, session);
   if (kind === 'delegation' || kind === 'review') {
     const { card, why, ...rest } = data;
-    const task = { ...(rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };
+    // A review's task is its card alone: a `task` object in pasted JSON is not read (a delegation may carry one).
+    const task = { ...(kind === 'delegation' && rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };
     if (why) task.why = why;
     delete rest.task;
-    const tool = rest.tool || process.env.AGENT_TEAM_TOOL || 'unknown';
+    // A review's tool is claude or codex (as the hooks say), else the environment's.
+    const given = kind === 'review' ? (REVIEW_TOOLS.includes(rest.tool) ? rest.tool : null) : rest.tool;
+    const tool = given || process.env.AGENT_TEAM_TOOL || 'unknown';
     delete rest.tool;
+    if (kind === 'review') {
+      // Attribution fields are short plain strings; anything else in a pasted block is dropped, not logged as who reviewed.
+      for (const f of ['agent_id', 'resolved_model', 'model', 'effort', 'tier']) {
+        if (!plainString(rest[f])) delete rest[f];
+      }
+    }
     if (kind === 'delegation') {
       const dkind = rest.kind || 'subagent';
       if (!DELEGATION_KINDS.includes(dkind)) {
@@ -322,9 +337,9 @@ function main(argv) {
         ...session,
       });
     } else {
-      // Same shape as records.logReview writes for hook-seen reviews. The session
-      // id comes in through its input (base takes it from there); logReview does
-      // not write session_source, so a review line has no source field.
+      // Same shape as records.logReview writes for hook-seen reviews, plus source "director"
+      // (passed as the caller's own field). The session id comes in through its input (base
+      // takes it from there); logReview does not write session_source.
       const { agent_id, resolved_model, model, effort, tier, ...review } = rest;
       const written = records.logReview({ session_id: session.session_id }, {
         agent_id, task, resolved_model, model, effort, tier,
@@ -335,6 +350,12 @@ function main(argv) {
           return 1;
         }
         const id = records.reviewIdentity({ session_id: session.session_id }, { agent_id, task, resolved_model, model, effort, tier }, review, tool);
+        // false also means a live record lock (another writer is on this review right now).
+        // Only a row that is in the log makes it a duplicate.
+        if (id && !records.readJsonl(path.join(lib.logDir({}), 'reviews.jsonl')).some((r) => r.review_id === id)) {
+          console.error(`not logged: busy, another writer holds the record lock for ${id}; retry in a moment`);
+          return 1;
+        }
         console.log(`not logged: duplicate of ${id || 'an earlier review'}`);
         return 0;
       }

@@ -494,3 +494,15 @@ test('archive G18: the superseding line is written before the copy, so the archi
   eq(g.status, 0, g.stderr);
   assert(g.stdout.includes('completions: 0 superseded with the full turn\'s tokens, 1 transcripts not found'), g.stdout);
 });
+
+test('archive FU-24: --clear does not delete a live log that became a link after verification, and exits non-zero', () => {
+  const p = project({ 'a.jsonl': rec('m') + '\n', 'b.jsonl': rec('m') + '\n' });
+  const r = arch(p, ['m', '--project', 'x', '--clear'], { AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY: 'a.jsonl' });
+  // Precondition: the swap happened (a second name for the file) and the content still matched the verified hash.
+  eq(fs.lstatSync(path.join(logs(p), 'a.jsonl')).nlink, 2, 'precondition: a.jsonl has another name now');
+  eq(r.status, 1, 'non-zero: ' + r.stderr);
+  assert(/Not cleared \(now a link.*a\.jsonl/.test(r.stderr), r.stderr);
+  assert(fs.existsSync(path.join(logs(p), 'a.jsonl')), 'the linked name is left alone');
+  assert(!fs.existsSync(path.join(logs(p), 'b.jsonl')), 'control: an ordinary log is still cleared');
+  assert(r.stdout.includes('Cleared 1 live log'), r.stdout);
+});

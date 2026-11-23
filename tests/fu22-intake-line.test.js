@@ -556,3 +556,47 @@ test('FU-22 milestone: from a linked worktree the line goes to the main checkout
   fs.writeFileSync(path.join(wt, 'STATUS.md'), STATUS('m1', 'architect', 'no'));
   eq(grant(wt, 'm1').code, 0, 'grant from the worktree reads it');
 });
+
+// --- FU-24: a refusal that wrote nothing tells the Director to log its line again ----------------
+
+const RELOG = /log this line again; only exit 0 clears it/;
+
+test('FU-24 milestone: a refusal that wrote nothing (foreign CLAUDE_PROJECT_DIR, tracked log) says to log the line again; the logged line and a rejected line do not', () => {
+  // A foreign CLAUDE_PROJECT_DIR.
+  const here = project();
+  const other = project();
+  const foreign = intake(here, line('m1', CLOSE), { CLAUDE_PROJECT_DIR: other });
+  eq(foreign.status, 1, 'precondition: refused');
+  eq(raw(here), null, 'precondition: nothing written');
+  assert(/Nothing was written/.test(foreign.err) && RELOG.test(foreign.err), foreign.err);
+  // A log git tracks.
+  const p = repo();
+  fs.mkdirSync(path.dirname(logFile(p)), { recursive: true });
+  fs.writeFileSync(logFile(p), '');
+  g(p, 'add', '-f', '.agent-team/logs/milestones.jsonl');
+  const tracked = intake(p, line('m1', CLOSE));
+  eq(tracked.status, 1, 'precondition: refused');
+  eq(raw(p), '', 'precondition: nothing written');
+  assert(/Nothing was written/.test(tracked.err) && RELOG.test(tracked.err), tracked.err);
+  // Recovery: the user untracks the log and the same line is logged again; exit 0, and no re-log advice.
+  g(p, 'rm', '--cached', '-q', '.agent-team/logs/milestones.jsonl');
+  const again = intake(p, line('m1', CLOSE));
+  eq(again.status, 0, again.err);
+  assert(!RELOG.test(again.err + again.out), 'no re-log advice on success');
+  // A rejected line is fixed, not re-logged as is: it carries no such sentence.
+  const bad = intake(project(), { ...line('m1', CLOSE), bogus: 1 });
+  eq(bad.status, 1, 'precondition: rejected');
+  assert(!RELOG.test(bad.err), bad.err);
+});
+
+test('FU-24 milestone: a damaged milestones.jsonl refuses with the re-log sentence and writes nothing', () => {
+  const p = project();
+  fs.mkdirSync(path.dirname(logFile(p)), { recursive: true });
+  const damaged = '{"milestone":"m1","xlarge_grant":["coach"]\n{{{ not json\n';
+  fs.writeFileSync(logFile(p), damaged);
+  const r = intake(p, line('m1', CLOSE));
+  eq(r.status, 1, 'precondition: refused');
+  eq(raw(p), damaged, 'precondition: the file is untouched');
+  assert(/cannot tell whether "m1" already has an intake line/.test(r.err), r.err);
+  assert(RELOG.test(r.err), r.err);
+});
