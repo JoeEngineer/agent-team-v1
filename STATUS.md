@@ -46,6 +46,12 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #159 |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
+| FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 1 | in progress | |
+| FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | in progress | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
