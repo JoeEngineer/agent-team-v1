@@ -40,7 +40,8 @@ You ── tasking ──▶ Director (this session)
                      ├─▶ codex / antigravity bridges      (optional, local only)
                      └─▶ reviewer ── review-json verdict ──▶ Director merges into milestone/<slug>
                                                              You merge milestone/<slug> → main
-hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completions,sessions}.jsonl ──▶ coach
+hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completions}.jsonl ──▶ coach
+archive-logs.js (milestone close) ──▶ .agent-team/logs/sessions.jsonl ──▶ coach
 ```
 
 - **Routing:** `skills/director/references/routing.md`: task type × difficulty → agent, tier, effort, vehicle, plus an escalation ladder (feedback → more effort → bigger tier → architect).
@@ -108,6 +109,8 @@ claude plugin install agent-team@agent-team
 ```
 
 Then in the project: `/agent-team:team-init`, then `/agent-team:milestone <slug> <tasking>`.
+
+**Upgrading to 1.2.0:** a project that copied the scanner template must re-copy it by hand (`team-init` never overwrites it), and `status.js grant` needs the intake `milestone` log line and `--milestone <slug>`. Both are described in the "Upgrading to 1.2.0" note under [Codex](#codex) step 2.
 
 ### Codex
 
@@ -318,7 +321,7 @@ The files agents read (`skills/director/` and `agents/`) have size budgets and a
 - **Codex turns with no stop (0.4.4):** a Codex stop whose turn is not yet in the child transcript writes a stub completion (`stub: true`). A turn that ended without `task_complete` (a usage limit, an abort) is written at once with `interrupted` (`usage_limit`, `aborted`, `error`). A stop with no report has `report_source: "missing"`. `reconcile-logs.js` fills stubs by `turn_id`, and adds a line for each child turn whose stop never fired, taking the report from the transcript's `task_complete` (`report_source: "transcript"`) so a lost review verdict is recovered. It reads the child transcript paths from `codex-events.jsonl`, and only turns from the agent's first known turn on count (inherited parent turns are skipped).
 - **Decision lines (0.4.4):** `log-event.js decision` rejects an `id` already in `decisions.jsonl` and names the next free one. A `model` given as a family name (`GPT-6`, `Opus`), `unknown` or nothing, and a missing or `unknown` `effort`, are filled from the session's resolved settings (the last `turn_context` of the Codex session transcript, or the model SessionStart saw); the text given stays in `model_given`.
 - **Merge commands (0.4.4)** are stored without leading `cd …;`/`&&` (or `Set-Location`, `pushd`) segments, and any absolute local path left becomes `<path>`, so archives can be shared.
-- **Sessions:** token usage of separate sessions isn't captured automatically yet.
+- **Sessions:** token usage of separate task sessions isn't captured automatically yet. Claude Director sessions are covered: `archive-logs.js` writes their usage to `sessions.jsonl` at milestone close. Codex Director sessions are counted and skipped.
 - **Effort of the Director itself** isn't visible to Claude Code hooks. On Claude, a decision line's `effort` is `null` unless the Director gives it; on Codex it comes from the session transcript.
 - **Codex gaps:** admins can disable hooks, which turns off the guard and logging. The worktree and agent-file limits above also apply. See [`docs/codex-mapping.md`](docs/codex-mapping.md) for detail.
 - **GitLab support is newer.** It's covered by unit tests against a stand-in `glab` that prints GitLab's MR JSON, and by a run of `tests/live/gitlab-live.sh` against that stand-in. It has not yet been run against a real GitLab instance; `GITLAB_TEST_PROJECT=group/scratch bash tests/live/gitlab-live.sh` does that (see [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md#still-open) for what it would settle). Forge detection reads the `origin` remote; a project whose merges go to another remote needs `AGENT_TEAM_FORGE` or `git config agent-team.forge`. The Codex hook shim's "GitHub rulesets still apply" warning means your forge's branch rules either way.
