@@ -22,41 +22,92 @@ Agents can edit `STATUS.md`, and the Director reads the grant from it before it
 spends xlarge. A block edited by mistake, or forged, would widen the grant with
 no trace. The log line is written once, at intake, from the user's answer.
 
-`node scripts/status.js grant` reads both and prints the grant that holds. A
-companion mode, `--check --since <sha>`, lets the Director record a close
-review's verdict in `STATUS.md` without moving the reviewed tree: it passes only
-when the head differs from the reviewed commit in nothing, or in `M STATUS.md`
-with an unchanged file mode.
+`node scripts/status.js grant --milestone <slug>` reads both and prints the
+grant that holds. A companion mode, `--check --since <sha>`, lets the Director
+record a close review's verdict in `STATUS.md` without moving the reviewed tree:
+it passes only when the head differs from the reviewed commit in nothing, or in
+`M STATUS.md` with an unchanged file mode.
 
 ## Decision
 
 1. **The first `milestone` line for the slug wins.** The intake answer is fixed
    for the milestone, so a later line for the same slug (a re-run, a hand edit,
    an appended forgery) is ignored. The user chose this on 2026-11-23.
-2. **The narrower grant wins, and the user is asked.** The effective grant is the
-   roles named in both, and the lower of the two second-review tiers
+2. **The Director names the milestone.** `--milestone <slug>` is required;
+   without it `grant` exits 2. The Director passes its own slug: the card's
+   `milestone=`, or the `<slug>` of the `milestone/<slug>` branch. The slug is
+   never read from `STATUS.md`, the file under check, so an edited
+   `## Current milestone` cannot point the check at an earlier milestone whose
+   first line granted more. When `STATUS.md` names a different slug there, the
+   command exits 20, prints both and grants nothing. Two `## Current milestone`
+   headings, or two bold slug lines under it, exit 17. The template's `<slug>`
+   counts as no slug.
+3. **The narrower grant wins, and the user is asked.** The effective grant is
+   the roles named in both, and the lower of the two second-review tiers
    (`none` < `large` < `xlarge`). When the two differ, the command exits 16,
    prints both and says "use the narrower; ask the user". It never widens.
-3. **A block with no log line is not trusted.** A block that names a role, or a
+4. **A block with no log line is not trusted.** A block that names a role, or a
    second review, for a slug with no log line exits 18 and grants nothing. An
-   unknown role word or tier word in the block exits 17. A first line for the slug
-   that is torn, or has an unknown role or tier, exits 19. A line that does not
-   parse and mentions the slug counts as the first line: it could have been it.
-4. **No block and no line is an empty grant** and exits 0. So does the unfilled
+   unknown role word or tier word in the block exits 17. A first line for the
+   slug that is torn, or has an unknown role or tier, exits 19. A line that does
+   not parse and mentions the slug counts as the first line: it could have been
+   it. So does a line whose raw text gives the slug as a `milestone` value but
+   which parses to another milestone, as with a repeated `milestone` key (JSON
+   keeps the last one).
+5. **No block and no line is an empty grant** and exits 0. So does the unfilled
    template.
-5. Free text in parentheses after the roles is a note and is not read as roles.
-   A note must be in parentheses: `architect - note` and `architect; note` read
-   the note as a role word, exit 17 and grant nothing (fail closed). One table in `scripts/status.js` maps the question's words (security reviews,
-   architect, coach at close, hard-fix escalation) to the log's names
-   (`security-review`, `architect`, `coach`, `hard-fix`).
-6. In a linked git worktree the log is read from the main checkout, through the
+6. Free text in parentheses after the roles is a note and is not read as roles.
+   A note must be in parentheses: `architect - a note`, `architect — a note`
+   (em dash) and `architect; a note` read the note as a role word, exit 17 and
+   grant nothing (fail closed). One table in `scripts/status.js` maps the
+   question's words (security reviews, architect, coach at close, hard-fix
+   escalation) to the log's names (`security-review`, `architect`, `coach`,
+   `hard-fix`).
+7. In a linked git worktree the log is read from the main checkout, through the
    same helper the logger uses (`logRoot` in `scripts/lib.js`).
+8. **`--check --since` reads the commits, not the caller's view of them.** git
+   runs as `git --no-replace-objects -c core.commitGraph=false`, with every
+   `GIT_*` variable removed from its environment, and both diffs pass
+   `--ignore-submodules=none`. So a replace ref, a forged commit-graph,
+   `GIT_DIR` or `GIT_CONFIG_*` in the environment, or `ignore = all` for a
+   submodule cannot make a commit that changes code read as status-only.
+
+## Exit codes of `grant` and `--check --since`
+
+| Code | Meaning |
+|---|---|
+| 0 | `grant`: the block and the line agree (or neither grants anything). `--since`: status-only |
+| 2 | bad arguments: `grant` without `--milestone`, a SHA that is not full 40-hex |
+| 14 | `--since`: not status-only (another path, a gitlink, a mode or type change, not an ancestor, `--check` fails at the head) |
+| 15 | `--since`: git failed |
+| 16 | `grant`: the block and the first line differ; use the narrower; ask the user |
+| 17 | `grant`: `STATUS.md` is unreadable for the grant (unknown word, repeated line, two headings, two bold slug lines) |
+| 18 | `grant`: the block grants something and the log has no line for the slug |
+| 19 | `grant`: the log is unreadable, or the first line for the slug is torn, has bad fields, or repeats the `milestone` key |
+| 20 | `grant`: `## Current milestone` names a slug other than `--milestone` |
 
 ## Consequences
 
-- The Director runs `grant` before spending xlarge and follows its exit code.
-- **Residual:** an agent that can rewrite `milestones.jsonl` is not stopped. The
-  check raises the cost of a forged `STATUS.md` block from one edit to an edit of
-  an ignored log file; it does not sign or lock the log. Signing is out of scope.
+- The Director runs `grant --milestone <slug>` with its own slug before spending
+  xlarge, and follows its exit code.
+- **Residuals.** The check raises the cost of a forged grant; it does not sign
+  or lock anything. Signing is out of scope. These are not stopped:
+  - **Rewriting `milestones.jsonl`.** An agent that can write the ignored log
+    file can change or reorder its first line for the slug.
+  - **A hand-crafted first line torn before the slug ends**, such as
+    `{"milestone":"cu` followed by a newline. It does not name the slug, so it
+    is skipped and a later line is read. A real torn append has no trailing
+    newline, so it is the last line, and no later line follows it.
+  - **A new slug appended ahead of the Director.** An agent can append a line
+    for a slug through the normal logger (`log-event.js milestone`) and point
+    `STATUS.md` at it, or write a wide line for the next milestone before the
+    Director's own intake line. The only guard is that the Director passes
+    its own slug, and that its intake line is the first for that slug.
+    `grant` cannot tell an agent's line from the Director's.
+  - **`--check --since` trusts the local repository** beyond the fixes in
+    item 8. It reads the object store and config of the shared `.git` that
+    agents can write: an object file replaced in place, or hooks and config
+    that the fixes do not override, are not detected. Run it in a checkout
+    agents cannot write when that matters.
 - `--check --since` compares trees, not intent: a `STATUS.md` edit that passes
   `--check` and keeps its mode counts as status-only, whatever it says.

@@ -5,7 +5,7 @@
 //   node status.js set <ID> --state <s> [--attempt <a>] [--pr <n>] [--tier <t>] [--note <text>] [--file <path>]
 //   node status.js --check [--file <path>]
 //   node status.js --check --since <sha> [--head <sha>]
-//   node status.js grant [--milestone <slug>] [--file <path>]
+//   node status.js grant --milestone <slug> [--file <path>]
 //
 // `set` changes only the named cells of the one row under "## Tasks" whose ID
 // cell equals <ID> (string comparison; no pattern is built from an argument).
@@ -27,26 +27,34 @@
 //      or --check fails at the head, or <sha> is not an ancestor of the head
 //   15 --since: git failed (unknown commit, no repository, git missing)
 //   16 grant: the STATUS.md block and the intake log line disagree (use the narrower; ask the user)
-//   17 grant: the block is unreadable (unknown role or tier word, repeated line)
+//   17 grant: STATUS.md is unreadable for the grant (unknown role or tier word, a repeated line,
+//      two "## xlarge grant" or "## Current milestone" headings, two bold slug lines)
 //   18 grant: the block grants something and the log has no line for the milestone
-//   19 grant: the log is unreadable, or its first line for the milestone is torn or has bad fields
+//   19 grant: the log is unreadable, or its first line for the milestone is torn, has bad fields,
+//      or names the slug in its raw text but parses to another milestone (a repeated key)
+//   20 grant: the slug under "## Current milestone" is not the --milestone slug
 //
 // `--check --since <sha>` decides whether the head (default HEAD) differs from the
-// reviewed commit <sha> only in STATUS.md: `git diff --no-renames --name-status`
-// must list nothing or exactly "M STATUS.md" with the same file mode on both sides,
-// <sha> must be an ancestor of the head, and --check must pass on STATUS.md as
-// committed at the head. Both SHAs must be full 40-hex. git runs through
-// execFileSync with an argv array, never a shell. Prints
+// reviewed commit <sha> only in STATUS.md: `git diff --no-renames --ignore-submodules=none
+// --name-status` must list nothing or exactly "M STATUS.md" with the same file mode on both
+// sides, <sha> must be an ancestor of the head, and --check must pass on STATUS.md as
+// committed at the head. Both SHAs must be full 40-hex. git runs through execFileSync with
+// an argv array, never a shell, as `git --no-replace-objects -c core.commitGraph=false`, with
+// every GIT_* variable removed from its environment. Prints
 // {"status_only":bool,"since":..,"head":..,"reason":..}; exit 0 only when true.
+// The local repo's object store and config are otherwise trusted (decision 0026).
 //
 // `grant` prints the effective xlarge grant: the roles in both the "## xlarge grant"
 // block of STATUS.md and the FIRST line for the milestone in .agent-team/logs/milestones.jsonl
 // (the main checkout's logs when run in a git worktree), and the lower of the two
 // second-review tiers. First line wins because the intake answer is fixed for the
-// milestone (decision 0026). Without --milestone the slug is the bold slug under
-// "## Current milestone". An agent that can rewrite milestones.jsonl is not stopped.
+// milestone (decision 0026). --milestone is required and is the Director's own slug; the
+// file under check never picks it. A different slug under "## Current milestone" exits 20
+// (the template's "<slug>" counts as none). An agent that can rewrite milestones.jsonl is
+// not stopped.
 // A free-text note after the roles must be in parentheses: "architect (a note)" is read,
-// "architect - a note" and "architect; a note" exit 17 (unknown role), which fails closed.
+// "architect - a note" (or with an em dash) and "architect; a note" exit 17 (unknown role),
+// which fails closed.
 // `grant --file <other>` reads the block from <other> but still reads the log from the
 // logRoot of the cwd (CLAUDE_PROJECT_DIR when set), not from the project that holds <other>.
 'use strict';
@@ -56,7 +64,7 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 const lib = require('./lib');
 
-const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13, notStatusOnly: 14, git: 15, differ: 16, block: 17, noLog: 18, badLog: 19 };
+const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13, notStatusOnly: 14, git: 15, differ: 16, block: 17, noLog: 18, badLog: 19, slug: 20 };
 
 class Refusal extends Error {
   constructor(code, msg) { super(msg); this.code = code; }
@@ -204,8 +212,15 @@ function writeAtomic(file, text) {
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
+// git sees none of the caller's GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE,
+// GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES, GIT_CONFIG*, GIT_REPLACE_REF_BASE,
+// GIT_NAMESPACE, GIT_CEILING_DIRECTORIES, ...), so the repo is the one at cwd. Replace refs and the
+// commit-graph cache are off: either can make a commit SHA read as a different tree.
+const GIT_PRE = ['--no-replace-objects', '-c', 'core.commitGraph=false'];
+const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
 function git(cwd, args) {
-  return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 64 * 1024 * 1024 });
+  const argv = [...GIT_PRE, ...args];
+  return execFileSync('git', argv, { cwd, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 20000, maxBuffer: 64 * 1024 * 1024 });
 }
 const gitMsg = (e) => String((e.stderr && e.stderr.toString().trim()) || e.message).split('\n')[0];
 
@@ -223,8 +238,10 @@ function statusOnly(cwd, since, head) {
   }
   let names; let raw;
   try {
-    names = git(cwd, ['diff', '--no-renames', '--name-status', '-z', since, head, '--']).split('\0').filter((x) => x !== '');
-    raw = git(cwd, ['diff', '--no-renames', '--raw', '-z', since, head, '--']).split('\0').filter((x) => x !== '');
+    // --ignore-submodules=none: a gitlink bump must show even when .gitmodules or config says ignore.
+    const diff = ['diff', '--no-renames', '--no-ext-diff', '--ignore-submodules=none'];
+    names = git(cwd, [...diff, '--name-status', '-z', since, head, '--']).split('\0').filter((x) => x !== '');
+    raw = git(cwd, [...diff, '--raw', '-z', since, head, '--']).split('\0').filter((x) => x !== '');
   } catch (e) { return fail(`git diff failed: ${gitMsg(e)}`, EXIT.git); }
   if (names.length !== 0) {
     if (names.length !== 2 || names[0] !== 'M' || names[1] !== 'STATUS.md') {
@@ -239,7 +256,7 @@ function statusOnly(cwd, since, head) {
     if (!/^100(644|755)$/.test(m[2])) return fail(`STATUS.md is not a regular file (mode ${m[2]})`);
   }
   let text;
-  try { text = git(cwd, ['show', `${head}:STATUS.md`]); } catch (e) { return fail(`STATUS.md cannot be read at the head: ${gitMsg(e)}`); }
+  try { text = git(cwd, ['cat-file', 'blob', `${head}:STATUS.md`]); } catch (e) { return fail(`STATUS.md cannot be read at the head: ${gitMsg(e)}`); }
   let problems;
   try { problems = check(text); } catch (e) { if (!(e instanceof Refusal)) throw e; problems = [e.message]; }
   if (problems.length) return fail(`--check fails at the head: ${problems.join('; ')}`);
@@ -304,20 +321,40 @@ function readBlock(text) {
   return { found: true, roles, second };
 }
 
-// The bold slug under "## Current milestone", or null.
+// The bold slug under "## Current milestone", or null when there is no heading, no bold line,
+// or only the template's "<slug>". Two headings or two bold lines throw Refusal(block): the
+// file must not be able to offer a choice of slugs.
 function currentSlug(text) {
   const lines = splitLines(text).map((l) => l.t);
-  const i = lines.findIndex((l) => l.trim() === '## Current milestone');
-  if (i < 0) return null;
-  for (let j = i + 1; j < lines.length && !lines[j].startsWith('## '); j++) {
+  const heads = lines.map((l, i) => (l.trim().toLowerCase() === '## current milestone' ? i : -1)).filter((i) => i >= 0);
+  if (heads.length > 1) throw new Refusal(EXIT.block, `"## Current milestone" appears ${heads.length} times in STATUS.md`);
+  if (!heads.length) return null;
+  const slugs = [];
+  for (let j = heads[0] + 1; j < lines.length && !lines[j].startsWith('## '); j++) {
     const m = /^\*\*([^*]+)\*\*/.exec(lines[j].trim());
-    if (m) return m[1].trim();
+    if (m) slugs.push(m[1].trim());
   }
-  return null;
+  if (slugs.length > 1) throw new Refusal(EXIT.block, `${slugs.length} bold slug lines under "## Current milestone" (${slugs.join(', ')})`);
+  return slugs.length && !isPlaceholder(slugs[0]) ? slugs[0] : null;
+}
+
+// True when the raw line has a "milestone" key whose string value is the slug, however either is
+// escaped. The JSON string literals are read left to right; a key is a literal followed by ":".
+function namesSlug(line, slug) {
+  const lits = [...line.matchAll(/"(?:[^"\\]|\\.)*"/g)];
+  const dec = (m) => { try { return JSON.parse(m[0]); } catch { return null; } };
+  for (let i = 0; i + 1 < lits.length; i++) {
+    const a = lits[i]; const b = lits[i + 1];
+    const gap = line.slice(a.index + a[0].length, b.index);
+    if (/^\s*:\s*$/.test(gap) && dec(a) === 'milestone' && dec(b) === slug) return true;
+  }
+  return false;
 }
 
 // The first line whose `milestone` equals the slug (string comparison), as { roles, second }, or null.
-// A line that does not parse but mentions the slug might have been that line: refuse then.
+// A line that does not parse but mentions the slug might have been that line: refuse then. So is a
+// line that parses to another milestone (or a non-string one) while its raw text names the slug,
+// as with a repeated "milestone" key, where JSON.parse keeps the last value.
 function readLog(file, slug) {
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch (e) {
@@ -332,7 +369,11 @@ function readLog(file, slug) {
       if (line.includes(slug)) throw new Refusal(EXIT.badLog, `a line of ${file} that mentions "${slug}" is not valid JSON (torn?); cannot tell whether it is the intake line`);
       continue;
     }
-    if (o.milestone !== slug) continue;
+    if (o.milestone !== slug) {
+      const odd = o.milestone !== undefined && typeof o.milestone !== 'string' && line.includes(slug);
+      if (odd || namesSlug(line, slug)) throw new Refusal(EXIT.badLog, `a line of ${file} names "${slug}" as its milestone but parses to ${JSON.stringify(o.milestone)} (a repeated or non-string milestone key); cannot tell whether it is the intake line`);
+      continue;
+    }
     if (!Array.isArray(o.xlarge_grant) || o.xlarge_grant.some((r) => typeof r !== 'string' || !LOG_ROLES.has(r))) throw new Refusal(EXIT.badLog, `the first line for "${slug}" has no valid xlarge_grant array of ${[...LOG_ROLES].join(', ')}`);
     if (typeof o.second_review !== 'string' || !SECOND_ORDER.includes(o.second_review)) throw new Refusal(EXIT.badLog, `the first line for "${slug}" has no valid second_review (none, large, xlarge)`);
     return { roles: new Set(o.xlarge_grant), second: o.second_review };
@@ -340,16 +381,22 @@ function readLog(file, slug) {
   return null;
 }
 
-function grant(text, slugArg, cwd) {
+// `slug` is the Director's own (the card's milestone=, or the milestone/<slug> branch), never
+// STATUS.md's: the file under check cannot pick which log line it is checked against.
+function grant(text, slug, cwd) {
   const block = readBlock(text);
-  const slug = slugArg || currentSlug(text);
+  const statusSlug = currentSlug(text);
+  const none = { roles: [], second_review: 'none' };
+  if (statusSlug !== null && statusSlug !== slug) {
+    return { ok: false, code: EXIT.slug, milestone: slug, status_milestone: statusSlug, grant: none, reason: `STATUS.md names milestone "${statusSlug}" under "## Current milestone" but --milestone is "${slug}"; no grant. Check which milestone is current; ask the user` };
+  }
   const logFile = path.join(lib.logRoot({ cwd }), '.agent-team', 'logs', 'milestones.jsonl');
-  const log = slug ? readLog(logFile, slug) : null;
+  const log = readLog(logFile, slug);
   const view = (g) => (g ? { roles: [...g.roles].sort(), second_review: g.second } : null);
   const base = { milestone: slug, block: view(block.found ? block : null), log: view(log) };
   const wantsSomething = block.roles.size > 0 || block.second !== 'none';
   if (!log && wantsSomething) {
-    return { ok: false, code: EXIT.noLog, ...base, grant: { roles: [], second_review: 'none' }, reason: `the STATUS.md block grants roles or a second review but ${logFile} has no line for "${slug}"; the block is not trusted alone. Use no grant; ask the user` };
+    return { ok: false, code: EXIT.noLog, ...base, grant: none, reason: `the STATUS.md block grants roles or a second review but ${logFile} has no line for "${slug}"; the block is not trusted alone. Use no grant; ask the user` };
   }
   const lg = log || { roles: new Set(), second: 'none' };
   const roles = [...block.roles].filter((r) => lg.roles.has(r)).sort();
@@ -387,8 +434,10 @@ function parseArgs(argv) {
     return o;
   }
   if (rest[0] === 'grant') {
-    if (o.check || rest.length !== 1 || Object.keys(o.vals).length) throw new Refusal(EXIT.usage, 'usage: status.js grant [--milestone <slug>] [--file <path>]');
-    if (o.milestone === '') throw new Refusal(EXIT.usage, '--milestone is empty');
+    const use = 'usage: status.js grant --milestone <slug> [--file <path>]; the slug is the Director\'s own (the card\'s milestone=, or the milestone/<slug> branch), not read from STATUS.md';
+    if (o.check || rest.length !== 1 || Object.keys(o.vals).length) throw new Refusal(EXIT.usage, use);
+    if (o.milestone === undefined) throw new Refusal(EXIT.usage, `--milestone is required. ${use}`);
+    if (o.milestone.trim() === '') throw new Refusal(EXIT.usage, '--milestone is empty');
     o.grant = true;
     return o;
   }
@@ -397,7 +446,7 @@ function parseArgs(argv) {
     if (rest.length || Object.keys(o.vals).length) throw new Refusal(EXIT.usage, '--check takes only --file');
     return o;
   }
-  if (rest[0] !== 'set' || rest.length !== 2) throw new Refusal(EXIT.usage, 'usage: status.js set <ID> --state <s> [--attempt <a>] [--pr <n>] [--tier <t>] [--note <text>] [--file <path>] | status.js --check [--file <path>] | status.js --check --since <sha> [--head <sha>] | status.js grant [--milestone <slug>] [--file <path>]');
+  if (rest[0] !== 'set' || rest.length !== 2) throw new Refusal(EXIT.usage, 'usage: status.js set <ID> --state <s> [--attempt <a>] [--pr <n>] [--tier <t>] [--note <text>] [--file <path>] | status.js --check [--file <path>] | status.js --check --since <sha> [--head <sha>] | status.js grant --milestone <slug> [--file <path>]');
   o.id = rest[1];
   if (!Object.keys(o.vals).length) throw new Refusal(EXIT.usage, 'set needs at least one of --state, --attempt, --pr, --tier');
   if (o.vals.note !== undefined && o.vals.state === undefined) throw new Refusal(EXIT.usage, '--note needs --state');
