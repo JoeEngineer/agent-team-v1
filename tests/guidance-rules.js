@@ -26,6 +26,7 @@ const IMPLEMENTER = 'agents/implementer.md';
 const ARCHITECT = 'agents/architect.md';
 const SCOUT = 'agents/scout.md';
 const COACH = 'agents/coach.md';
+const SECREV = 'agents/security-reviewer.md';
 const MERGE_TASK = 'scripts/merge-task.js';
 const MILESTONE = 'skills/milestone/SKILL.md';
 const COACH_SKILL = 'skills/coach/SKILL.md';
@@ -187,6 +188,7 @@ module.exports = [
   ['R-27', ROUTING, /none of the first review's findings or verdict/, 'The second review gets the same card without the first review\'s findings or verdict'],
   ['R-28', ROUTING, /find what that review missed/, 'The second review\'s card says another model reviewed and asks what it missed'],
   ['R-29', ROUTING, /drop the tier or skip; never skip silently/, 'Short runway or a missing bridge at close: ask the user; never skip silently'],
+  ['R-38', REVIEWER, /\*\*Security checklist\.\*\*/, 'Four-line security checklist before the CI wait: input validated at use, no secrets, CI pinned and least-privilege, dependencies needed and pinned; a security-sensitive diff the card did not flag is said in summary'],
   ['R-30', ROUTING, /log it with `log-event\.js review`/, 'A second review the hook could not log is logged by hand'],
 
   // ---- Task card ------------------------------------------------------------
@@ -333,6 +335,7 @@ module.exports = [
   ['AR-03', ARCHITECT, /above-table: <reason>/, 'Breakdowns give type and difficulty, not models; above-table flags the exception'],
   ['AR-04', ARCHITECT, /Never merge, force-push, or touch `main`/, 'Never merge, force-push or touch main', 'guard'],
   ['AR-05', ARCHITECT, /Assumptions behind each safety rule/, 'Each safety rule lists the assumptions it relies on, with gaps and fallbacks'],
+  ['AR-07', ARCHITECT, /Mark a task `security-sensitive`/, 'A breakdown marks a task security-sensitive when it touches auth, secrets, input parsing, containers or CI config'],
   ['AR-06', ARCHITECT, /request amplification/, 'Hard-task contracts cover terminal paths, fairness and request amplification'],
   ['SC-01', SCOUT, /never change anything/, 'The scout is read-only'],
   ['SC-02', SCOUT, /Do not expand scope/, 'Answer exactly the question asked'],
@@ -362,4 +365,23 @@ module.exports = [
   ['CO-20', COACH, /upper bound/, 'How pause durations are read'],
   ['CO-21', COACH, /Don't sum them/, 'How lines from older guidance versions are read'],
   ['CO-22', COACH, /via: "merge-task"/, 'merge-task.js lines and their fields'],
+  ['CO-23', COACH, /Count `role: security-review` rows/, 'Security reviews are counted apart from general reviews, with the agent-name fallback; scan and coverage are read'],
+  ['CO-24', COACH, /whether the grant is worth it/, 'Large against xlarge and Claude against the bridge, from the grant lines in milestones.jsonl'],
+  ['CO-25', COACH, /`reason: "runway"`/, 'tier_fallback lines with reason runway are read'],
+  ['CO-26', COACH, /additions to the security reviewer's "Project lessons"/, 'The report proposes additions to the security reviewer\'s Project lessons'],
+  ['CO-27', COACH, /`billing` appears only when/, 'billing appears only when a user own map sets it; the grant rows can be proposed for change'],
+
+  // ---- Security reviewer ----------------------------------------------------
+  ['SV-01', SECREV, /List the trust boundaries the diff touches/, 'List the trust boundaries the diff touches, then trace each untrusted input to where it is used'],
+  ['SV-02', SECREV, /OWASP Top 10/, 'Categories: the OWASP Top 10 by name, plus CI config, containers, supply chain, and secrets'],
+  ['SV-03', SECREV, /names a concrete exploit path/, 'A major or critical finding names the input, the path and the consequence; an unconfirmed concern is minor, with what would confirm it'],
+  ['SV-04', SECREV, /Report what you checked and what you did not/, 'Coverage: what was checked and what was not'],
+  ['SV-05', SECREV, /Find the scanner jobs in the project's CI config/, 'Scan status starts from the scanner jobs in the project CI config'],
+  ['SV-06', SECREV, /Confirm the PR head is still `head_sha`/, 'The PR head must still be the reviewed SHA, else scan is unknown'],
+  ['SV-07', SECREV, /`scan`: `green`/, 'scan is green, red, none (no scanner checks) or unknown (unreadable, pending after the wait, head moved)'],
+  ['SV-08', SECREV, /skipped scanner job goes under `not_checked`/, 'A skipped scanner job is listed as not checked, not counted as passed'],
+  ['SV-09', SECREV, /You never run a scanner yourself/, 'The security reviewer never runs the scanners'],
+  ['SV-10', SECREV, /Project lessons/, 'A short Project lessons list, grown from the Coach reports; first entry: redaction checked on the raw string but not the serialized form'],
+  ['SV-11', SECREV, /scratch worktree/, 'Read-only: scratch worktrees under its scratchpad, never a checkout in the shared tree'],
+  ['SV-12', SECREV, /```review-json/, 'review-json (the reviewer fields plus scan and coverage) is the last block; no result-json'],
 ];

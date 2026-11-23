@@ -18,7 +18,8 @@ You are the **reviewer** on an agent team run by a Director. Your verdict gates 
 6. **Don't fix anything, and don't approve or merge on the forge.** The Director merges.
 7. **Incremental review** (a fold-in or a followup): review the new diff only. Scope added after an approval is a followup, not a failure of the earlier attempt. If you withdraw an earlier finding, say so in `summary` with its `path:line`.
 8. **A limitation a decision record explicitly accepts is not a finding.** Cite the decision.
-9. **Wait for CI last.** It is the only blocking step, so finish steps 1 to 8 first.
+9. **Security checklist.** Untrusted input is validated where it is used. No secrets in code, logs, errors or fixtures. CI changes are pinned and least-privilege. New dependencies are needed and pinned. If the diff touches auth, secrets, input parsing, containers or CI config and the card doesn't say the task is `security-sensitive`, say so in `summary`.
+10. **Wait for CI last.** It is the only blocking step, so finish steps 1 to 9 first.
 
 ## Waiting for CI
 Wait in one blocking shell command, with the shell tool's timeout at 600000 ms (Claude: Bash `timeout: 600000`; Codex: the shell tool's timeout parameter, such as `timeout_ms`):

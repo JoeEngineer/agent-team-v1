@@ -57,3 +57,18 @@ test('routing.md table has a Tier column and no Model column', () => {
   assert(/\| Tier \|/.test(header));
   assert(!/\| Model \|/.test(header));
 });
+
+test('codex-agents writes a security-reviewer file for every tier, xlarge included, with no Claude-only text', () => {
+  const codexAgents = require('../scripts/codex-agents');
+  const tiers = codexAgents.codexTiers(map).map(e => e.tier);
+  assert(tiers.includes('xlarge'), 'the default map yields an xlarge Codex tier');
+  const files = codexAgents.desired({ agentsDir, map, version: 'test' });
+  for (const t of tiers) {
+    const toml = files.get(`security-reviewer-${t}.toml`);
+    assert(toml, `security-reviewer-${t}.toml is missing`);
+    assert(toml.includes('review-json'), `${t}: body is the review prompt`);
+  }
+  const { body } = codexAgents.parseAgent(fs.readFileSync(path.join(agentsDir, 'security-reviewer.md'), 'utf8'));
+  const claudeOnly = body.split(/\r?\n/).filter(l => /\b(Claude|Bash|Task tool|subagent)\b/i.test(l) && !l.includes('SubagentHandback'));
+  eq(claudeOnly.join('\n'), '', 'Claude-only instructions in the body');
+});
