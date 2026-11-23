@@ -26,9 +26,12 @@ job as unscanned.
 
 1. On `pull_request`, each job restores `trivy.yaml`, `.trivyignore`,
    `.trivyignore.yaml` and `trivy-secret.yaml` from `github.event.pull_request.base.sha`
-   before Trivy runs, or removes the file when the base has none. The SHA reaches
-   the script through `env:`. The step fetches that one commit (`--depth=1`), so
-   the default shallow checkout is enough. A PR that deletes a file gets it back.
+   before Trivy runs, or removes the file when the base has none. A second
+   `actions/checkout` (same pinned SHA, `persist-credentials: false`) fetches that
+   commit into `.scan-base`; the SHA appears only in its `with: ref:`, never in a
+   `run:` script. The restore step removes the PR's copy of each file, copies the
+   base's if it exists, then deletes `.scan-base`, so Trivy never scans it. A PR
+   that deletes a file gets it back.
    On `push` the tree's own files are used. Permissions stay `contents: read`,
    there is no `pull_request_target`, and actions stay pinned by SHA.
 2. A job `detect-dockerfile` outputs `found`. `trivy-image` has `needs` and a
@@ -42,6 +45,15 @@ job as unscanned.
   (`agents/security-reviewer.md`), which flags diff changes to such files.
 - A skipped required job does not block a merge on GitHub.
 - Inline `trivy:ignore` comments are not covered.
+- A `pull_request` run uses the PR's own copy of `security-scan.yml`, so a PR can
+  still edit the workflow itself (for example drop the restore step). This is
+  inherent to `pull_request`; the security reviewer's "Scanner config" rule
+  covers it.
+- The base files come from a second checkout, not `git fetch`, because the first
+  checkout keeps no token (`persist-credentials: false`) and a bare `git fetch`
+  of the base commit would likely fail on a private or internal repo. The second
+  checkout also keeps no token. It must sit inside the workspace (`actions/checkout`
+  rejects a path outside it), hence the delete before Trivy. Untested live.
 - The template is unparsed and has had no live run. A live run in a scratch
   repo stays a follow-up.
 

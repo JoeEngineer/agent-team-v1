@@ -30,20 +30,25 @@ jobs:
         with:
           persist-credentials: false
       # A PR must not weaken its own scan: use the base branch's copy of each file,
-      # or none if the base has none. BASE_SHA comes in through env, not inline.
+      # or none if the base has none. The base commit comes from a second checkout
+      # (no token kept, so it also works on private repos), inside the workspace
+      # because checkout requires that. It is deleted before Trivy so it is never
+      # scanned. The SHA is only ever in with:, never inline in a run: script.
+      - name: Check out base branch config
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .scan-base
+          persist-credentials: false
       - name: Use base-branch scanner config
         if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
           for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
-            if git cat-file -e "$BASE_SHA:$f" 2>/dev/null; then
-              git show "$BASE_SHA:$f" > "$f"
-            else
-              rm -f "$f"
-            fi
+            rm -f "$f"
+            if [ -f ".scan-base/$f" ]; then cp ".scan-base/$f" "$f"; fi
           done
+          rm -rf .scan-base
       - name: Trivy file system scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -82,19 +87,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Check out base branch config
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .scan-base
+          persist-credentials: false
       - name: Use base-branch scanner config
         if: github.event_name == 'pull_request'
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          git fetch --no-tags --depth=1 origin "$BASE_SHA"
           for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
-            if git cat-file -e "$BASE_SHA:$f" 2>/dev/null; then
-              git show "$BASE_SHA:$f" > "$f"
-            else
-              rm -f "$f"
-            fi
+            rm -f "$f"
+            if [ -f ".scan-base/$f" ]; then cp ".scan-base/$f" "$f"; fi
           done
+          rm -rf .scan-base
       - name: Build image
         run: docker build -t scan-target:ci .
       - name: Trivy image scan

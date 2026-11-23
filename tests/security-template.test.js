@@ -56,35 +56,71 @@ const jobBlock = (id) => {
   assert(part, 'job missing: ' + id);
   return part.split(/^  (?=[\w-]+:\n)/m)[0];
 };
-const restoreStep = (job) => {
-  const m = jobBlock(job).split(/^      - name: /m).find((x) => x.startsWith('Use base-branch scanner config'));
-  assert(m, job + ' lacks the base-branch restore step');
-  return m;
+// Steps of a job, split on the 6-space "- " that starts each step.
+const stepsOf = (job) => jobBlock(job).split(/^ {6}- /m).slice(1);
+const indexOfStep = (job, name) => stepsOf(job).findIndex((x) => x.startsWith('name: ' + name + '\n'));
+const stepNamed = (job, name) => {
+  const i = indexOfStep(job, name);
+  assert(i >= 0, job + ' lacks the step: ' + name);
+  return stepsOf(job)[i];
 };
+const BASE_CHECKOUT = 'Check out base branch config';
+const RESTORE = 'Use base-branch scanner config';
+const PR_ONLY = "        if: github.event_name == 'pull_request'\n";
+const usesLine = (step) => (step.match(/^ {8}uses: .*$/m) || [''])[0];
 
-test('both jobs restore the four Trivy files from the base SHA on pull_request, before Trivy', () => {
+test('both jobs check out the base SHA a second time, pinned like the first, with no credentials and a fixed path', () => {
   for (const job of ['trivy-fs', 'trivy-image']) {
-    const step = restoreStep(job);
-    assert(step.includes("if: github.event_name == 'pull_request'"), job + ': restore not limited to pull_request');
-    for (const f of ['trivy.yaml', '.trivyignore', '.trivyignore.yaml', 'trivy-secret.yaml']) assert(step.includes(f), job + ': restore misses ' + f);
-    assert(step.includes('git show "$BASE_SHA:$f" > "$f"'), job + ': no restore from base');
-    assert(step.includes('rm -f "$f"'), job + ': no removal when the base has none');
-    assert(/git fetch [^\n]*"\$BASE_SHA"/.test(step), job + ': base commit not fetched');
-    const j = jobBlock(job);
-    assert(j.indexOf('Use base-branch scanner config') < j.indexOf('aquasecurity/trivy-action'), job + ': restore must precede Trivy');
+    const first = stepNamed(job, 'Check out');
+    const base = stepNamed(job, BASE_CHECKOUT);
+    assert(base.includes(PR_ONLY), job + ': base checkout not limited to pull_request');
+    assert(usesLine(base) && usesLine(base) === usesLine(first), job + ': base checkout not pinned to the same SHA as the first');
+    assert(base.includes('          ref: ${{ github.event.pull_request.base.sha }}\n'), job + ': base checkout lacks ref: base.sha');
+    assert(base.includes('          persist-credentials: false'), job + ': base checkout persists credentials');
+    const p = base.match(/^ {10}path: (\S+)$/m);
+    assert(p, job + ': base checkout lacks a path');
+    assert(p[1] === '.scan-base', job + ': unexpected base checkout path ' + p[1]);
+    assert(!/^ {10}(ref|path):/m.test(first), job + ': the first checkout must scan the PR tree (no ref or path)');
+    assert(indexOfStep(job, 'Check out') < indexOfStep(job, BASE_CHECKOUT), job + ': base checkout must come after the first');
   }
 });
 
-test('base SHA reaches the script through env, never inline in run', () => {
+test('both jobs restore the four Trivy files from the base checkout on pull_request, delete it, all before Trivy', () => {
   for (const job of ['trivy-fs', 'trivy-image']) {
-    const step = restoreStep(job);
-    assert(step.includes('        env:\n          BASE_SHA: ${{ github.event.pull_request.base.sha }}\n'), job + ': BASE_SHA not set via env');
-    const run = step.split(/^ {8}run: \|\n/m)[1];
-    assert(run && !run.includes('${{'), job + ': run script has an inline expression');
+    const step = stepNamed(job, RESTORE);
+    assert(step.includes(PR_ONLY), job + ': restore not limited to pull_request');
+    assert(step.includes('for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do\n'), job + ': restore does not loop over exactly the four files');
+    const rm = step.indexOf('rm -f "$f"');
+    const guard = step.indexOf('if [ -f ".scan-base/$f" ]; then');
+    const cp = step.indexOf('cp ".scan-base/$f" "$f"');
+    assert(rm >= 0, job + ': the PR copy is not removed first');
+    assert(guard >= 0, job + ': no guard for a base that lacks the file');
+    assert(cp > guard, job + ': copy not behind the guard');
+    assert(rm < guard, job + ': the PR copy must be removed before the guarded copy, so a base without the file leaves none');
+    const del = step.indexOf('rm -rf .scan-base');
+    assert(del > cp, job + ': the base checkout is not deleted after the copy');
+    assert(step.indexOf('done', cp) < del, job + ': the base checkout must be deleted after the loop');
+    const trivy = stepsOf(job).findIndex((x) => x.includes('aquasecurity/trivy-action'));
+    const order = [indexOfStep(job, 'Check out'), indexOfStep(job, BASE_CHECKOUT), indexOfStep(job, RESTORE), trivy];
+    assert(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), job + ': order must be checkout, base checkout, restore, Trivy: ' + order);
   }
-  // every run: block in the file is free of inline expressions
-  const runs = wf.split(/^ {8}run: /m).slice(1).map((r) => r.split(/^ {6}- /m)[0].split(/^\S|^ {2}\S/m)[0]);
-  for (const r of runs) assert(!r.includes('${{'), 'inline expression in run: ' + r.slice(0, 40));
+});
+
+test('the base SHA appears only in with: ref, never in a run script, and no git fetch is used', () => {
+  const lines = wf.split('\n').filter((l) => l.includes('base.sha'));
+  assert(lines.length === 2, 'expected base.sha in exactly the two base checkouts, got ' + lines.length);
+  for (const l of lines) assert(/^ {10}ref: \$\{\{ github\.event\.pull_request\.base\.sha \}\}$/.test(l), 'base.sha outside with: ref: ' + l);
+  let runs = 0;
+  for (const job of ['trivy-fs', 'detect-dockerfile', 'trivy-image']) {
+    for (const st of stepsOf(job)) {
+      const run = st.split(/^ {8}run: /m)[1];
+      if (run === undefined) continue;
+      runs++;
+      assert(!run.includes('${{'), job + ': inline expression in run of step ' + st.split('\n')[0]);
+    }
+  }
+  assert(runs >= 4, 'expected at least four run steps, parsed ' + runs);
+  assert(!/git (fetch|show|cat-file)|BASE_SHA/.test(wf), 'a token-less git fetch or BASE_SHA remains');
 });
 
 test('trivy-image is skipped by a job-level if when there is no Dockerfile; detect job gives the output', () => {
