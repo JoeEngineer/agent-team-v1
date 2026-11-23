@@ -54,7 +54,7 @@ The table and ladder name tiers (small, medium, large, xlarge). Each tier maps t
 
 ## The xlarge grant
 
-The user grants xlarge to some roles, or none, at each milestone's intake (`<plugin root>/skills/milestone/SKILL.md`). The grant is what `node "<plugin root>/scripts/status.js" grant --milestone <slug>` prints. Take `<slug>` from your own milestone (its branch, `milestone/<slug>`), not from `STATUS.md`. Run it after a compaction and before a granted spawn. A non-zero exit: use the narrower grant, and ask the user.
+The user grants xlarge to some roles, or none, at each milestone's intake (`<plugin root>/skills/milestone/SKILL.md`). The grant is what `node "<plugin root>/scripts/status.js" grant --milestone <slug>` prints. Take `<slug>` from your own milestone (its branch, `milestone/<slug>`), not from `STATUS.md`. Run it after a compaction and before a granted spawn. A non-zero exit: use the `grant` it prints (none if none), and ask the user.
 
 | Role | Default | With the grant |
 |---|---|---|

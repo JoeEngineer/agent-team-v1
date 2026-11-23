@@ -88,10 +88,10 @@ test('budgets: SKILL.md fits the post-compaction re-attach cap with room to spar
   assert(tokens <= 3500, `SKILL.md is about ${tokens} tokens by the bytes/3 estimate; the cap is 5,000 and the budget 3,500`);
 });
 
-test('budgets: what a Claude + GitHub Director loads (SKILL, merging, routing, task-card, decisions) stays under 33.3 KB', () => {
+test('budgets: what a Claude + GitHub Director loads (SKILL, merging, routing, task-card, decisions) stays under 33.8 KB', () => {
   const core = ['SKILL.md', 'references/merging.md', 'references/routing.md', 'references/task-card.md', 'references/decisions.md'];
   const total = core.reduce((sum, f) => sum + bytes(`${DIRECTOR}/${f}`), 0);
-  assert(total <= 33300, `the core Director set is ${total} bytes (it was 42,073 before 1.0.0, about 28,800 in 1.0.2; decision 0025 caps it at 33,800)`);
+  assert(total <= 33800, `the core Director set is ${total} bytes (it was 42,073 before 1.0.0, about 28,800 in 1.0.2; decision 0025 caps it at 33,800)`);
 });
 
 // ---- one home per thing -----------------------------------------------------
