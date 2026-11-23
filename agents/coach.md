@@ -50,7 +50,7 @@ Linked to its delegation by `agent_id`. For background subagents the result, dur
 - Codex completions can be missing for turns cut off by a usage limit or still running when the Director sent a follow-up. Count delegated turns as well as completions, and say how many have no line.
 
 ### `reviews.jsonl`: one line per reviewer verdict
-Linked by task id; carries `findings` (severity, category, path, blocking) and `ci`. On Codex a review may appear from both the hook and a Director `log-event.js review` line: dedupe by task id + attempt + verdict.
+Linked by task id; carries `role` (the task type), `findings` (severity, category, path, blocking), `ci`, and for security reviews `scan` and `coverage`. On Codex a review may appear from both the hook and a Director `log-event.js review` line: dedupe by task id + attempt + verdict.
 
 ### `merges.jsonl`: merges, queues and their resolutions
 `outcome` is read from the forge after the call: `merged`, `not-merged`, `auto-merge-queued`, or `unknown` when the forge couldn't be asked (`note: "not checked: the hook's time for forge calls ran out"` is one cause).
