@@ -11,8 +11,8 @@ const { ROOT, SCRIPTS, tmpProject, run, readLog, test, assert, eq } = require('.
 
 console.log('security-review-logging');
 
-const SCAN = { files: 12, tools: ['npm audit'], clean: true };
-const COVERAGE = { reviewed: ['scripts/'], skipped: [] };
+const SCAN = 'unknown';
+const COVERAGE = { checked: ['scripts/'], not_checked: ['image scan job (skipped)'] };
 const REVIEW = { verdict: 'approve', severity: 'none', issues: [], findings: [], summary: 'ok', scan: SCAN, coverage: COVERAGE };
 const block = (v, tag = 'review-json') => '```' + tag + '\n' + JSON.stringify(v) + '\n```';
 const CARD = 'TASK id=SEC-1 type=security-review reviewed_task=T-1 pr=5 attempt=1\nWHY test';
@@ -104,7 +104,7 @@ test('bridge: a parseable review-json with a card id logs a review row with the 
   eq(rows[0].role, 'security-review', 'role from the card type');
   eq(rows[0].reviewer_model, 'gpt-6.1-sol', 'bridge model');
   eq(rows[0].task_id, 'T-1', 'reviewed task');
-  eq(rows[0].scan.files, 12, 'scan kept');
+  eq(rows[0].scan, 'unknown', 'scan kept');
 });
 
 test('bridge: a review with no card id keeps review on the delegation line and writes no row', () => {
@@ -175,7 +175,7 @@ test('codex: a security-reviewer-large completion logs its review with scan and 
   eq(rows[0].tool, 'codex', 'tool');
   eq(rows[0].role, 'security-review', 'role');
   eq(rows[0].reviewer_tier, 'large', 'tier large');
-  eq(rows[0].scan.files, 12, 'scan kept');
+  eq(rows[0].scan, 'unknown', 'scan kept');
 });
 
 // --- block-retry wait ------------------------------------------------------------
@@ -200,7 +200,7 @@ test('SubagentStop retry: a security reviewer whose block lands late is found by
   const p = tmpProject();
   const c = lateBlockStop(p, 'agent-team:security-reviewer', 'late-sec');
   eq(c.report_source, 'handback', 'report from the late handback');
-  eq(c.review.scan.files, 12, 'review read after the wait');
+  eq(c.review.scan, 'unknown', 'review read after the wait');
   eq(readLog(p, 'reviews.jsonl').length, 1, 'review logged');
 });
 
