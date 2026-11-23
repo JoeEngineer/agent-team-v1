@@ -25,7 +25,7 @@ const transcript = () => [
 
 // Returns { p, root, env }: a project with one delegation and completion for session dir-1, and a projects root.
 function setup({ agentId = 'ag-dir-1', withDirector = true, withAgent = true } = {}) {
-  const root = tmp();
+  const root = path.join(tmp(), 'root'); // nested, so the root's parent is a fresh directory of ours
   const folder = path.join(root, 'proj-folder');
   fs.mkdirSync(folder, { recursive: true });
   if (withDirector) fs.writeFileSync(path.join(folder, 'dir-1.jsonl'), jl([{ type: 'assistant', timestamp: '2026-11-01T10:00:00.000Z', message: { id: 'a1', model: 'claude-fable-5-2', usage: U(1, 1, 1, 1), content: [{ type: 'text', text: 'x' }] } }]));
@@ -67,13 +67,17 @@ test('FU-18: a symlinked completions.jsonl / sessions.jsonl is not appended to; 
   const sLog = path.join(logsOf(s.p), 'sessions.jsonl');
   const target = fs.readFileSync(cLog, 'utf8');
   fs.rmSync(cLog);
-  if (!link(out1, cLog)) return; // symlinks cannot be made here (as in other tests)
+  if (!link(out1, cLog)) { console.log('  (skipped: links cannot be created here)'); return; }
   assert(link(out2, sLog), 'second symlink');
   assert(fs.lstatSync(cLog).isSymbolicLink() && fs.lstatSync(sLog).isSymbolicLink(), 'precondition: both logs are symlinks');
   fs.writeFileSync(out1, target); // the link target holds the line to supersede, so the pass reaches the append
   const r = arch(s);
-  assert(r.stdout.includes('refusing to write') && r.stdout.includes(cLog), r.stdout);
-  assert(r.stdout.includes(sLog), r.stdout);
+  // The script resolves its cwd, so it prints the long path form where tmpdir() may be an 8.3 short form
+  // (Windows runners): compare against the real log directory, not the one the test built.
+  const realDir = fs.realpathSync.native(logsOf(s.p));
+  assert(r.stdout.includes('refusing to write'), r.stdout);
+  assert(r.stdout.includes(path.join(realDir, 'completions.jsonl')), r.stdout);
+  assert(r.stdout.includes(path.join(realDir, 'sessions.jsonl')), r.stdout);
   eq(fs.readFileSync(out1, 'utf8'), target, 'completions target untouched');
   eq(fs.readFileSync(out2, 'utf8'), 'ORIGINAL2\n', 'sessions target untouched');
 });
@@ -95,7 +99,7 @@ test('FU-18: appendLogLine refuses a path that is not a regular file (works with
 test('FU-18: a non-plain agent_id or session_id is not joined into a path; nothing outside the root is read', () => {
   const evil = 'x/../../../../../outside/evil';
   const s = setup({ agentId: evil, withAgent: false });
-  // The file the traversal would reach: <projects root>/../outside/evil.jsonl
+  // The file the traversal would reach: <projects root>/../outside/evil.jsonl (the root's parent is a fresh mkdtemp dir, not a shared name)
   const target = path.join(path.dirname(s.root), 'outside', 'evil.jsonl');
   fs.mkdirSync(path.dirname(target), { recursive: true });
   fs.writeFileSync(target, jl(transcript()));
@@ -115,5 +119,5 @@ test('FU-18: a non-plain agent_id or session_id is not joined into a path; nothi
     assert(rc.findTranscript(good.root, 'dir-1', 'ag-dir-1'), 'plain id found');
     eq(arch(good).status, 0, 'archive ok');
     eq(readLive(good.p, 'completions.jsonl').length, 2, 'plain id supersedes');
-  } finally { fs.rmSync(path.dirname(target), { recursive: true, force: true }); }
+  } finally { fs.rmSync(path.dirname(path.dirname(target)), { recursive: true, force: true }); }
 });

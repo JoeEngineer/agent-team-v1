@@ -55,6 +55,7 @@ function appendLogLine(file, text) {
   let st = null;
   try { st = fs.lstatSync(file); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
   if (st && (st.isSymbolicLink() || !st.isFile())) throw new Error(`refusing to write ${file}: not a regular file (symlink?)`);
+  // Accepted: the file can be swapped between this check and the append. O_NOFOLLOW does not exist on Windows, and it takes write access to the log folder.
   fs.appendFileSync(file, text, 'utf8');
 }
 
