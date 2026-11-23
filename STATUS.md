@@ -117,4 +117,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
 - 0021: the guard and the hooks-active line are enabled per project; logs live in the main checkout (asked for by the user 2026-11-20)
 - 0022: a security review at every milestone close, and a per-milestone xlarge grant (accepted by the user 2026-11-22; implemented in 1.1.0)
 - 0023: one same-agent send-back at large/high before xlarge; amends 0022 (chosen by the user 2026-11-23)
-- 0025: guidance budget raises for 1.2.0 (approved by the user 2026-11-23). Reserved: 0024 scan-state table (FU-2), 0026 grant cross-check, first line wins (FU-6), 0027 scanner template (FU-10)
+- 0024: scan states as one ordered table (FU-2, architect)
+- 0025: guidance budget raises for 1.2.0 (approved by the user 2026-11-23)
+- 0026: the xlarge grant is cross-checked against the first intake log line; `--milestone` required (FU-6; first-line-wins chosen by the user 2026-11-23)
+- 0027: the scanner template uses the base branch's Trivy config on PRs (FU-10)
