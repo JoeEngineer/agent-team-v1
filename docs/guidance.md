@@ -33,7 +33,7 @@ An anchor is a presence check, not a wording pin: a few distinctive words, at mo
 
 ## Size budgets
 
-`tests/guidance.test.js` holds a byte budget per file, a little above its current size, and one for the set a Claude + GitHub Director loads (30 KB; it was 42 KB in 0.6.0). `SKILL.md` must stay under about 3,500 tokens by a bytes ÷ 3 estimate.
+`tests/guidance.test.js` holds a byte budget per file, a little above its current size, and one for the set a Claude + GitHub Director loads (32.5 KB since 1.1.0, which added the security reviews and the xlarge grant; it was 30 KB in 1.0.0 and 42 KB in 0.6.0). `SKILL.md` must stay under about 3,500 tokens by a bytes ÷ 3 estimate.
 
 When a change doesn't fit, in this order:
 

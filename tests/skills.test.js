@@ -56,6 +56,21 @@ test('no $ARGUMENTS or commands/ references in shipped files', () => {
   }
 });
 
+test('milestone skill: the intake questions and how the answers are logged (decision 0022)', () => {
+  const text = fs.readFileSync(path.join(skillsDir, 'milestone', 'SKILL.md'), 'utf8');
+  assert(text.includes('Use xlarge in this milestone for: security reviews (at close and on flagged task PRs), architect, coach at close, hard-fix escalation?'), 'the xlarge grant question');
+  assert(text.includes('Run a second, independent security review at milestone close through the Codex bridge? No / large/high / xlarge/high'), 'the second-review question');
+  assert(text.includes('log-event.js" milestone'), 'the answers are logged with log-event.js milestone');
+  assert(text.includes('## xlarge grant'), 'the STATUS.md block the answers go into');
+  assert(!text.includes('can start right away'), 'delegations wait for the intake questions');
+});
+
+test('coach skill: a standalone run asks about xlarge and carries tier and effort', () => {
+  const text = fs.readFileSync(path.join(skillsDir, 'coach', 'SKILL.md'), 'utf8');
+  assert(text.includes('Run the Coach at xlarge/medium this time? The default is large/high.'), 'the coach question');
+  assert(/TASK id=COACH-\S+ .*tier=\S+ effort=\S+/.test(text), 'the card carries tier= and effort=');
+});
+
 // What the Director's and the role agents' files must say is checked by
 // tests/guidance.test.js against the rule inventory (tests/guidance-rules.js).
 

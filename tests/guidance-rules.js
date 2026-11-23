@@ -27,12 +27,14 @@ const ARCHITECT = 'agents/architect.md';
 const SCOUT = 'agents/scout.md';
 const COACH = 'agents/coach.md';
 const MERGE_TASK = 'scripts/merge-task.js';
+const MILESTONE = 'skills/milestone/SKILL.md';
+const COACH_SKILL = 'skills/coach/SKILL.md';
 
 module.exports = [
   // ---- Director: always in context (survives compaction) -------------------
   ['D-01', SKILL, /send a `scout`/, 'The Director delegates everything but its own bookkeeping; more than a few files to read means a scout'],
   ['D-02', SKILL, /without asking first/, 'Standing authorization: delegate inside the milestone without asking'],
-  ['D-03', SKILL, /xlarge tier needs the user's yes for each task/, 'xlarge needs the user\'s yes for each task'],
+  ['D-03', SKILL, /only for roles in the milestone's xlarge grant/, 'xlarge only for roles in the milestone\'s grant (STATUS.md); otherwise the user\'s yes for that task'],
   ['D-04', SKILL, /Ask the user for anything else/, 'Merging into main, force-pushes, protection, branch deletes, releases and out-of-milestone work need the user', 'guard'],
   ['D-05', SKILL, /it wins/, 'The project\'s CLAUDE.md / AGENTS.md may narrow or widen the authorization and wins'],
   ['D-06', SKILL, /Every delegation prompt starts with a task card/, 'Every delegation starts with a task card, side work included', 'logger'],
@@ -78,6 +80,12 @@ module.exports = [
   ['D-45', SKILL, /don't read a PR's checks, check names or branch rules yourself/, 'CI belongs to the reviewer and the merge script; the Director does not read checks, names or rules itself'],
   ['D-46', SKILL, /it says when one retry is in order/, 'A guard block is handled as its message says: one retry when it says so, otherwise the user', 'guard'],
   ['D-44', SKILL, /send them through a PR into the milestone branch/, 'A refused direct push of the records is not a blocker: the records go through a PR into the milestone branch'],
+  // 1.1.0 (decision 0022): security reviews and the per-milestone xlarge grant.
+  ['D-47', SKILL, /`security-sensitive` task's PR also gets a `security-reviewer` pass/, 'A flagged PR also gets a security-reviewer pass after the reviewer approves, before merge'],
+  ['D-48', SKILL, /with no architect breakdown, apply them yourself/, 'Without an architect breakdown the Director flags security-sensitive tasks itself'],
+  ['D-49', SKILL, /ask the xlarge question/, 'Intake asks the xlarge and second-review questions before any delegation, the breakdown included'],
+  ['D-50', SKILL, /`<plugin root>\/skills\/milestone\/SKILL\.md`/, 'The intake questions\' wording lives in the milestone skill'],
+  ['D-51', SKILL, /final `reviewer` pass and the security review/, 'Close runs the final review and the security review; complete needs no blocking security finding'],
 
   // ---- Merging --------------------------------------------------------------
   ['M-01', MERGING, /"verdict": "approve"/, 'A task PR is merged only after a reviewer verdict of approve'],
@@ -114,8 +122,19 @@ module.exports = [
   ['M-32', MERGING, /"no CI" stated/, 'Complete only on green, or with "no CI" stated; otherwise report the CI state and SHA'],
   ['M-33', MERGING, /You don't merge it/, 'The milestone PR is handed to the user', 'guard'],
   ['M-34', MERGING, /not in a GitHub approval/, 'The reviewer verdict lives in the logs and a PR comment, not a forge approval'],
-  ['M-35', MERGING, /Protect your branches/, 'Expected branch rules for main and milestone/*'],
+  ['M-35', MERGING, /Protect your branches/, 'Expected branch rules for main and milestone/* (stated in the README)'],
   ['M-36', MERGING, /The guard blocks merges into `main`\/`master`/, 'The guard blocks merges into and pushes to main/master', 'guard'],
+  ['M-37', MERGING, /`security-reviewer` also approved this same `head_sha`/, 'A flagged task PR merges only after a security approval of the same head_sha'],
+  ['M-38', MERGING, /its `scan` is neither `red` \(send it back\) nor `unknown` \(ask the user\)/, 'A flagged task PR does not merge on scan red (send back) or unknown (ask the user)'],
+  ['M-39', MERGING, /approved an older head, send it the incremental diff/, 'A security approval of an older head is confirmed on the incremental diff before merge'],
+  ['M-40', MERGING, /holds up only the tasks that need it/, 'A blocked flagged PR holds up only its dependants'],
+  ['M-41', MERGING, /security review runs on the same PR, in every milestone/, 'Close: a mandatory security review, separate from the final review'],
+  ['M-42', MERGING, /asked for the second review at intake, start it in parallel/, 'Close: the second security review, when asked for, runs in parallel'],
+  ['M-43', MERGING, /`major` or `critical` finding blocks "complete"/, 'A major/critical finding from either security review blocks complete and becomes a fix task'],
+  ['M-44', MERGING, /without an exploit path/, 'A major/critical security finding without an exploit path goes back for the path or a downgrade'],
+  ['M-45', MERGING, /`scan: red` blocks/, 'scan red blocks; scan unknown goes to the user like ci unknown'],
+  ['M-46', MERGING, /"no scanner"/, 'scan none does not block; the report states no scanner'],
+  ['M-47', MERGING, /never counts as passed/, 'A security review with no review-json after one re-ask, or a missing bridge, goes to the user; never passed'],
 
   // ---- Just-in-time: printed by merge-task.js only when the state applies ---
   ['S-01', MERGE_TASK, /Before any push to this/, 'queued: set STATUS, cancel before any push, checkpoints'],
@@ -135,17 +154,31 @@ module.exports = [
   ['R-03', ROUTING, /review \(milestone final\) \| any \| reviewer \| large \| high/, 'The milestone final review runs large/high'],
   ['R-04', ROUTING, /unclear cause, cross-cutting/, 'Difficulty guide: easy, medium, hard'],
   ['R-05', ROUTING, /don't follow the implementer's tier/, 'A reviewer\'s tier and effort don\'t follow the implementer or the task difficulty'],
-  ['R-06', ROUTING, /normal per-PR review/, 'A final-review fix PR gets a normal review; the final reviewer only confirms its own finding'],
+  ['R-06', ROUTING, /close-time security review gets a normal per-PR review/, 'A fix PR for a final-review or close-time security finding gets a normal review; that reviewer only confirms its own finding'],
   ['R-07', ROUTING, /session unavailable; subagent fallback/, 'No session tool: background subagent at the same tier and effort'],
   ['R-08', ROUTING, /send it back to the same tier/, 'Ladder 1: first failure goes back to the same tier'],
   ['R-09', ROUTING, /Use the top-level field/, 'Ladder 2: raise effort on a second failure or a major/critical top-level severity'],
   ['R-10', ROUTING, /models\.js" up <tier>/, 'Ladder 3: at high effort raise the tier; none left means ask the user'],
-  ['R-11', ROUTING, /re-examine the spec/, 'Ladder 4: stop, go to architect; xlarge only offered, used on the user\'s yes'],
+  ['R-11', ROUTING, /re-examine the spec/, 'Ladder 4: stop, go to architect; xlarge offered when mapped and not disabled, used on the user\'s yes'],
   ['R-12', ROUTING, /`reason=escalation`/, 'An escalation is a new spawn with the attempt bumped and the step named'],
-  ['R-13', ROUTING, /never chosen by the table or the ladder/, 'xlarge, disabled and credit-billed entries are never auto-chosen'],
+  ['R-13', ROUTING, /never chosen by the table or the ladder/, 'xlarge, and entries a user map disables or marks credits, are never auto-chosen'],
   ['R-14', ROUTING, /Never fall back up/, 'A missing model falls one tier down, is logged and reported; never up'],
   ['R-15', ROUTING, /Bump it whenever this file changes/, 'The guidance version is bumped with every routing change, made by PR'],
   ['R-16', ROUTING, /Check runway first/, 'Local bridges: only when present and assigned; runway first; fall back and log'],
+  ['R-17', ROUTING, /\| security-review \| any \| security-reviewer \| large \| high \| subagent \|/, 'Security reviews run large/high by default'],
+  ['R-18', ROUTING, /`hard-fix` in the milestone's grant/, 'Ladder 4 with hard-fix granted: xlarge/high without asking'],
+  ['R-19', ROUTING, /architect \(breakdown, design\) \| large \/ high \| xlarge \/ medium/, 'The grant table: default and granted tier/effort per role'],
+  ['R-20', ROUTING, /in this milestone only/, 'The grant covers granted roles in this milestone only; anything else needs the user\'s yes'],
+  ['R-21', ROUTING, /No block \(an older project\) means no grant/, 'The grant lives in STATUS.md; no block means no grant; re-read after a compaction'],
+  ['R-22', ROUTING, /Check runway before each granted xlarge spawn/, 'Runway before each granted xlarge spawn; short means ask, never a silent fallback'],
+  ['R-23', ROUTING, /`"reason":"runway"`/, 'Choosing the default row for runway is logged as tier_fallback'],
+  ['R-24', ROUTING, /If runway can't be checked, say so on the `WHY` line/, 'Unknown runway is stated on the WHY line'],
+  ['R-25', ROUTING, /\| security-review \(second, at close\) \| any \| `codex-bridge`/, 'The second security review is the first local route'],
+  ['R-26', ROUTING, /resolve <tier> --tool codex/, 'The second review\'s tier comes from the intake answer'],
+  ['R-27', ROUTING, /none of the first review's findings or verdict/, 'The second review gets the same card without the first review\'s findings or verdict'],
+  ['R-28', ROUTING, /find what that review missed/, 'The second review\'s card says another model reviewed and asks what it missed'],
+  ['R-29', ROUTING, /drop the tier or skip; never skip silently/, 'Short runway or a missing bridge at close: ask the user; never skip silently'],
+  ['R-30', ROUTING, /log it with `log-event\.js review`/, 'A second review the hook could not log is logged by hand'],
 
   // ---- Task card ------------------------------------------------------------
   ['T-01', CARD, /starts with these two lines/, 'Every delegation prompt starts with the TASK and WHY lines', 'logger'],
@@ -167,6 +200,8 @@ module.exports = [
   ['T-17', CARD, /never in the main checkout/, 'Scratch-files context line'],
   ['T-18', CARD, /Don't ask a reviewer for a `result-json`/, 'Review tasks: pr=, the original criteria, review-json only', 'handback-check'],
   ['T-19', CARD, /Say how far to verify/, 'A review brief says how far to verify'],
+  ['T-20', CARD, /`review`, `security-review`, `coach`/, 'security-review is a task type'],
+  ['T-21', CARD, /apply to `security-review` tasks too/, 'Review-task rules and the CI wait line apply to security reviews; the second review\'s card is in routing.md'],
 
   // ---- Decision records -----------------------------------------------------
   ['K-01', DECISIONS, /overriding the routing table/, 'When a decision record is due'],
@@ -194,6 +229,23 @@ module.exports = [
   ['X-17', CODEX, /don't use `--wait`/, 'waiting on Codex: reviewer followup instead of a background wait'],
   ['X-18', CODEX, /Never both/, 'A review is logged by the hook or by hand, never both'],
   ['X-19', CODEX, /List minor findings too/, 'Codex review briefs ask for minors and the Calibration rules'],
+  ['X-20', CODEX, /xlarge is used per the grant or the user's yes/, 'On Codex, xlarge per the grant or the user\'s yes'],
+  ['X-21', CODEX, /writes its agent files unless the map disables xlarge/, 'Codex xlarge agent files exist unless the map disables xlarge'],
+  ['X-22', CODEX, /`security-reviewer-<tier>`/, 'The Codex security reviewer is spawned as security-reviewer-<tier>'],
+
+  // ---- Milestone and Coach skills (intake questions) ------------------------
+  ['MS-01', MILESTONE, /Use xlarge in this milestone for: security reviews/, 'The xlarge grant question, asked at intake'],
+  ['MS-02', MILESTONE, /before any delegation \(the breakdown included\)/, 'The intake questions come before any delegation'],
+  ['MS-03', MILESTONE, /xlarge model for the current tool that is not disabled/, 'The grant question is asked when the current tool has an xlarge model that is not disabled'],
+  ['MS-04', MILESTONE, /Choosing nothing is a valid answer/, 'Granting nothing is valid; every role then runs its default row'],
+  ['MS-05', MILESTONE, /`enabled: false` on xlarge in `~\/\.agent-team\/models\.json`/, 'Disabling xlarge in the user map stops the question'],
+  ['MS-06', MILESTONE, /Run a second, independent security review at milestone close/, 'The second-review question, on Claude with the Codex bridge'],
+  ['MS-07', MILESTONE, /Offer xlarge\/high only when the map's Codex xlarge entry is not disabled/, 'The second review offers xlarge only when Codex xlarge is not disabled'],
+  ['MS-08', MILESTONE, /under `## xlarge grant`/, 'The answers go into STATUS.md under ## xlarge grant'],
+  ['MS-09', MILESTONE, /log-event\.js" milestone/, 'The answers are logged with log-event.js milestone'],
+  ['MS-10', MILESTONE, /can start after the intake questions/, 'Research and breakdown delegations start after the intake questions'],
+  ['CS-01', COACH_SKILL, /Run the Coach at xlarge\/medium this time\?/, 'A standalone Coach run asks about xlarge/medium when it is mapped and not disabled'],
+  ['CS-02', COACH_SKILL, /tier=<large\|xlarge> effort=<high\|medium>/, 'The standalone Coach card carries tier and effort'],
 
   // ---- GitLab ---------------------------------------------------------------
   ['G-01', GITLAB, /Don't fall back to `gh`/, 'glab must be installed and logged in; no fallback to gh'],

@@ -62,7 +62,7 @@ test('inventory: every guidance file has rules, and the script-enforced ones nam
 const BUDGET = {
   'skills/director/SKILL.md': 10000,
   'skills/director/references/merging.md': 9500,
-  'skills/director/references/routing.md': 6000,
+  'skills/director/references/routing.md': 7500,
   'skills/director/references/task-card.md': 6200,
   'skills/director/references/decisions.md': 1800,
   'skills/director/references/codex.md': 7500,
@@ -87,10 +87,10 @@ test('budgets: SKILL.md fits the post-compaction re-attach cap with room to spar
   assert(tokens <= 3500, `SKILL.md is about ${tokens} tokens by the bytes/3 estimate; the cap is 5,000 and the budget 3,500`);
 });
 
-test('budgets: what a Claude + GitHub Director loads (SKILL, merging, routing, task-card, decisions) stays under 30 KB', () => {
+test('budgets: what a Claude + GitHub Director loads (SKILL, merging, routing, task-card, decisions) stays under 32.5 KB', () => {
   const core = ['SKILL.md', 'references/merging.md', 'references/routing.md', 'references/task-card.md', 'references/decisions.md'];
   const total = core.reduce((sum, f) => sum + bytes(`${DIRECTOR}/${f}`), 0);
-  assert(total <= 30000, `the core Director set is ${total} bytes (it was 42,073 before 1.0.0)`);
+  assert(total <= 32500, `the core Director set is ${total} bytes (it was 42,073 before 1.0.0, about 28,800 in 1.0.2)`);
 });
 
 // ---- one home per thing -----------------------------------------------------
