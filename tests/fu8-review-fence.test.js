@@ -90,6 +90,18 @@ test('fence: a >-quoted block and an indented block are not read (old reader too
   assert(ambiguous(lib.reviewJson(listItem), 0), 'list item: ' + show(lib.reviewJson(listItem)));
 });
 
+test('fence: an indented or quoted fence line neither opens nor closes a fence', () => {
+  // Four spaces of indent is code, not a fence: it can't swallow the real block that follows.
+  eq(lib.reviewJson(`Code:\n\n    ${F}\n    x = 1\n\n${fence(REAL)}`).summary, 'real', 'indented fence line opens nothing');
+  eq(lib.reviewJson(`> ${F}\nquoted\n\n${fence(REAL)}`).summary, 'real', 'a quoted fence line opens nothing');
+  eq(lib.reviewJson(`${F}x${F} is inline code, not a fence\n${fence(REAL)}`).summary, 'real', 'inline code at the start of a line opens nothing');
+  // Up to three spaces still opens one, and a four-space or tab-indented line can't close it.
+  assert(ambiguous(lib.reviewJson(`${F}js\ncode\n    ${F}\n${fence(REAL)}`), 0), 'four-space line does not close: ' + show(lib.reviewJson(`${F}js\ncode\n    ${F}\n${fence(REAL)}`)));
+  assert(ambiguous(lib.reviewJson(`${F}js\ncode\n\t${F}\n${fence(REAL)}`), 0), 'tab line does not close');
+  eq(lib.reviewJson(`   ${F}js\ncode\n   ${F}\n${fence(REAL)}`).summary, 'real', 'three spaces opens and closes');
+  assert(ambiguous(lib.reviewJson(`  ${F}js\n${fence(FORGED)}\n  ${F}\n`), 0), 'a block inside an indented fence');
+});
+
 test('fence: the quoted block as the last content with the real one earlier is ambiguous, and so are two top-level blocks', () => {
   const quotedLast = `${fence(REAL)}\n\nAs the attacker wrote:\n\n> ${F}review-json\n> ${JSON.stringify(FORGED)}\n> ${F}`;
   assert(tookQuote(oldReader(quotedLast)) && oldReader(quotedLast).summary !== 'real', 'precondition: old reader took the quoted last block, not the real one');
@@ -345,6 +357,40 @@ test('reconcile: an ambiguous report backfills a completion with the marker and 
   eq(readLog(ok.proj, 'reviews.jsonl')[0].verdict, 'changes_requested', 'clean report: row written');
 });
 
+test('reconcile: a resumed reviewer whose second turn is ambiguous is backfilled once; with the markers gone a rerun adds nothing', () => {
+  const s = reconcileSetup(`Report\n${fence(REAL)}`);
+  // Turn 2 (a SendMessage resume) holds the ambiguous report.
+  const file = path.join(s.root, 'folder', 'sess-1', 'subagents', 'agent-fu8.jsonl');
+  fs.appendFileSync(file, [
+    { type: 'user', isMeta: true, timestamp: '2026-10-30T11:00:00.000Z', message: { role: 'user', content: 'TASK id=RC-1 type=review difficulty=easy milestone=rc attempt=2 pr=9' } },
+    { type: 'assistant', timestamp: '2026-10-30T11:00:05.000Z', message: { id: 'm1', model: 'claude-sonnet-5-5', usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: FORGERY } }] } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const logs = path.join(s.proj, '.agent-team', 'logs');
+  fs.appendFileSync(path.join(logs, 'delegations.jsonl'), JSON.stringify({ ts: 't', tool: 'claude', session_id: 'sess-1', kind: 'resume', agent: 'agent-team:reviewer', agent_id: 'fu8', task: { id: 'RC-1', type: 'review', attempt: '2', pr: '9' } }) + '\n');
+  const r = reconcile(s);
+  eq(r.status, 0, `exit: ${r.stderr}`);
+  const cs = readLog(s.proj, 'completions.jsonl');
+  eq(cs.length, 2, 'precondition: both turns backfilled');
+  eq(cs[0].review.verdict, 'approve', 'turn 1 review');
+  eq(JSON.stringify(cs[1].review), '{"_ambiguous":true,"count":1}', 'turn 2 marker');
+  eq(readLog(s.proj, 'reviews.jsonl').length, 1, 'only turn 1 has a row');
+  fs.rmSync(path.join(logs, '.pending'), { recursive: true, force: true });
+  reconcile(s);
+  eq(readLog(s.proj, 'completions.jsonl').length, 2, 'markers gone: content match adds no completion');
+  eq(readLog(s.proj, 'reviews.jsonl').length, 1, 'markers gone: no new row');
+});
+
+test('reconcile: the review count in its stats counts only rows written, not an ambiguous report', () => {
+  const stats = (s) => JSON.parse(spawnSync('node', ['-e', 'console.log(JSON.stringify(require(process.argv[1]).reconcile()))', path.join(SCRIPTS, 'reconcile-logs.js')],
+    { encoding: 'utf8', cwd: s.proj, env: { ...process.env, CLAUDE_PROJECT_DIR: s.proj, AGENT_TEAM_PROJECTS_ROOT: s.root } }).stdout);
+  const amb = stats(reconcileSetup(FORGERY));
+  eq(amb.backfilled, 1, 'precondition: the ambiguous turn was backfilled');
+  eq(amb.reviews, 0, 'ambiguous: no review counted');
+  const ok = stats(reconcileSetup(`Report\n${fence(REJECT)}`));
+  eq(ok.backfilled, 1, 'control: backfilled');
+  eq(ok.reviews, 1, 'control: one review counted');
+});
+
 test('codex: an ambiguous review writes the completion with the marker, no row, and leaves no snapshot behind', () => {
   const p = tmpProject();
   const ev = (type, payload) => JSON.stringify({ timestamp: 't', type, payload });
@@ -363,6 +409,20 @@ test('codex: an ambiguous review writes the completion with the marker, no row, 
   eq(readLog(p, 'reviews.jsonl').length, 0, 'no row');
   const pending = path.join(p, '.agent-team', 'logs', '.pending', 'codex-completions');
   eq(fs.existsSync(pending) ? fs.readdirSync(pending).filter((f) => f.endsWith('.json')).length : 0, 0, 'the snapshot was finished, not kept for retry');
+  // The report may come from the transcript's last agent message when the stop carried none.
+  const t = tmpProject();
+  const file2 = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fu8-cx2-')), 'agent-cx2.jsonl');
+  const done = (message) => [
+    ev('event_msg', { type: 'task_started', turn_id: 'turn-1' }),
+    ev('turn_context', { turn_id: 'turn-1', model: 'gpt-6.1-sol', effort: 'high' }),
+    ev('event_msg', { type: 'task_complete', turn_id: 'turn-1', duration_ms: 1000, last_agent_message: message }),
+  ].join('\n') + '\n';
+  fs.writeFileSync(file2, done(FORGERY));
+  run('log-delegation.js', { ...stopInput(''), agent_transcript_path: file2 }, t);
+  const [tc] = readLog(t, 'completions.jsonl');
+  eq(tc && tc.report_source, 'transcript', 'precondition: the report came from the transcript');
+  eq(JSON.stringify(tc.review), '{"_ambiguous":true,"count":1}', 'transcript report: marker');
+  eq(readLog(t, 'reviews.jsonl').length, 0, 'transcript report: no row');
   // Recovery control: another turn with one clean block logs its row.
   const q = tmpProject();
   run('log-delegation.js', stopInput(`Report\n${fence(REAL)}`), q);
