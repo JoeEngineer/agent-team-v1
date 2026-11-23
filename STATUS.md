@@ -36,7 +36,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | merged | #148 |
 | FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | merged | #146 |
 | FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #149 |
-| FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | in review | #154 |
+| FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #154 |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 2 (fold-in) | merged | #153 |
 | FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (subagent; session unavailable) | medium (sonnet) / high | 2 (fold-in) | merged | #155 |
 | FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #152 |
@@ -92,8 +92,16 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - The R-18 comment in `tests/guidance-rules.js` still reads for one failure.
   - `merging.md` "First CI run" step 1 says "require the check names". It should say "add them as required status checks", the forge setting's name.
   - The core set is at 33,797 of 33,800 bytes: the next guidance addition needs a cut or a new budget decision.
+- **Follow-ups from FU-6 (PR #154), minor:**
+  - `lib.projectDir` runs `git rev-parse` with the caller's environment. `GIT_DIR`, `GIT_WORK_TREE` or `CLAUDE_PROJECT_DIR` can move where `grant` reads `milestones.jsonl`. The fix: apply the same `GIT_*` filter there, and note it in 0026.
+  - The "outside a repo" test no longer exercises the no-repository path on a machine whose temp folder sits inside a repo.
+  - The argv-array test matches source text.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Accept or reject: scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
+- **Accept or reject: grant check residuals (FU-6, decision 0026).**
+  - An agent that guesses the next milestone slug can append a wide `milestone` line through `log-event.js milestone` before intake. If it later edits the STATUS block to match, `status.js grant` exits 0 with that wide grant. The proposed fix: `log-event.js milestone` refuses a second line for a slug.
+  - A hand-made first log line torn before the slug ends is skipped.
+  - An agent that can rewrite `milestones.jsonl` or the shared `.git` object store is not stopped.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
