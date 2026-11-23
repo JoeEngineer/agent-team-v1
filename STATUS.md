@@ -35,7 +35,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-2 | Scan-state table design, decision 0024 (#132) | architect | xlarge (fable) / medium, granted | 1 | merged | #145 |
 | FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested | #148 |
 | FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | merged | #146 |
-| FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | in review | #149 |
+| FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #149 |
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | planned | |
 | FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (session) | medium (sonnet) / high | 1 | planned | |
@@ -72,6 +72,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
 - **Required checks on `milestone/*`.** Add the four `test (...)` checks as required status checks with no bypass list, and turn on "Allow auto-merge" (asked 2026-11-22).
 - **Follow-ups not in this milestone:** the scanner workflow template has not been through a YAML parser or a live Actions run; the security reviewer's GitLab command has not run against a live GitLab; its OWASP list is the 2021 edition; the SR-2 retry tests are timing-based.
 - **Follow-ups from FU-2 (decision 0024), minor:** `noscan` and `unconfirmed` differ only in the matrix and evaluator (one rule in the section text); with several GitLab pipelines per SHA, whether a job absent from one counts as missing is unstated (safe reading: yes, `unknown`); one over-long line in "Cost of the read".
+- **Follow-ups from FU-5 (PR #149), minor:** a superseding completion line keeps the old `duration_ms`; `markStale` skips superseding copies too (archive-first on a 0.3.0-era mislabelled resume could keep a stale copy); `supersedeShortTurns` covers agents of earlier milestones in the live log; no test for a `readFileSync` failure in `readSessionUsage`; reconcile and archive word the `completions:` line differently. Carried into later cards: `session_usage` is cumulative per session and model (readers take the last line per session+model) → FU-13; README and Coach text for `sessions.jsonl` → FU-13, FU-14.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
