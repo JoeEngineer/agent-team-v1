@@ -14,6 +14,13 @@ effort: medium
 
 Builds on decision 0022 (the per-milestone xlarge grant).
 
+> **Amended 2026-11-23 by [decision 0029](0029-two-security-grant-words-and-grant-check-fixes.md).**
+> The user rejected the residuals below (decision 0028). 0029 fixes three of them
+> and states the fourth as out of the plugin's reach. It also splits the
+> `security reviews` role in two, changes item 4 (any line that is not a JSON
+> object, before the slug's first line, now exits 19) and adds exit 22. The text
+> below is kept as decided; where 0029 differs, 0029 holds.
+
 ## Context
 
 The grant is written in two places at intake: the `## xlarge grant` block of
@@ -60,9 +67,12 @@ it passes only when the head differs from the reviewed commit in nothing, or in
    A note must be in parentheses: `architect - a note`, `architect — a note`
    (em dash) and `architect; a note` read the note as a role word, exit 17 and
    grant nothing (fail closed). One table in `scripts/status.js` maps the
-   question's words (security reviews, architect, coach (run for this
-   milestone) or the older coach at close, hard-fix escalation) to the log's names (`security-review`, `architect`, `coach`,
-   `hard-fix`).
+   question's words to the log's names:
+   - security reviews: `security-review` (two words and two names since
+     decision 0029);
+   - architect: `architect`;
+   - coach (run for this milestone), or the older coach at close: `coach`;
+   - hard-fix escalation: `hard-fix`.
 7. In a linked git worktree the log is read from the main checkout, through the
    same helper the logger uses (`logRoot` in `scripts/lib.js`).
 8. **`--check --since` reads the commits, not the caller's view of them.** git
@@ -85,13 +95,23 @@ it passes only when the head differs from the reviewed commit in nothing, or in
 | 18 | `grant`: the block grants something and the log has no line for the slug |
 | 19 | `grant`: the log is unreadable, or the first line for the slug is torn, has bad fields, or repeats the `milestone` key |
 | 20 | `grant`: `## Current milestone` names a slug other than `--milestone` |
+| 21 | `set`: the temp file path already exists; nothing was written or followed |
+| 22 | `grant`: `CLAUDE_PROJECT_DIR` names a different project from the cwd's (decision 0029) |
 
 ## Consequences
 
 - The Director runs `grant --milestone <slug>` with its own slug before spending
   xlarge, and follows its exit code.
-- **Residuals.** The check raises the cost of a forged grant; it does not sign
-  or lock anything. Signing is out of scope. These are not stopped:
+- **Residuals, as accepted on 2026-11-23 and rejected by the user the same day
+  (decision 0028).** What became of each is in decision 0029: the torn first
+  line and the pre-appended slug line are fixed, and so is the environment
+  moving the log (found in the close review). **Rewriting `milestones.jsonl`
+  or the shared `.git` is not fixed and cannot be from inside the plugin:**
+  an agent that can write those files can still forge a grant, and nothing
+  here detects it.
+
+  The check raises the cost of a forged grant; it does not sign
+  or lock anything. Signing is out of scope. These were not stopped:
   - **Rewriting `milestones.jsonl`.** An agent that can write the ignored log
     file can change or reorder its first line for the slug.
   - **A hand-crafted first line torn before the slug ends**, such as

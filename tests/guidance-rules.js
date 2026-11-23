@@ -189,6 +189,7 @@ module.exports = [
   ['R-36', ROUTING, /coach \(run for this milestone\) \| large \/ high \| xlarge \/ medium/, 'Grant row: the Coach run for this milestone is large/high by default, xlarge/medium when granted'],
   ['R-37', ROUTING, /after a second failure at large\/high \| ask the user \| xlarge/, 'Grant row: after a second failure at large/high the default is to ask the user; xlarge/high when granted'],
   ['R-38', REVIEWER, /\*\*Security checklist\.\*\*/, 'Four-line security checklist before the CI wait: input validated at use, no secrets, CI pinned and least-privilege, dependencies needed and pinned; a security-sensitive diff the card did not flag is said in summary'],
+  ['R-47', ROUTING, /adds `security-review-task` for the flagged task PR row/, 'grant prints the two security rows as separate roles: the close word covers the close row only, the all word adds the flagged task PR row'],
   ['R-20', ROUTING, /in this milestone only/, 'The grant covers the granted roles in this milestone only (any other xlarge use: D-03)'],
   ['R-21', ROUTING, /grant --milestone <slug>` prints/, 'The grant is what status.js grant --milestone <slug> prints (a missing block, or a block the intake log does not back, is handled by the script)'],
   ['R-43', ROUTING, /from your own milestone \(its branch, `milestone\/<slug>`\), not from `STATUS\.md`/, 'The grant check takes the slug from the Director\'s own milestone branch, not from STATUS.md'],
@@ -261,7 +262,7 @@ module.exports = [
   ['X-22', CODEX, /`security-reviewer-<tier>`/, 'The Codex security reviewer is spawned as security-reviewer-<tier>'],
 
   // ---- Milestone and Coach skills (intake questions) ------------------------
-  ['MS-01', MILESTONE, /Use xlarge in this milestone for: security reviews/, 'The xlarge grant question, asked at intake'],
+  ['MS-01', MILESTONE, /for: close security review, all security reviews \(close and flagged task PRs\)/, 'The xlarge grant question, asked at intake, offers the close security review alone or all security reviews'],
   ['MS-02', MILESTONE, /before any delegation \(the breakdown included\)/, 'The intake questions come before any delegation'],
   ['MS-03', MILESTONE, /xlarge model for the current tool that is not disabled/, 'The grant question is asked when the current tool has an xlarge model that is not disabled'],
   ['MS-04', MILESTONE, /Choosing nothing is a valid answer/, 'Granting nothing is valid; every role then runs its default row'],
@@ -271,7 +272,9 @@ module.exports = [
   ['MS-08', MILESTONE, /under `## xlarge grant`/, 'The answers go into STATUS.md under ## xlarge grant'],
   ['MS-09', MILESTONE, /log-event\.js" milestone/, 'The answers are logged with log-event.js milestone'],
   ['MS-10', MILESTONE, /can start after the intake questions/, 'Research and breakdown delegations start after the intake questions'],
-  ['MS-11', MILESTONE, /`security-review` \("security reviews", which covers both security rows/, 'The log name security-review is the option "security reviews" and covers both security rows of the grant table'],
+  ['MS-11', MILESTONE, /`security-review-close` \("close security review": the milestone-close row/, 'The option "close security review" is logged as security-review-close and covers only the close row of the grant table'],
+  ['MS-14', MILESTONE, /and `security-review-task` together \("all security reviews": the close row and/, 'The option "all security reviews" is logged as both security-review-close and security-review-task and covers both security rows'],
+  ['MS-15', MILESTONE, /If yours is refused, a line for this slug was already there: write no grant/, 'A refused intake milestone line means the slug already had a line: no grant is written, and the user is shown that line and asked'],
   ['MS-12', MILESTONE, /`coach` \("coach \(run for this milestone\)"\) and `hard-fix` \("hard-fix escalation"\)/, 'The grant\'s log names (security-review, architect, coach, hard-fix) stand for the question\'s four options; the log name coach is unchanged by the label'],
   ['MS-13', MILESTONE, /architect, coach \(run for this milestone\), hard-fix escalation\?/, 'The intake question labels the coach option "coach (run for this milestone)", as the grant table and the STATUS template do'],
   ['CS-01', COACH_SKILL, /Run the Coach at xlarge\/medium this time\?/, 'A standalone Coach run asks about xlarge/medium when it is mapped and not disabled'],
