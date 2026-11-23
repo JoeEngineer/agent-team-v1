@@ -52,8 +52,10 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | 167 |
 | FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
 | FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
-| FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted | 1 | in progress: phase A pushed (draft #175); phase B waits FU-18 | 175 |
-| FU-23 | Close fix: `review-json` fence residuals; security-sensitive (#174) | architect | large (opus) / high | 1 | planned: after FU-22 merges (shares `scripts/lib.js`) | |
+| FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted; attempt 3 xlarge (fable) / high | 4 (fold-in) | merged | 175 |
+| FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | in progress | |
+| FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | planned: after FU-23 and FU-24 | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
@@ -111,7 +113,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - the unknown-merge cause became an ellipsis.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Accepted by the user 2026-11-23 (decision 0028): scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
-- **Rejected by the user 2026-11-23 (decision 0028), fixed in FU-22: grant check residuals (FU-6, decision 0026).**
+- **Rejected by the user 2026-11-23 (decision 0028), fixed in FU-22 (merged, PR #175; decision 0029): grant check residuals (FU-6, decision 0026).** Its one security minor (re-log after a refusal that wrote nothing) is in FU-24. Pre-existing, not in this milestone: `grant` exit 17 copies `STATUS.md` text into its message.
   - An agent that guesses the next milestone slug can append a wide `milestone` line through `log-event.js milestone` before intake. If it later edits the STATUS block to match, `status.js grant` exits 0 with that wide grant. The proposed fix: `log-event.js milestone` refuses a second line for a slug.
   - A hand-made first log line torn before the slug ends is skipped.
   - An agent that can rewrite `milestones.jsonl` or the shared `.git` object store is not stopped.
