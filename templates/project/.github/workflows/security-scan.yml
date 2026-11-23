@@ -44,10 +44,14 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Only a Dockerfile at the repo root is detected.
       - name: Look for a Dockerfile
         id: dockerfile
         run: |
           if [ -f Dockerfile ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Note that the image scan is skipped
+        if: steps.dockerfile.outputs.found != 'true'
+        run: echo "::notice::No Dockerfile at the repo root, image scan skipped"
       - name: Build image
         if: steps.dockerfile.outputs.found == 'true'
         run: docker build -t scan-target:ci .

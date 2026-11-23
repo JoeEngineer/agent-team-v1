@@ -46,6 +46,22 @@ test('checkout does not persist credentials; Trivy is pinned; no commands/ strin
   assert(!/upload|sarif/i.test(wf), 'upload or SARIF found');
 });
 
+test('job names are exactly trivy-fs and trivy-image', () => {
+  const names = [...wf.matchAll(/^    name: (.+)$/gm)].map((m) => m[1].trim());
+  assert(JSON.stringify(names) === JSON.stringify(['trivy-fs', 'trivy-image']), 'job names: ' + names.join(','));
+});
+
+test('image build and Trivy image steps carry the Dockerfile guard; skip notice has the inverse', () => {
+  const guard = "if: steps.dockerfile.outputs.found == 'true'";
+  const steps = wf.split(/^      - name: /m).slice(1);
+  const build = steps.find((s) => s.startsWith('Build image'));
+  const scan = steps.find((s) => s.startsWith('Trivy image scan'));
+  assert(build && build.includes(guard), 'build step lacks guard');
+  assert(scan && scan.includes(guard), 'image scan step lacks guard');
+  const note = steps.find((s) => s.includes('::notice::No Dockerfile'));
+  assert(note && note.includes("found != 'true'"), 'skip notice missing or unguarded');
+});
+
 test('STATUS template has the xlarge grant section and second-review line', () => {
   const s = read('templates/project/STATUS.md');
   assert(/^## xlarge grant$/m.test(s), 'heading missing');
