@@ -1,7 +1,7 @@
 # Coach report: milestone `security-review` (2026-11-23)
 
 Task COACH-20261123 (attempt 1). Run at xlarge (Fable) / high because the user asked for it; the table row is coach / large / high.
-Logs: `~/.agent-team/archive/agent-team-v1/2026-11-23-security-review/` (identical to the live `.agent-team/logs/`; counted once). Director session `9f9e2c2d-21fd-4008-aad2-686dbc89470b`. The milestone implemented decision 0022, merged into `main` as PR #125 and was released as v1.1.0.
+Logs: `~/.agent-team/archive/agent-team-v1/2026-11-23-security-review/` (identical to the live `.agent-team/logs/`; counted once). One Director session. The milestone implemented decision 0022, merged into `main` as PR #125 and was released as v1.1.0.
 Routing tables: "the 1.0.2 table" is the one that governed the run (the installed plugin). "The 1.1.0 table" is the one now on `main`. All proposals target the 1.1.0 files.
 Baselines: [2026-11-01-live-data-framework.md](2026-11-01-live-data-framework.md) ("C"), [2026-11-01-hardening-claude-vs-codex.md](2026-11-01-hardening-claude-vs-codex.md) and [2026-11-03-consolidated-plan.md](2026-11-03-consolidated-plan.md) for pooled numbers and the watch list.
 
