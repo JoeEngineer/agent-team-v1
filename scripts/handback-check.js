@@ -27,7 +27,10 @@ function check(input) {
   // Only a reviewer agent gets the ambiguity reading; the hook sees no card here,
   // so an agent of another type that quotes a review-json fence is not asked about it.
   const review = lib.reviewFor(message, agentType, null);
-  if (read(lib.lastFencedJson(message, 'result-json')) || read(review)) return null;
+  // A reviewer's hand-back is its review: a result-json block does not stand in for
+  // a review-json one that is missing or ambiguous (the logger would read no review).
+  const reviewer = lib.REVIEWER_AGENT_TYPES.includes(agentType);
+  if (reviewer ? read(review) : (read(lib.lastFencedJson(message, 'result-json')) || read(review))) return null;
   const agentId = input.agent_id || 'unknown';
   let claimed = false;
   for (let n = 1; n <= MAX_NUDGES && !claimed; n++) claimed = claimOnce(input, `handback-${agentId}-${n}`);

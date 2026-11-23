@@ -47,8 +47,8 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
 | FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | merged | 171 |
-| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | in review: attempt 2 pushed fdc005a; incremental review | 172 |
-| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | in review: attempt 2 pushed 397bbc9; incremental review | 170 |
+| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | merged | 172 |
+| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | changes requested: security review: lib.appendJsonl and .pending pruning follow links | 170 |
 | FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | 167 |
 | FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
 | FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |

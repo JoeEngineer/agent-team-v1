@@ -328,6 +328,8 @@ function readTranscript(file, turnId) {
   return out;
 }
 
+// 2: the review was read by the strict fence parser. 1 (1.1.0) used the lenient one.
+const PENDING_VERSION = 2;
 const pendingDir = (input) => path.join(lib.logDir(input), '.pending', 'codex-completions');
 
 function completionRecord(input, t) {
@@ -402,12 +404,19 @@ function finishPending(input, file, { dryRun = false } = {}) {
   const finish = () => {
     let pending;
     try { pending = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { state: 'waiting' }; }
-    if (pending.version !== 1 || !pending.record || !pending.record.event_id) return { state: 'waiting' };
+    if (![1, PENDING_VERSION].includes(pending.version) || !pending.record || !pending.record.event_id) return { state: 'waiting' };
     const original = pending.record;
     const existing = records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).find((r) => r.event_id === original.event_id);
     const t = readTranscript(pending.transcript_path, original.turn_id);
     if (!existing && pending.wait_for_complete && (!t.turnFound || (!t.complete && !t.interrupted))) return { state: 'waiting' };
     const record = existing || fillFromTranscript(original, t);
+    // A v1 snapshot's verdict came from the old lenient parser. Re-read it with the
+    // strict one from the transcript's last message; with no text to read, the
+    // stored verdict is dropped.
+    if (!existing && pending.version === 1) {
+      const text = t.lastMessage;
+      record.review = text ? lib.reviewFor(text, record.agent, record.task) : null;
+    }
     if (dryRun) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
     if (!existing) lib.appendJsonl(input, 'completions.jsonl', record);
     const sess = { ...input, session_id: record.session_id };
@@ -439,7 +448,7 @@ function onSubagentStop(input) {
     if (fs.existsSync(file) || records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).some((r) => r.event_id === record.event_id)) return;
     const temp = `${file}.${process.pid}.tmp`;
     try {
-      fs.writeFileSync(temp, JSON.stringify({ version: 1, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
+      fs.writeFileSync(temp, JSON.stringify({ version: PENDING_VERSION, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
       fs.renameSync(temp, file);
     } finally {
       try { fs.unlinkSync(temp); } catch { /* rename consumed it */ }
