@@ -13,6 +13,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const lib = require('./lib');
 const { readJsonl, unresolvedQueued } = require('./records');
 const { spawnSync } = require('child_process');
 
@@ -69,14 +70,18 @@ function unresolvedCount(logDir) {
 }
 
 // The Director's transcript: <projects root>/<project folder>/<session id>.jsonl.
-// The session id comes from a log line, so only a plain id is looked up.
-function findSessionTranscript(root, sessionId) {
-  if (!/^[\w-]+$/.test(sessionId)) return null;
+// The session id comes from a log line, so only a plain string id is looked up.
+// The search covers every project folder, not only this project's: a worktree
+// run is stored under its own folder, whose name this script cannot derive.
+// So a transcript is used only when `belongs` accepts it: its recorded cwd is
+// this project or one of its worktrees (reconcile-logs.belongsTo).
+function findSessionTranscript(root, sessionId, belongs) {
+  if (typeof sessionId !== 'string' || !/^[\w-]+$/.test(sessionId)) return null;
   let dirs;
   try { dirs = fs.readdirSync(root); } catch { return null; }
   for (const d of dirs) {
     const p = path.join(root, d, `${sessionId}.jsonl`);
-    try { if (fs.statSync(p).isFile()) return p; } catch { /* not in this project folder */ }
+    try { if (fs.statSync(p).isFile() && belongs(p)) return p; } catch { /* not in this project folder */ }
   }
   return null;
 }
@@ -129,7 +134,8 @@ const sameUsage = (a, b) => a && a.calls === b.calls && ['input', 'output', 'cac
 // Codex sessions are counted and skipped. A transcript that is missing or
 // unreadable is counted and never stops the others. Nothing is written with
 // dryRun. Each transcript is read once.
-function recordSessionUsage({ logDir, milestone, root, dryRun, version }) {
+function recordSessionUsage({ logDir, milestone, root, dryRun, version, belongs }) {
+  if (!belongs) { const rc = require('./reconcile-logs'); belongs = rc.belongsTo(rc.projectOfLogs(logDir)); }
   const out = { sessions: 0, notFound: 0, codex: 0, written: 0, bad: 0, errors: [] };
   const claude = new Set();
   const codex = new Set();
@@ -144,7 +150,7 @@ function recordSessionUsage({ logDir, milestone, root, dryRun, version }) {
   for (const r of readJsonl(file)) if (r.kind === 'session_usage') last.set(`${r.session_id}|${r.model}`, r);
   for (const sessionId of [...claude].sort()) {
     out.sessions++;
-    const tPath = findSessionTranscript(root, sessionId);
+    const tPath = findSessionTranscript(root, sessionId, belongs);
     const usage = tPath && readSessionUsage(tPath);
     if (!usage) { out.notFound++; continue; }
     out.bad += usage.bad;
@@ -156,7 +162,7 @@ function recordSessionUsage({ logDir, milestone, root, dryRun, version }) {
         ts: new Date().toISOString(), guidance_version: version, kind: 'session_usage', tool: 'claude',
         session_id: sessionId, milestone, model, calls: u.calls, tokens_by_class: { ...u.classes }, first: u.first, last: u.last,
       };
-      try { fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8'); } catch (err) {
+      try { lib.safeAppend(file, JSON.stringify(record) + '\n'); } catch (err) {
         out.written--;
         out.errors.push(`could not append to sessions.jsonl: ${err && err.message || err}`);
       }
@@ -173,7 +179,7 @@ function captureUsage({ logDir, milestone, dryRun }) {
   let reconcile, version = 'unknown', root;
   try {
     reconcile = require('./reconcile-logs');
-    version = require('./lib').guidanceVersion();
+    version = lib.guidanceVersion();
     root = reconcile.projectsRoot();
   } catch (err) {
     console.log(`${pre}usage not captured: ${err && err.message || err}`);
@@ -217,10 +223,15 @@ function main() {
 
   // Run from a git worktree, archive the main checkout's logs: that is where
   // every session and agent of the project writes (lib.logRoot).
-  const logDir = path.join(require('./lib').mainCheckout(projectDir) || projectDir, '.agent-team', 'logs');
-  if (!fs.existsSync(logDir) || !fs.statSync(logDir).isDirectory()) fail('no .agent-team/logs folder found');
-  const listLogs = () => fs.readdirSync(logDir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.endsWith('.jsonl')).map((e) => e.name).sort();
+  // A linked .agent-team or logs folder fails the run: --clear would delete
+  // files in the folder it points at (lib.safeListDir refuses it).
+  const logDir = path.join(lib.mainCheckout(projectDir) || projectDir, '.agent-team', 'logs');
+  const listLogs = () => {
+    let entries;
+    try { entries = lib.safeListDir(logDir, { withFileTypes: true }); } catch (err) { fail(err.message); }
+    if (!entries) fail('no .agent-team/logs folder found');
+    return entries.filter((e) => e.isFile() && e.name.endsWith('.jsonl')).map((e) => e.name).sort();
+  };
   if (!listLogs().length) fail('no .jsonl files in .agent-team/logs');
 
   if (fs.existsSync(dest) && !o.force) fail(`destination already exists (use --force to overwrite): ${dest}`);
@@ -234,14 +245,32 @@ function main() {
   const unresolved = unresolvedCount(logDir);
   const unresolvedNote = unresolved ? `${unresolved} auto-merge-queued merges unresolved; run reconcile-logs.js --merges first` : '';
 
+  // A linked .pending is not listed, so nothing in the folder it points at is
+  // deleted; the run goes on and says so.
   const pendingDir = path.join(logDir, '.pending');
   const now = Date.now();
-  const pending = fs.existsSync(pendingDir)
-    ? fs.readdirSync(pendingDir, { withFileTypes: true }).filter((e) => e.isFile() && !e.name.startsWith('.')).map((e) => { // skip dotfiles (.gitkeep)
-        const p = path.join(pendingDir, e.name);
-        return { p, stale: now - fs.statSync(p).mtimeMs > STALE_MS };
-      })
-    : [];
+  let pendingEntries = null;
+  try { pendingEntries = lib.safeListDir(pendingDir, { withFileTypes: true }); } catch (err) {
+    console.log(`.pending: not pruned (${err.message})`);
+  }
+  const entry = (dir) => (e) => {
+    const p = path.join(dir, e.name);
+    return { p, stale: now - fs.lstatSync(p).mtimeMs > STALE_MS };
+  };
+  const pending = (pendingEntries || []).filter((e) => e.isFile() && !e.name.startsWith('.')).map(entry(pendingDir)); // skip dotfiles (.gitkeep)
+  // Temp files a crashed write left (lib.TEMP_FILE): in .pending/codex-completions
+  // and in the logs folder. Same age rule; snapshots and logs themselves stay.
+  const temps = (dir) => {
+    let list = null;
+    try { list = lib.safeListDir(dir, { withFileTypes: true }); } catch (err) { console.log(`.pending: not pruned (${err.message})`); }
+    return (list || []).filter((e) => e.isFile() && lib.TEMP_FILE.test(e.name)).map(entry(dir));
+  };
+  if (pendingEntries) {
+    for (const sub of ['codex-completions']) {
+      pending.push(...temps(path.join(pendingDir, sub)));
+    }
+  }
+  pending.push(...temps(logDir));
   const stale = pending.filter((x) => x.stale);
 
   if (o.dryRun) {
@@ -330,7 +359,7 @@ function main() {
     // Test hooks, set only by tests/archive-logs.test.js: AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY=<file>
     // appends to that live log after verification; AGENT_TEAM_ARCHIVE_TEST_UNLINK_FAIL=1 makes the delete throw.
     const appendTo = process.env.AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY;
-    if (appendTo) fs.appendFileSync(path.join(logDir, appendTo), 'late write\n');
+    if (appendTo) lib.safeAppend(path.join(logDir, appendTo), 'late write\n');
     for (const f of files) {
       const src = path.join(logDir, f);
       let unchanged = false;

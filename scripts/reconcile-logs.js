@@ -5,9 +5,12 @@
 // Claude Code subagent transcripts live at
 //   <projects root>/<project folder>/<session id>/subagents/agent-<agent id>.jsonl
 // The project folder name depends on where the session ran (worktrees differ
-// from the project dir), so every project folder is searched for the session.
+// from the project dir), so every project folder is searched for the session,
+// and a transcript is used only when the `cwd` it records is this project or
+// one of its worktrees (belongsTo): another project's data is never imported.
 // The projects root is ~/.claude/projects, or AGENT_TEAM_PROJECTS_ROOT (tests).
-// Read-only on the transcripts: only .agent-team/logs of the project is written.
+// Read-only on the transcripts: only .agent-team/logs of the project is written,
+// and only through lib's link-safe helpers (lib.safeAppend and friends).
 // It may rewrite completions.jsonl/reviews.jsonl to add `stale_of` to lines whose
 // content belongs to another attempt; every other line is kept byte for byte.
 // --merges runs only the auto-merge step: for each `auto-merge-queued` line in
@@ -25,6 +28,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('child_process');
 const lib = require('./lib');
 const { claimOnce, shortHash, logReview, isAmbiguous, appendOnce, resolveQueuedMerges } = require('./records');
 const { readMeta, completionRecord, completionTask } = require('./log-delegation');
@@ -49,7 +53,103 @@ function projectsRoot() {
   return process.env.AGENT_TEAM_PROJECTS_ROOT || path.join(os.homedir(), '.claude', 'projects');
 }
 
-function findTranscript(root, sessionId, agentId) {
+const PLAIN_ID = /^[\w-]+$/;
+const plainId = (id) => typeof id === 'string' && PLAIN_ID.test(id);
+
+// The real spelling of a path that may no longer exist: the real path (long
+// names, links resolved) of its nearest existing ancestor, with the missing
+// segments appended. A removed worktree recorded as C:\Users\RUNNER~1\...\x
+// or through a linked alias of the project folder then compares equal to the
+// project's real path. Null when no ancestor resolves.
+function realSpelling(p) {
+  let cur = path.resolve(p);
+  const missing = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...missing); } catch { /* not there: go up */ }
+    const up = path.dirname(cur);
+    if (up === cur) return null;
+    missing.unshift(path.basename(cur));
+    cur = up;
+  }
+}
+
+// A folder in the forms it may be written in: resolved, and its real spelling
+// (realSpelling). Lower-cased on Windows, where case does not count.
+function pathForms(p) {
+  const forms = new Set([path.resolve(p)]);
+  const real = realSpelling(p);
+  if (real) forms.add(real);
+  return [...forms].map((f) => (process.platform === 'win32' ? f.toLowerCase() : f));
+}
+const within = (child, parent) => {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
+// The folders this project's sessions run in: the project folder (the main
+// checkout) and every git worktree of it, each with its subfolders. A Claude
+// Code worktree lives under the project folder, so it counts even after it
+// is removed; one elsewhere counts while git still lists it.
+function projectFolders(projectRoot) {
+  const roots = [projectRoot];
+  try {
+    const out = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: projectRoot, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    });
+    for (const m of out.matchAll(/^worktree (.+)$/gm)) roots.push(m[1].trim());
+  } catch { /* not a git folder, or git missing */ }
+  return roots.flatMap(pathForms);
+}
+
+// The first `cwd` a Claude Code transcript records, or null when no line has
+// one. Read in chunks, not with readFileSync: transcriptCache counts the one
+// full read of each transcript.
+function transcriptCwd(file) {
+  let fd;
+  try { fd = fs.openSync(file, 'r'); } catch { return null; }
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    let rest = '';
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      const text = rest + buf.toString('utf8', 0, n);
+      const lines = text.split('\n');
+      rest = n ? lines.pop() : '';
+      for (const line of lines) {
+        if (!line.includes('"cwd"')) continue;
+        try { const e = JSON.parse(line); if (e && typeof e.cwd === 'string' && e.cwd) return e.cwd; } catch { /* torn line */ }
+      }
+      if (!n) return null;
+    }
+  } catch { return null; } finally { fs.closeSync(fd); }
+}
+
+// A predicate: does this transcript belong to the project at projectRoot? Only
+// when the cwd it records is the project folder, one of its worktrees, or a
+// subfolder of either. A transcript of another project with the same session
+// or agent id is never used, and one with no cwd is not used either.
+// What this rule drops (counted as "not found", never imported): a session
+// started in a parent folder of the project; a session recorded before the
+// project was moved or renamed; and a git worktree outside the project folder
+// that has since been removed (git no longer lists it).
+function belongsTo(projectRoot) {
+  let folders = null;
+  return (file) => {
+    const cwd = transcriptCwd(file);
+    if (!cwd) return false;
+    folders = folders || projectFolders(projectRoot);
+    return pathForms(cwd).some((c) => folders.some((f) => within(c, f)));
+  };
+}
+
+// The project folder of a logs folder: <project>/.agent-team/logs.
+const projectOfLogs = (logDir) => path.dirname(path.dirname(path.resolve(logDir)));
+
+// `belongs` (see belongsTo) defaults to this project.
+function findTranscript(root, sessionId, agentId, belongs = belongsTo(lib.logRoot({}))) {
+  // Both ids come from log lines: only plain string ids are joined into a path.
+  if (!plainId(agentId)) return null;
+  if (sessionId != null && sessionId !== '' && !plainId(sessionId)) return null;
   let dirs;
   try { dirs = fs.readdirSync(root); } catch { return null; }
   const file = `agent-${agentId}.jsonl`;
@@ -59,7 +159,9 @@ function findTranscript(root, sessionId, agentId) {
     else { try { sessions = fs.readdirSync(path.join(root, d)); } catch { continue; } }
     for (const s of sessions) {
       const p = path.join(root, d, s, 'subagents', file);
-      if (fs.existsSync(p)) return p;
+      const rel = path.relative(path.resolve(root), path.resolve(p));
+      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
+      if (fs.existsSync(p) && belongs(p)) return p;
     }
   }
   return null;
@@ -199,9 +301,14 @@ function readLines(file) {
 // appended since the first read are carried over (a few rounds, then it gives
 // up). A hook append landing between that last check and the rename can still
 // be lost; the window is a few microseconds. On any failure the temp file is
-// removed and the error is thrown, leaving the log as it was.
+// removed and the error is thrown, leaving the log as it was. A log that is a
+// link or hard link is refused (lib.checkLogFile); the temp file has a random
+// name and is created exclusively (lib.safeOpenNew), so a link planted at a
+// guessable name is never written through.
 function rewriteJsonl(file, read) {
-  const tmp = `${file}.${process.pid}.tmp`;
+  lib.checkLogFile(file);
+  const tmp = lib.tempName(file);
+  let fd, created = false;
   try {
     const parts = [];
     for (const l of read.lines) {
@@ -209,7 +316,9 @@ function rewriteJsonl(file, read) {
       if (l.changed) raw = Buffer.from(JSON.stringify(l.row) + (raw[raw.length - 1] === 0x0d ? '\r' : ''), 'utf8');
       parts.push(raw, Buffer.from(l.hadNl ? '\n' : ''));
     }
-    fs.writeFileSync(tmp, Buffer.concat(parts));
+    fd = lib.safeOpenNew(tmp);
+    created = true;
+    fs.writeFileSync(fd, Buffer.concat(parts));
     let handled = read.buf.length;
     for (let round = 0; ; round++) {
       if (hooks.beforeRename) hooks.beforeRename(file, round);
@@ -219,13 +328,16 @@ function rewriteJsonl(file, read) {
       }
       if (now.length === handled) break;
       if (round >= 5) throw new Error(`${path.basename(file)} kept growing while it was being rewritten`);
-      fs.appendFileSync(tmp, now.subarray(handled));
+      fs.writeSync(fd, now.subarray(handled));
       read.buf = now;
       handled = now.length;
     }
+    fs.closeSync(fd);
+    fd = undefined;
     hooks.rename(tmp, file);
   } catch (err) {
-    try { fs.unlinkSync(tmp); } catch { /* not created, or already gone */ }
+    if (fd !== undefined) { try { fs.closeSync(fd); } catch { /* already closed */ } }
+    if (created) { try { fs.unlinkSync(tmp); } catch { /* already gone */ } }
     throw err;
   }
 }
@@ -276,7 +388,7 @@ function backfillCodexTurns(input, { dryRun = false } = {}) {
   const pending = new Set();
   try {
     const dir = codexPendingDir(input);
-    for (const f of fs.readdirSync(dir)) {
+    for (const f of lib.safeListDir(dir) || []) {
       try { const p = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); if (p.record && p.record.turn_id) pending.add(`${p.record.agent_id}|${p.record.turn_id}`); } catch { /* torn snapshot */ }
     }
   } catch { /* no snapshots */ }
@@ -355,7 +467,8 @@ function backfillCodexTurns(input, { dryRun = false } = {}) {
 // Returns { checked, superseded, notFound, codex, errors }. Writes only to
 // <logDir>/completions.jsonl, and nothing with dryRun. `scans` is a
 // transcriptCache shared with the caller, so no transcript is read twice.
-function supersedeShortTurns({ logDir, root, dryRun = false, scans = transcriptCache() }) {
+// Only transcripts of the project that owns logDir are used (belongsTo).
+function supersedeShortTurns({ logDir, root, dryRun = false, scans = transcriptCache(), belongs = belongsTo(projectOfLogs(logDir)) }) {
   const out = { checked: 0, superseded: 0, notFound: 0, codex: 0, errors: [] };
   const agents = new Map();
   const entry = (id) => {
@@ -384,7 +497,7 @@ function supersedeShortTurns({ logDir, root, dryRun = false, scans = transcriptC
     if (a.tool !== 'claude') { out.codex++; continue; }
     if (!a.last.size) continue; // no completion line to supersede (a missing turn is the backfill's job)
     out.checked++;
-    const tPath = findTranscript(root, a.session, a.id);
+    const tPath = findTranscript(root, a.session, a.id, belongs);
     const scan = tPath && scans.get(tPath);
     if (!scan) { out.notFound++; continue; }
     for (const [turn, line] of [...a.last].sort((x, y) => x[0] - y[0])) {
@@ -393,7 +506,7 @@ function supersedeShortTurns({ logDir, root, dryRun = false, scans = transcriptC
       out.superseded++;
       if (dryRun) continue;
       const record = { ...line, ts: new Date().toISOString(), tokens_with_cache: t.tokens, tokens_by_class: { ...t.classes }, reconciled_by: version };
-      try { fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8'); } catch (err) {
+      try { lib.safeAppend(file, JSON.stringify(record) + '\n'); } catch (err) {
         out.superseded--;
         out.errors.push(`could not append to completions.jsonl: ${err && err.message || err}`);
       }
@@ -415,6 +528,8 @@ function reconcile({ dryRun = false } = {}) {
   const delegations = readJsonl(path.join(logDir, 'delegations.jsonl'));
   const completions = readJsonl(path.join(logDir, 'completions.jsonl'));
   if (!fs.existsSync(root)) return { ...stats, noRoot: root };
+  // Only transcripts recorded in this project (or its worktrees) are read.
+  const belongs = belongsTo(projectOfLogs(logDir));
 
   // One entry per agent id, with whatever the logs know about it.
   const agents = new Map();
@@ -446,7 +561,7 @@ function reconcile({ dryRun = false } = {}) {
     const resumed = a.dels.some((d) => isResume(d));
     if (done && !resumed) { stats.checked++; stats.present++; continue; }
     stats.checked++;
-    const tPath = findTranscript(root, a.session, a.id);
+    const tPath = findTranscript(root, a.session, a.id, belongs);
     const scan = tPath && scans.get(tPath);
     if (!scan) { stats.notFound++; continue; }
     const meta = readMeta(tPath);
@@ -478,8 +593,18 @@ function reconcile({ dryRun = false } = {}) {
       // Keep the version of the run being backfilled, and say which version wrote the line.
       record.guidance_version = (taskDel && taskDel.guidance_version) || record.guidance_version;
       record.reconciled_by = lib.guidanceVersion();
-      lib.appendJsonl(input, 'completions.jsonl', record);
-      if (record.review && !isAmbiguous(record.review) && lib.isReviewDelegation(agentType, record.task)) { logReview(sess, record, record.review); stats.reviews++; }
+      try { lib.appendJsonl(input, 'completions.jsonl', record); } catch (err) {
+        // Refused (a linked log) or failed: release the marker so a later run retries the turn.
+        added--;
+        try { fs.unlinkSync(path.join(logDir, '.pending', key.replace(/[^\w-]/g, '_'))); } catch { /* best effort */ }
+        stats.errors.push(`could not append to completions.jsonl: ${err && err.message || err}`);
+        continue;
+      }
+      if (record.review && !isAmbiguous(record.review) && lib.isReviewDelegation(agentType, record.task)) {
+        try { logReview(sess, record, record.review); stats.reviews++; } catch (err) {
+          stats.errors.push(`could not append to reviews.jsonl: ${err && err.message || err}`);
+        }
+      }
     }
     if (a.dels.some((d) => isResume(d))) {
       for (const file of ['completions.jsonl', 'reviews.jsonl']) {
@@ -563,7 +688,7 @@ function main(argv) {
   return s.errors.length ? 1 : 0;
 }
 
-module.exports = { reconcile, supersedeShortTurns, transcriptCache, scanTranscript, findTranscript, projectsRoot, main, hooks };
+module.exports = { reconcile, supersedeShortTurns, transcriptCache, scanTranscript, findTranscript, belongsTo, projectOfLogs, readLines, rewriteJsonl, projectsRoot, main, hooks };
 
 if (require.main === module) {
   let code = 0;

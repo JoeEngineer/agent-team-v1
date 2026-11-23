@@ -22,7 +22,8 @@ function setup(agentId, turns, { sessionId = 'sess-1', writeTranscript = true } 
     const lines = [];
     turns.forEach((report, i) => {
       const ts = (s) => `2026-10-30T1${i}:00:${s}.000Z`;
-      lines.push({ type: 'user', isMeta: i > 0, timestamp: ts('00'), message: { role: 'user', content: CARD(i + 1) } });
+      // cwd: the folder Claude Code records the session in; reconcile reads only this project's transcripts (FU-18).
+      lines.push({ type: 'user', isMeta: i > 0, cwd: proj, timestamp: ts('00'), message: { role: 'user', content: CARD(i + 1) } });
       lines.push({ type: 'assistant', timestamp: ts('05'), message: { id: `m${i}`, model: 'claude-sonnet-5-5', usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: report } }] } });
     });
     fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
@@ -199,7 +200,8 @@ function setupAgents(agents) {
   let completions = '';
   let reviews = '';
   for (const a of agents) {
-    if (a.entries) fs.writeFileSync(path.join(dir, `agent-${a.id}.jsonl`), a.entries.map(lineOf).join(''));
+    // cwd: reconcile reads only transcripts recorded in this project (FU-18).
+    if (a.entries) fs.writeFileSync(path.join(dir, `agent-${a.id}.jsonl`), a.entries.map((e) => lineOf({ cwd: proj, ...e })).join(''));
     const task = a.carded === false ? {} : { id: 'RC-1', type: 'review', attempt: '1', pr: '9' };
     delegations += lineOf({ ts: 't', tool: a.tool || 'claude', session_id: 'sess-1', kind: 'subagent', agent: 'agent-team:reviewer', agent_id: a.id, model: 'sonnet', task });
     for (const c of a.comps || []) {

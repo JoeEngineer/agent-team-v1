@@ -441,30 +441,29 @@ function finishPending(input, file, { dryRun = false } = {}) {
 function onSubagentStop(input) {
   const t = readTranscript(input.agent_transcript_path, input.turn_id);
   const record = completionRecord(input, t);
-  const dir = pendingDir(input);
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = lib.safeMkdir(pendingDir(input));
   const file = path.join(dir, `${record.event_id}.json`);
   records.withRecordLock(input, `codex-stop:${path.basename(file)}`, () => {
     if (fs.existsSync(file) || records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).some((r) => r.event_id === record.event_id)) return;
-    const temp = `${file}.${process.pid}.tmp`;
-    try {
-      fs.writeFileSync(temp, JSON.stringify({ version: PENDING_VERSION, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
-      fs.renameSync(temp, file);
-    } finally {
-      try { fs.unlinkSync(temp); } catch { /* rename consumed it */ }
-    }
+    // A random temp name, created exclusively, then renamed into place.
+    lib.safeReplace(file, JSON.stringify({ version: PENDING_VERSION, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
   });
   if (fs.existsSync(file)) finishPending(input, file);
 }
 
 // No sleep/poll loop: later hooks (including wait_agent) and explicit reconcile
 // revisit pending stops. Oldest-first touching gives a bounded sweep fairness.
+// A linked .pending or codex-completions folder is not drained (lib.safeListDir
+// refuses it), and only regular files with one name are read as snapshots.
 function drainPending(input = {}, { dryRun = false, cap = 20 } = {}) {
   const stats = { checked: 0, backfilled: 0, present: 0, pending: 0, reviews: 0 };
   const dir = pendingDir(input);
   let files;
   try {
-    files = fs.readdirSync(dir).filter((f) => /^codex-[a-f0-9]+\.json$/.test(f)).map((f) => ({ file: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.mtime - b.mtime);
+    files = (lib.safeListDir(dir) || []).filter((f) => /^codex-[a-f0-9]+\.json$/.test(f)).flatMap((f) => {
+      const st = fs.lstatSync(path.join(dir, f));
+      return st.isFile() && st.nlink === 1 ? [{ file: path.join(dir, f), mtime: st.mtimeMs }] : [];
+    }).sort((a, b) => a.mtime - b.mtime);
   } catch { return stats; }
   for (const { file } of files.slice(0, cap)) {
     stats.checked++;
@@ -475,7 +474,7 @@ function drainPending(input = {}, { dryRun = false, cap = 20 } = {}) {
       if (!dryRun && fs.existsSync(file)) { const now = new Date(); fs.utimesSync(file, now, now); }
     } catch { /* retain snapshot for another hook/reconcile */ }
   }
-  stats.pending = dryRun ? files.length - stats.backfilled - stats.present : fs.readdirSync(dir).filter((f) => f.endsWith('.json')).length;
+  stats.pending = dryRun ? files.length - stats.backfilled - stats.present : (lib.safeListDir(dir) || []).filter((f) => f.endsWith('.json')).length;
   return stats;
 }
 
