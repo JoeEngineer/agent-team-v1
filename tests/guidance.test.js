@@ -125,6 +125,22 @@ test('single source: the Director files name no model, and use <plugin root> for
   assert(!/haiku|sonnet|fable|gpt-/i.test(text[`${DIRECTOR}/SKILL.md`]), 'SKILL.md names a model');
 });
 
+// ---- the xlarge grant never widens by wording --------------------------------
+// Decision 0022 grants "hard-fix escalation, after large/high fails". Ladder
+// step 4 also covers a `reject` at any tier, so a no-ask sentence that doesn't
+// name the large/high failure would send a rejected small or medium task to
+// xlarge without the user's yes.
+
+test('routing: xlarge runs "without asking" only for a task that has already failed at large/high', () => {
+  const noAsk = (t) => t.split(/(?<=\.)\s+|\n/).filter((s) => /without asking/.test(s));
+  const unscoped = (t) => noAsk(t).filter((s) => !/a task that has already failed at large\/high/.test(s));
+  const routing = text[`${DIRECTOR}/references/routing.md`];
+  eq(noAsk(routing).length, 1, 'routing.md has one no-ask sentence: the hard-fix grant in ladder step 4');
+  eq(unscoped(routing).join('\n'), '', 'a no-ask sentence that is not scoped to a large/high failure');
+  assert(/The grant doesn't cover a `reject` at a lower tier/.test(routing), 'a reject at a lower tier stays outside the grant');
+  eq(unscoped('Stop. With `hard-fix` in the milestone\'s grant, the next attempt runs at xlarge/high without asking.').length, 1, 'detector flags the unscoped wording');
+});
+
 // ---- structure --------------------------------------------------------------
 
 const headings = (t) => [...t.matchAll(/^#{1,3} (.+)$/gm)].map((m) => m[1].replace(/`/g, ''));

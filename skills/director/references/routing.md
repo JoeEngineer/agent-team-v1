@@ -39,7 +39,7 @@ On a reviewer verdict of `changes_requested`:
 1. **First failure:** send it back to the same tier with the reviewer's findings.
 2. **Second failure, or a first failure whose `review-json` top-level `severity` is `major` or `critical`:** raise effort one step (low → medium → high). Use the top-level field, not the labels of single findings. If the block is missing or contradicts itself, ask the reviewer for a corrected `review-json` first.
 3. **Already at high effort:** raise the tier one step with `node "<plugin root>/scripts/models.js" up <tier> --tool <t>`, which skips tiers that are not auto-eligible. Exit 1 means there is none: ask the user.
-4. **Large/high still failing, or a verdict of `reject`:** stop. Send it to `architect` to re-examine the spec, and tell the user if the milestone is at risk. You may offer xlarge, noting its cost or availability, whenever the map has an xlarge model for that tool that is not disabled; use it only after the user's yes for that task. With `hard-fix` in the milestone's grant, the next attempt runs at xlarge/high without asking.
+4. **Large/high still failing, or a verdict of `reject`:** stop. Send it to `architect` to re-examine the spec, and tell the user if the milestone is at risk. You may offer xlarge, noting its cost or availability, whenever the map has an xlarge model for that tool that is not disabled; use it only after the user's yes for that task. With `hard-fix` in the milestone's grant, a task that has already failed at large/high runs its next attempt at xlarge/high without asking. The grant doesn't cover a `reject` at a lower tier.
 
 Each escalation is a new spawn with the same task `id`, `attempt` incremented, `reason=escalation`, and a `WHY` naming the step.
 
@@ -63,7 +63,7 @@ The user grants xlarge to some roles, or none, at each milestone's intake (`<plu
 | coach (at milestone close) | large / high | xlarge / medium |
 | hard-fix escalation, after large/high fails | ask the user | xlarge / high |
 
-- The grant covers the granted roles in this milestone only. Any other xlarge use still needs the user's yes for that task.
+- The grant covers the granted roles in this milestone only.
 - **Runway.** Check runway before each granted xlarge spawn. If it is short, ask the user whether to wait or to run the default row; never fall back silently. When they pick the default row, log `tier_fallback` with `"reason":"runway"`. If runway can't be checked, say so on the `WHY` line and go ahead.
 
 ## Local-only routes (optional)
@@ -74,4 +74,4 @@ The Codex and Antigravity bridges (`mcp__codex-bridge__*`, `mcp__antigravity-bri
 |---|---|---|---|
 | security-review (second, at close) | any | `codex-bridge` | If asked for at intake; see below. |
 
-**The second security review.** Tier from the intake answer, effort high: `models.js resolve <tier> --tool codex`. Run it in parallel with the first security review, with the same card (the milestone PR, the acceptance criteria, the `security-reviewer` prompt) and none of the first review's findings or verdict. Add: "Another model has already reviewed this milestone. Your job is to find what that review missed." If `check_runway` says runway is short, or the bridge is missing at close, vanishes or loses the reply, ask the user whether to wait, drop the tier or skip; never skip silently. If the reply has no `review-json` the hook could log, log it with `log-event.js review`.
+**The second security review.** Tier from the intake answer, effort high: `models.js resolve <tier> --tool codex`. Give it the first security review's card (the milestone PR, the acceptance criteria, the `security-reviewer` prompt) and none of the first review's findings or verdict. Add: "Another model has already reviewed this milestone. Your job is to find what that review missed." If `check_runway` says runway is short, or the bridge is missing at close, vanishes or loses the reply, ask the user whether to wait, drop the tier or skip; never skip silently. If the reply has no `review-json` the hook could log, log it with `log-event.js review`.

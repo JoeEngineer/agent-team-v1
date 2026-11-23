@@ -17,7 +17,7 @@ All of these must be true first:
 1. A `reviewer` returned a `review-json` block with `"verdict": "approve"` for this PR.
 2. You have that block's `head_sha`. If the block has none, ask the reviewer for it; never substitute the PR's current head.
 3. Its `ci` is `green`, `pending`, or `none` with `"tests_passed": true`. With `none` and no passing test run, send the reviewer a followup to run the tests. `red` and `unknown` never reach the command (loop step 7).
-4. For a `security-sensitive` task: the `security-reviewer` also approved this same `head_sha`, and its `scan` is neither `red` (send it back) nor `unknown` (ask the user). If it approved an older head, send it the incremental diff first. A blocked flagged PR holds up only the tasks that need it.
+4. For a `security-sensitive` task: the `security-reviewer` also approved this same `head_sha`, and its `scan` is neither `red` (send it back) nor `unknown` (ask the user). If it approved an older head, send it the incremental diff first. Its `changes_requested` or `reject` sends the PR back and escalates like the reviewer's (loop step 7). A blocked flagged PR holds up only the tasks that need it.
 
 Then run one call with nothing else in it:
 
@@ -94,7 +94,7 @@ Then hand the PR to the user. You don't merge it.
 
 From either security review at close:
 
-- A `major` or `critical` finding blocks "complete" and becomes a fix task with a normal per-PR review; its security reviewer is resumed only to confirm its own finding on the incremental diff (the "Final-review fixes" rule in `routing.md`). One without an exploit path (input, path, consequence) goes back to its reviewer for the path or a downgrade.
+- A `major` or `critical` finding blocks "complete" and becomes a fix task, reviewed under the "Final-review fixes" rule in `routing.md`. One without an exploit path (input, path, consequence) goes back to its reviewer for the path or a downgrade.
 - `scan: red` blocks. `scan: unknown`: ask the user, as for `ci: unknown`. `scan: none` doesn't block; the report states "no scanner".
 - No `review-json` after one re-ask, or a missing bridge: ask the user. A review that didn't report never counts as passed.
 

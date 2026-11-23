@@ -30,7 +30,7 @@ node "<plugin root>/scripts/log-event.js" milestone - <<'EOF'
 EOF
 ```
 
-`xlarge_grant` lists only the granted roles (`[]` for none); `second_review` is `none`, `large` or `xlarge`; `map_source` is the `source` from `models.js show`. How the grant is used: the director skill's `references/routing.md`, "The xlarge grant".
+`xlarge_grant` lists only the granted roles (`[]` for none) by their log names, one per option of the question: `security-review` ("security reviews", which covers both security rows of the grant table: milestone close and flagged task PRs), `architect`, `coach` ("coach at close") and `hard-fix` ("hard-fix escalation"). The guidance uses these names too, as in "with `hard-fix` in the grant". `second_review` is `none`, `large` or `xlarge`; `map_source` is the `source` from `models.js show`. How the grant is used: the director skill's `references/routing.md`, "The xlarge grant".
 
 ## Then
 
