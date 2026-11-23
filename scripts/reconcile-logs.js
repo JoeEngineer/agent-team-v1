@@ -56,11 +56,29 @@ function projectsRoot() {
 const PLAIN_ID = /^[\w-]+$/;
 const plainId = (id) => typeof id === 'string' && PLAIN_ID.test(id);
 
-// A folder in the forms it may be written in: resolved, and real (long names,
-// no links) when it exists. Lower-cased on Windows, where case does not count.
+// The real spelling of a path that may no longer exist: the real path (long
+// names, links resolved) of its nearest existing ancestor, with the missing
+// segments appended. A removed worktree recorded as C:\Users\RUNNER~1\...\x
+// or through a linked alias of the project folder then compares equal to the
+// project's real path. Null when no ancestor resolves.
+function realSpelling(p) {
+  let cur = path.resolve(p);
+  const missing = [];
+  for (;;) {
+    try { return path.join(fs.realpathSync.native(cur), ...missing); } catch { /* not there: go up */ }
+    const up = path.dirname(cur);
+    if (up === cur) return null;
+    missing.unshift(path.basename(cur));
+    cur = up;
+  }
+}
+
+// A folder in the forms it may be written in: resolved, and its real spelling
+// (realSpelling). Lower-cased on Windows, where case does not count.
 function pathForms(p) {
   const forms = new Set([path.resolve(p)]);
-  try { forms.add(fs.realpathSync.native(p)); } catch { /* gone, e.g. a removed worktree */ }
+  const real = realSpelling(p);
+  if (real) forms.add(real);
   return [...forms].map((f) => (process.platform === 'win32' ? f.toLowerCase() : f));
 }
 const within = (child, parent) => {
@@ -110,6 +128,10 @@ function transcriptCwd(file) {
 // when the cwd it records is the project folder, one of its worktrees, or a
 // subfolder of either. A transcript of another project with the same session
 // or agent id is never used, and one with no cwd is not used either.
+// What this rule drops (counted as "not found", never imported): a session
+// started in a parent folder of the project; a session recorded before the
+// project was moved or renamed; and a git worktree outside the project folder
+// that has since been removed (git no longer lists it).
 function belongsTo(projectRoot) {
   let folders = null;
   return (file) => {

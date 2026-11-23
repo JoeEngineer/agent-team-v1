@@ -51,21 +51,31 @@ function claimOnce(input, key) {
 // than `cap` entries per run, skips anything else (dotfiles, other tasks'
 // files) and swallows every error. A linked .pending is not listed, so nothing
 // in the folder it points at is deleted (lib.safeListDir).
+// Temp files a crashed lib.safeReplace or reconcile rewrite left behind
+// (lib.TEMP_FILE) go by the same age rule, in .pending, .pending/codex-completions
+// and the logs folder itself.
 const PRUNABLE = /^(stop-|resume-|review-|toolu_.*\.json$)/;
 function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
-  try {
-    const dir = path.join(lib.logPath(input), '.pending');
-    const now = Date.now();
-    let seen = 0;
-    for (const name of lib.safeListDir(dir) || []) {
-      if (name.startsWith('.') || !PRUNABLE.test(name)) continue;
-      if (++seen > cap) break;
-      try {
-        const f = path.join(dir, name);
-        if (now - fs.lstatSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f);
-      } catch { /* best effort */ }
-    }
-  } catch { /* no .pending yet, or refused */ }
+  const now = Date.now();
+  let seen = 0;
+  const sweep = (dir, pattern) => {
+    try {
+      for (const name of lib.safeListDir(dir) || []) {
+        if (name.startsWith('.') || !pattern.test(name)) continue;
+        if (++seen > cap) return;
+        try {
+          const f = path.join(dir, name);
+          const st = fs.lstatSync(f);
+          if (!st.isDirectory() && now - st.mtimeMs > maxAgeMs) fs.unlinkSync(f);
+        } catch { /* best effort */ }
+      }
+    } catch { /* missing, or refused */ }
+  };
+  const logs = lib.logPath(input);
+  const dir = path.join(logs, '.pending');
+  sweep(dir, { test: (n) => PRUNABLE.test(n) || lib.TEMP_FILE.test(n) });
+  for (const sub of ['codex-completions']) sweep(path.join(dir, sub), lib.TEMP_FILE);
+  sweep(logs, lib.TEMP_FILE);
 }
 
 const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);

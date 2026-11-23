@@ -253,10 +253,24 @@ function main() {
   try { pendingEntries = lib.safeListDir(pendingDir, { withFileTypes: true }); } catch (err) {
     console.log(`.pending: not pruned (${err.message})`);
   }
-  const pending = (pendingEntries || []).filter((e) => e.isFile() && !e.name.startsWith('.')).map((e) => { // skip dotfiles (.gitkeep)
-    const p = path.join(pendingDir, e.name);
+  const entry = (dir) => (e) => {
+    const p = path.join(dir, e.name);
     return { p, stale: now - fs.lstatSync(p).mtimeMs > STALE_MS };
-  });
+  };
+  const pending = (pendingEntries || []).filter((e) => e.isFile() && !e.name.startsWith('.')).map(entry(pendingDir)); // skip dotfiles (.gitkeep)
+  // Temp files a crashed write left (lib.TEMP_FILE): in .pending/codex-completions
+  // and in the logs folder. Same age rule; snapshots and logs themselves stay.
+  const temps = (dir) => {
+    let list = null;
+    try { list = lib.safeListDir(dir, { withFileTypes: true }); } catch (err) { console.log(`.pending: not pruned (${err.message})`); }
+    return (list || []).filter((e) => e.isFile() && lib.TEMP_FILE.test(e.name)).map(entry(dir));
+  };
+  if (pendingEntries) {
+    for (const sub of ['codex-completions']) {
+      pending.push(...temps(path.join(pendingDir, sub)));
+    }
+  }
+  pending.push(...temps(logDir));
   const stale = pending.filter((x) => x.stale);
 
   if (o.dryRun) {

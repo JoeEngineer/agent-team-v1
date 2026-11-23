@@ -156,6 +156,32 @@ test('FU-18: a transcript whose cwd is another project, or that has no cwd, is n
     const rw = arch(w);
     eq(readLive(w.p, 'completions.jsonl').length, 2, `${sub.join('/')}: superseded: ${rw.stdout}`);
   }
+  // The same removed worktree recorded under another spelling of the project folder: through a
+  // linked alias (a symlink, or a junction on Windows), and as the 8.3 short name on Windows.
+  const gone = ['.claude', 'worktrees', 'agent-gone'];
+  const spellings = [['alias', (p) => {
+    const alias = path.join(tmp(), 'alias');
+    try { fs.symlinkSync(p, alias, 'dir'); } catch {
+      try { fs.symlinkSync(p, alias, 'junction'); } catch { return null; }
+    }
+    return alias;
+  }]];
+  if (process.platform === 'win32') {
+    spellings.push(['8.3 short name', (p) => {
+      const r = spawnSync('cmd', ['/d', '/s', '/c', `for %I in ("${p}") do @echo %~sI`], { encoding: 'utf8', windowsVerbatimArguments: true, timeout: 10000 });
+      const short = (r.stdout || '').trim();
+      return short && short.toLowerCase() !== fs.realpathSync.native(p).toLowerCase() ? short : null;
+    }]);
+  }
+  for (const [name, spell] of spellings) {
+    let other = null;
+    const w = setup({ cwd: (p) => { other = spell(p); return other ? path.join(other, ...gone) : undefined; } });
+    if (!other) { console.log(`  skip (${name}: this machine cannot make that spelling)`); continue; }
+    assert(!fs.existsSync(path.join(other, ...gone)), `${name}: precondition: the recorded worktree is gone`);
+    assert(path.resolve(other).toLowerCase() !== fs.realpathSync.native(w.p).toLowerCase(), `${name}: precondition: the spelling differs from the project's real path (${other})`);
+    const rw = arch(w);
+    eq(readLive(w.p, 'completions.jsonl').length, 2, `${name}: a removed worktree under another spelling is this project's: ${rw.stdout}`);
+  }
   // A git worktree outside the project folder counts while git lists it.
   const g = setup({ cwd: (p) => path.join(path.dirname(p), `${path.basename(p)}-wt`) });
   execFileSync('git', ['-C', g.p, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { timeout: 30000 });

@@ -212,6 +212,9 @@ function safeWriteNew(file, data) {
 function tempName(file) {
   return `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
 }
+// A name tempName made. A process that dies between the create and the rename
+// leaves one behind; records.prunePending and archive-logs sweep old ones.
+const TEMP_FILE = /\.[0-9a-f]{16}\.tmp$/;
 
 // Replace `file` with `data`: a new temp file, renamed over it. A rename
 // replaces a link at the name; it never writes to what the link points at.
@@ -837,7 +840,7 @@ function reviewFor(text, agentType, task) {
 module.exports = {
   REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor,
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
-  safeAppend, safeWriteNew, safeOpenNew, safeReplace, safeMkdir, safeListDir, checkLogFile, tempName, safeWriteHooks, REFUSED,
+  safeAppend, safeWriteNew, safeOpenNew, safeReplace, safeMkdir, safeListDir, checkLogFile, tempName, TEMP_FILE, safeWriteHooks, REFUSED,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
   glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,

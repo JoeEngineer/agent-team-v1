@@ -452,10 +452,29 @@ const ALLOWED = [
   ['reconcile-logs.js', "fs.openSync(file, 'r')", 'opens a transcript read-only (transcriptCwd)'],
   ['reconcile-logs.js', 'fs.writeFileSync(fd, ', 'writes to the fd lib.safeOpenNew returned'],
   ['reconcile-logs.js', 'fs.writeSync(fd, ', 'writes to the fd lib.safeOpenNew returned'],
+  // Deletes, renames and mtime updates. An unlink or rename acts on the name itself, never on
+  // what a link points at; each one below is in a folder already checked with lib.safeListDir,
+  // lib.safeMkdir or lib.safeOpenNew, or outside .agent-team/logs/.
+  ['archive-logs.js', 'fs.rmSync(tmpDest, { recursive: true, force: true }); // leftover', 'the temp copy under the archive root, outside the repo'],
+  ['archive-logs.js', 'fs.renameSync(tmpDest, dest)', 'the archive root, outside the repo'],
+  ['archive-logs.js', 'fs.renameSync(path.join(tmpDest, name), path.join(dest, name))', 'the archive root, outside the repo'],
+  ['archive-logs.js', 'fs.rmSync(tmpDest, { recursive: true, force: true });', 'the temp copy under the archive root, outside the repo'],
+  ['archive-logs.js', 'try { fs.unlinkSync(x.p); removed++; }', 'stale entries listed by lib.safeListDir (real .pending, codex-completions and logs folders), regular files only'],
+  ['archive-logs.js', 'fs.unlinkSync(src);', '--clear: a regular .jsonl listed by lib.safeListDir(logDir); unlink removes the name only'],
+  ['codex-agents.js', 'fs.unlinkSync(path.join(out, file))', '.codex/agents/*.toml, not the logs folder'],
+  ['codex-log.js', 'fs.unlinkSync(file);', 'a finished snapshot in codex-completions, a real folder (lib.safeMkdir / safeListDir)'],
+  ['codex-log.js', 'fs.utimesSync(file, now, now)', 'a snapshot that lstat showed to be a regular file with one name, listed by lib.safeListDir'],
+  ['reconcile-logs.js', 'rename: (from, to) => fs.renameSync(from, to)', 'rewriteJsonl: the temp file made by lib.safeOpenNew renamed over a log checkLogFile accepted'],
+  ['reconcile-logs.js', 'if (created) { try { fs.unlinkSync(tmp); }', 'rewriteJsonl: removes only the temp file it created'],
+  ['reconcile-logs.js', "fs.unlinkSync(path.join(logDir, '.pending', key.replace(", 'releases the marker claimOnce just made with lib.safeWriteNew'],
+  ['records.js', 'fs.unlinkSync(file);', "takeDuration's start file and withRecordLock's lock file, in folders made by lib.safeMkdir / safeOpenNew"],
+  ['records.js', 'fs.unlinkSync(f);', 'prunePending: entries listed by lib.safeListDir, never a folder'],
+  ['status.js', 'fs.renameSync(tmp, file)', 'STATUS.md, not the logs folder'],
+  ['status.js', 'try { fs.unlinkSync(tmp); }', 'STATUS.md temp file, not the logs folder'],
 ];
-const RAW = /\b(?:appendFileSync|writeFileSync|writeSync|openSync|copyFileSync|createWriteStream|cpSync|mkdirSync)\s*\(/;
+const RAW = /\b(?:appendFileSync|writeFileSync|writeSync|openSync|copyFileSync|createWriteStream|cpSync|mkdirSync|unlinkSync|renameSync|rmSync|rmdirSync|utimesSync|lutimesSync)\s*\(/;
 
-test('FU-18 grep: no appendFileSync/writeFileSync/openSync/mkdirSync in scripts/ outside the safe-write helper, except the allow-list', () => {
+test('FU-18 grep: no raw write, mkdir, unlink, rename, rm or utimes call in scripts/ outside the safe-write helper, except the allow-list', () => {
   const used = new Set();
   const bad = [];
   for (const name of fs.readdirSync(SCRIPTS).filter((n) => n.endsWith('.js')).sort()) {
@@ -480,4 +499,71 @@ test('FU-18 grep: no appendFileSync/writeFileSync/openSync/mkdirSync in scripts/
   for (const name of ['reconcile-logs.js', 'codex-log.js']) {
     assert(!fs.readFileSync(path.join(SCRIPTS, name), 'utf8').includes('${process.pid}.tmp'), `${name}: no pid temp name`);
   }
+});
+
+// --- temp files a crashed write left behind -----------------------------------
+
+// A temp name as lib.tempName makes it, with its mtime set `ageMs` back.
+function plantTemp(dir, base, ageMs) {
+  fs.mkdirSync(dir, { recursive: true });
+  const f = path.join(dir, `${base}.0123456789abcdef.tmp`);
+  fs.writeFileSync(f, '{}');
+  const t = new Date(Date.now() - ageMs);
+  fs.utimesSync(f, t, t);
+  return f;
+}
+
+test('FU-18 records: old temp files are pruned from .pending, codex-completions and the logs folder; fresh ones and snapshots stay', () => {
+  const { p, logs } = fixture();
+  const records = require(path.join(SCRIPTS, 'records.js'));
+  const day = 24 * 3600 * 1000;
+  const cc = path.join(logs, '.pending', 'codex-completions');
+  const old = [
+    plantTemp(path.join(logs, '.pending'), 'toolu_1.json', 2 * day),
+    plantTemp(cc, 'codex-0123456789ab.json', 2 * day),
+    plantTemp(logs, 'completions.jsonl', 2 * day),
+  ];
+  const fresh = plantTemp(cc, 'codex-aaaaaaaaaaaa.json', 1000);
+  const snapshot = path.join(cc, 'codex-0123456789ab.json');
+  fs.writeFileSync(snapshot, '{}');
+  const past = new Date(Date.now() - 2 * day);
+  fs.utimesSync(snapshot, past, past);
+  eq(lib.tempName(path.join(cc, 'x.json')).replace(/^.*x\.json/, '').length, '.0123456789abcdef.tmp'.length, 'precondition: the planted names have the shape tempName makes');
+  assert(old.every((f) => fs.existsSync(f)), 'precondition: the old temp files exist');
+  const saved = process.env.CLAUDE_PROJECT_DIR;
+  process.env.CLAUDE_PROJECT_DIR = p;
+  try {
+    records.prunePending({ cwd: p });
+    for (const f of old) assert(!fs.existsSync(f), `old temp pruned: ${f}`);
+    assert(fs.existsSync(fresh), 'a fresh temp file stays (a write may be in flight)');
+    assert(fs.existsSync(snapshot), 'an old snapshot is not a temp file: it stays');
+    records.prunePending({ cwd: p }); // one step past
+    assert(fs.existsSync(fresh) && fs.existsSync(snapshot), 'a second prune removes nothing else');
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR; else process.env.CLAUDE_PROJECT_DIR = saved;
+  }
+});
+
+test('FU-18 archive: temp files older than 10 minutes in .pending, codex-completions and the logs folder are deleted; fresh ones and snapshots stay', () => {
+  const { p, logs } = fixture();
+  fs.writeFileSync(path.join(logs, 'notes.jsonl'), '{"a":1}\n');
+  const cc = path.join(logs, '.pending', 'codex-completions');
+  const hour = 3600 * 1000;
+  const old = [
+    plantTemp(path.join(logs, '.pending'), 'hooks-alive.json', hour),
+    plantTemp(cc, 'codex-0123456789ab.json', hour),
+    plantTemp(logs, 'completions.jsonl', hour),
+  ];
+  const fresh = plantTemp(cc, 'codex-aaaaaaaaaaaa.json', 1000);
+  const snapshot = path.join(cc, 'codex-0123456789ab.json');
+  fs.writeFileSync(snapshot, '{}');
+  const past = new Date(Date.now() - hour);
+  fs.utimesSync(snapshot, past, past);
+  assert(old.every((f) => fs.existsSync(f)), 'precondition: the old temp files exist');
+  const r = archive(p);
+  eq(r.status, 0, r.stderr + r.stdout);
+  for (const f of old) assert(!fs.existsSync(f), `old temp deleted: ${f}`);
+  assert(fs.existsSync(fresh), 'fresh temp kept');
+  assert(fs.existsSync(snapshot), 'a snapshot is not a temp file: kept');
+  assert(r.stdout.includes('.pending: deleted 3 stale'), r.stdout);
 });
