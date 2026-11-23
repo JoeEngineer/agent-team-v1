@@ -18,7 +18,8 @@ const VALUES = ['green', 'red', 'none', 'unknown'];
 const EXPECTED_ROWS = [
   ['Any failed, even with a moved head or others skipped or unreadable', 'red'],
   ['The head moved', 'unknown'],
-  ['The CI config has none', 'none'],
+  ['The diff removes or disables a scanner job the base has (deletion, an `if:` that never runs, or a dropped trigger)', 'unknown'],
+  ['Base and head both have no scanner jobs', 'none'],
   ['Checks unreadable, or any still pending after the wait', 'unknown'],
   ['Any unscanned without cause', 'unknown'],
   ['All unscanned with cause', 'none'],
@@ -50,27 +51,28 @@ function tableRows(src) {
 // tied to the role file only because the role file's rows are pinned to
 // EXPECTED_ROWS (and the evaluator's row count is asserted equal to it).
 const UNSCANNED = ['skip', 'missing', 'noscan', 'unconfirmed'];
-function scanState({ head, jobs, readable, states }) {
+function scanState({ head, jobs, readable, removed, states }) {
   const s = states === '-' ? [] : states.split(',');
   const cause = (x) => x.endsWith('+cause');
   const unscanned = (x) => UNSCANNED.includes(x.replace('+cause', ''));
   if (s.includes('fail')) return ['red', 1];
   if (head === 'moved') return ['unknown', 2];
-  if (jobs === 'none') return ['none', 3];
-  if (readable === 'no' || s.includes('pending')) return ['unknown', 4];
-  if (s.some((x) => unscanned(x) && !cause(x))) return ['unknown', 5];
-  if (s.length > 0 && s.every((x) => unscanned(x) && cause(x))) return ['none', 6];
+  if (removed === 'yes') return ['unknown', 3];
+  if (jobs === 'none') return ['none', 4];
+  if (readable === 'no' || s.includes('pending')) return ['unknown', 5];
+  if (s.some((x) => unscanned(x) && !cause(x))) return ['unknown', 6];
+  if (s.length > 0 && s.every((x) => unscanned(x) && cause(x))) return ['none', 7];
   const rest = s.filter((x) => !(unscanned(x) && cause(x)));
-  if (rest.length > 0 && rest.every((x) => x === 'pass')) return ['green', 7];
-  return ['unknown', 8];
+  if (rest.length > 0 && rest.every((x) => x === 'pass')) return ['green', 8];
+  return ['unknown', 9];
 }
 
 function matrix() {
   const at = DECISION.indexOf('## Worked matrix');
   assert(at >= 0, 'worked matrix not found in 0024');
   return DECISION.slice(at).split('\n').filter((l) => /^\| M\d+ \|/.test(l)).map((l) => {
-    const [id, head, jobs, readable, states, scan, row] = l.split('|').slice(1, -1).map((c) => c.trim());
-    return { id, head, jobs, readable, states, scan, row: Number(row) };
+    const [id, head, jobs, readable, removed, states, scan, row] = l.split('|').slice(1, -1).map((c) => c.trim());
+    return { id, head, jobs, readable, removed, states, scan, row: Number(row) };
   });
 }
 
@@ -103,7 +105,7 @@ test('scan table: red is the first row and the head moved row comes after it', (
 });
 
 test('scan table: each row has exactly one of green, red, none, unknown', () => {
-  eq(rows.length, 8, 'row count');
+  eq(rows.length, 9, 'row count');
   for (const r of rows) {
     eq(r.length, 2, `row has two cells: ${r.join(' | ')}`);
     const v = r[1].match(/^`(.+)`$/);
@@ -119,7 +121,7 @@ test('scan table: the row order and values equal 0024, and Anything else is last
 
 test('scan table: the worked matrix has 30 cases and every case resolves by first match', () => {
   const cases = matrix();
-  eq(cases.length, 30, 'matrix cases parsed from 0024');
+  eq(cases.length, 31, 'matrix cases parsed from 0024');
   const hit = new Set();
   for (const c of cases) {
     const [scan, row] = scanState(c);
@@ -129,5 +131,5 @@ test('scan table: the worked matrix has 30 cases and every case resolves by firs
     eq(rows[row - 1][1].replace(/`/g, ''), c.scan, `${c.id}: role file row ${row}`);
     hit.add(row);
   }
-  eq([...hit].sort().join(), '1,2,3,4,5,6,7,8', 'every row is hit by a case');
+  eq([...hit].sort().join(), '1,2,3,4,5,6,7,8,9', 'every row is hit by a case');
 });
