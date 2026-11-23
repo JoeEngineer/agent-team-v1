@@ -1,6 +1,6 @@
 # Merging
 
-On GitLab, read `gitlab.md` too: an MR stands in for a PR and its target branch for the base. The merge command below is the same on both.
+On GitLab, read `gitlab.md` too: an MR stands in for a PR, its target branch for the base.
 
 ## Branch model
 
@@ -8,7 +8,7 @@ On GitLab, read `gitlab.md` too: an MR stands in for a PR and its target branch 
 main  ←── (user merges) ──  milestone/<slug>  ←── (Director merges) ──  task/<ID>
 ```
 
-Task PRs target `milestone/<slug>`, and you merge them. The milestone PR targets `main`, and only the user merges it. The guard blocks merges into `main`/`master`, force-pushes and direct pushes to them.
+The guard blocks merges into `main`/`master`, force-pushes and direct pushes to them.
 
 ## Merging a task PR
 
@@ -17,6 +17,7 @@ All of these must be true first:
 1. A `reviewer` returned a `review-json` block with `"verdict": "approve"` for this PR.
 2. You have that block's `head_sha`. If the block has none, ask the reviewer for it; never substitute the PR's current head.
 3. Its `ci` is `green`, `pending`, or `none` with `"tests_passed": true`. With `none` and no passing test run, send the reviewer a followup to run the tests. `red` and `unknown` never reach the command (loop step 7).
+4. For a `security-sensitive` task: the `security-reviewer` also approved this same `head_sha`, and its `scan` is neither `red` (send it back) nor `unknown` (ask the user). If it approved an older head, send it the incremental diff first. Its `changes_requested` or `reject` sends the PR back and escalates like the reviewer's (loop step 7). A blocked flagged PR holds up only the tasks that need it.
 
 Then run one call with nothing else in it:
 
@@ -82,14 +83,23 @@ In this order:
 1. Nothing is queued: if `STATUS.md` has a `queued` row, the checkpoint shows it resolved.
 2. Open the milestone → `main` PR. Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue, follow-up tasks included, but not work that was dropped or moved to a later milestone. (A task PR's own `Closes` does nothing: issues close only on a merge into the default branch.) List them with `gh issue list --label agent-team --state open` and check against `STATUS.md`.
 3. The final `reviewer` pass runs on that PR (milestone branch vs. `main`) and waits for its CI.
-4. Archive the logs: `node "<plugin root>/scripts/archive-logs.js" <slug>` (the milestone slug: letters, digits, `.`, `_`, `-`). Tell the user the destination it prints. Exit 1 means there were no logs: say so and carry on. Add `--clear` only if the user says so.
-5. Check CI once: `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once`. It may share the archive call.
-6. Report "complete" only on green. With no CI (exit 3) and a final review of `ci: none` with `tests_passed: true`, rerun with `--sha <head_sha> --allow-none` and report complete with "no CI" stated. Otherwise report "PR open, CI <red, pending or unknown> at <sha>". On pending, Claude waits in the background (`ci-wait.js <milestone PR> --timeout 1800`) and reports again; Codex reports it as pending.
+4. The security review runs on the same PR, in every milestone: a separate `security-reviewer` pass, not part of step 3, routed by `routing.md`. If the user asked for the second review at intake, start it in parallel (`routing.md`, "Local-only routes").
+5. Archive the logs: `node "<plugin root>/scripts/archive-logs.js" <slug>` (the milestone slug: letters, digits, `.`, `_`, `-`). Tell the user the destination it prints. Exit 1 means there were no logs: say so and carry on. Add `--clear` only if the user says so.
+6. Check CI once: `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once`. It may share the archive call.
+7. Report "complete" only on green, with no blocking security result ("Security results" below). With no CI (exit 3) and a final review of `ci: none` with `tests_passed: true`, rerun with `--sha <head_sha> --allow-none` and report complete with "no CI" stated. Otherwise report "PR open, CI <red, pending or unknown> at <sha>". On pending, Claude waits in the background (`ci-wait.js <milestone PR> --timeout 1800`) and reports again; Codex reports it as pending.
 
 Then hand the PR to the user. You don't merge it.
+
+### Security results
+
+From either security review at close:
+
+- A `major` or `critical` finding blocks "complete" and becomes a fix task, reviewed under the "Final-review fixes" rule in `routing.md`. One without an exploit path (input, path, consequence) goes back to its reviewer for the path or a downgrade.
+- `scan: red` blocks. `scan: unknown`: ask the user, as for `ci: unknown`. `scan: none` doesn't block; the report states "no scanner".
+- No `review-json` after one re-ask, or a missing bridge: ask the user. A review that didn't report never counts as passed.
 
 ## Approvals and branch rules
 
 GitHub doesn't let an account approve its own PR, and the team acts as the user's account, so the reviewer's verdict lives in the logs and a PR comment, not in a GitHub approval. If the project uses a separate reviewer bot account, its `CLAUDE.md` says so.
 
-The expected rules are in the plugin README, "Protect your branches": `main` requires a PR with 0 approvals, no force pushes, no deletion and no bypass; `milestone/*` forbids force pushes, plus status checks once the project has CI.
+The expected rules for `main` and `milestone/*` are in the plugin README, "Protect your branches".

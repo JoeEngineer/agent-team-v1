@@ -13,7 +13,7 @@ Space-separated `key=value`, no spaces inside values.
 
 | Key | When | Values |
 |---|---|---|
-| `id`, `type`, `difficulty`, `milestone`, `attempt` | always | `type`: `research`, `breakdown`, `design`, `implement`, `fix`, `test`, `docs`, `review`, `coach`. `difficulty`: `easy`, `medium`, `hard`. `milestone=none` for side work that belongs to no milestone. |
+| `id`, `type`, `difficulty`, `milestone`, `attempt` | always | `type`: `research`, `breakdown`, `design`, `implement`, `fix`, `test`, `docs`, `review`, `security-review`, `coach`. `difficulty`: `easy`, `medium`, `hard`. `milestone=none` for side work that belongs to no milestone. |
 | `tier`, `effort` | always | what you chose from the routing table: `small|medium|large|xlarge`, `low|medium|high|xhigh|max`. The logger warns when something else ran (`tier_mismatch`, `effort_mismatch`). |
 | `reason` | from attempt 2 | `sendback` (changes requested, same settings), `escalation` (new tier or effort), `fold-in` (approved with minors), `retry` (the last turn was cut off). |
 | `base` | any task in a worktree | the branch to start from, usually `milestone/<slug>`. |
@@ -21,7 +21,7 @@ Space-separated `key=value`, no spaces inside values.
 | `worktree` | set by the Codex Director | repo-relative path of the folder the task runs in. |
 | `kind=followup` | scope added without a review | see below. |
 
-The `WHY` line is free text: why this agent, tier and effort. On an escalation, name the ladder step.
+The `WHY` line is free text: why this agent, tier and effort; on an escalation, the ladder step.
 
 ## Attempts
 
@@ -64,6 +64,8 @@ Add the ones that apply. Agents don't know these on their own.
 - **Scratch files** (reviewers, and anyone building or running things outside their branch): "Put scratch worktrees, venvs and compose projects under your scratchpad or `/tmp`, never in the main checkout."
 
 ## Review tasks
+
+These rules, and the CI wait line, apply to `security-review` tasks too. The second security review's card: `routing.md`, "Local-only routes".
 
 - Put the PR number in `pr=`, and paste the original task's acceptance criteria (and EDGE CASES, if any) into the brief.
 - DELIVER is "end with your `review-json` block". Don't ask a reviewer for a `result-json` or a custom block: the hook and the Coach read `review-json`.

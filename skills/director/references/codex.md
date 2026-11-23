@@ -30,7 +30,7 @@ EOF
 - **Retry with a new model or effort: a fresh spawn** with a unique task name for the bumped attempt (`cd_7_a2`), the same task id, worktree and branch, the findings, and a compact handoff. When the tool supports overrides, pass `model` and/or `reasoning_effort` with `fork_turns: "none"`; a full-history fork does not apply them. Log the new name as a new delegation before spawning, not as a resume.
 - **No overrides available:** use a generated role file that selects the settings, or a separate `codex exec` session.
 - **Verify what ran.** Don't claim an escalation took effect until the completion reports the resolved model and effort. Record requested and observed settings separately, and mark a missing observation unknown.
-- **Tiers.** Next tier: `node "<plugin root>/scripts/models.js" up <tier> --tool codex` (or `down`). If the map has no Codex model for the routed tier, go `down`, spawn there, and log a `tier_fallback` event: `{"task":"X-1","from":"large","to":"medium","tool":"codex","reason":"no model mapped"}`. xlarge only with the user's yes, and only if its agent file exists.
+- **Tiers.** Next tier: `node "<plugin root>/scripts/models.js" up <tier> --tool codex` (or `down`). If the map has no Codex model for the routed tier, go `down`, spawn there, and log a `tier_fallback` event: `{"task":"X-1","from":"large","to":"medium","tool":"codex","reason":"no model mapped"}`. xlarge is used per the grant or the user's yes (`routing.md`, "The xlarge grant"); `codex-agents.js` writes its agent files unless the map disables xlarge. The security reviewer is spawned as `security-reviewer-<tier>`.
 
 ## Logging from PowerShell
 
