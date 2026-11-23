@@ -2,7 +2,7 @@
 id: 0029
 title: Two security-review grant words, and the grant-check residuals the user rejected
 date: 2026-11-23
-status: accepted            # designs what decision 0028 (the user's) asked for; the amendment narrows 0026 item 1 (the user's choice) and is for the user to confirm
+status: accepted            # designs what decision 0028 (the user's) asked for; the amendment narrows 0026 item 1 (the user's choice); confirmed by the user 2026-11-23
 milestone: coach-followups
 task: FU-22
 decided_by: architect
@@ -17,8 +17,10 @@ Carries out decision 0028. Amends decision 0026.
 > **Amended 2026-11-23** (same task, after the security review of PR #175): see
 > [the amendment](#amendment-2026-11-23-lines-that-disagree-grant-nothing) at
 > the end. It replaces the fix for residual a, reverses one "Not doing" item and
-> narrows item 1 of decision 0026. The places it replaces are marked. Where the
-> amendment differs from the text above it, the amendment holds.
+> narrows item 1 of decision 0026. The user confirmed that narrowing on
+> 2026-11-23. Each place it replaces carries a "Superseded by the amendment of
+> 2026-11-23" marker. Where the amendment differs from the text above it, the
+> amendment holds.
 
 ## Context
 
@@ -62,6 +64,7 @@ Four minor findings from the reviews of FU-16 ride along.
 
 1. **Refuse any line that is not a JSON object, before the slug's first line**
    (chosen).
+   *(Superseded by the amendment of 2026-11-23: such a line is refused wherever it stands.)*
 2. Work out whether a torn line could have gone on to name the slug. Every torn
    line could: `{"milestone":"zz","xl` can continue with a second `milestone`
    key. So this is option 1 with more code.
@@ -105,9 +108,9 @@ until the milestone closes.
 ### 2. The residuals
 
 **a. A slug line appended ahead of the Director: fixed in the logger.**
-*(Replaced by the amendment of 2026-11-23. The bullets below about a line that
-differs, the lost race and "`grant` ignores later lines" no longer hold; the
-rest stands.)*
+*(Superseded by the amendment of 2026-11-23: the logger no longer refuses a
+second line that differs, it writes it. Each bullet below that no longer holds
+is marked; the rest stands.)*
 `log-event.js milestone` refuses a second line for a slug.
 
 - It reads `milestones.jsonl` with the same reader `grant` uses
@@ -117,14 +120,17 @@ rest stands.)*
 - A line already there with a different grant: nothing is written, the existing
   line is printed on stderr, and the exit code is 1, the logger's code for
   every refusal.
+  *(Superseded by the amendment of 2026-11-23: the line is written next to the other, and line numbers are printed, not the line.)*
 - There is no lock. Two writers can both find no line and both append. The
   append is atomic, so one line is first. Each writer reads the log again after
   its append; the one whose line is not first is told so and exits 1. Its line
   stays in the file as a later line, which `grant` ignores. A lock would need
   a stale-lock rule for a writer that died holding it; this needs no cleanup.
+  *(Superseded by the amendment of 2026-11-23: no line is first; two lines that differ both count, and `grant` exits 23.)*
 - A log the reader refuses (a damaged line ahead of the slug) is not appended
   to: exit 1, ask the user. The intake guidance tells the
   Director to write no grant, show the user that line, and ask.
+  *(Superseded by the amendment of 2026-11-23: a damaged line anywhere in the log is refused.)*
 - A line already there with the same roles and the same second review: nothing
   is written and the exit is 0. This is the lost-response case (the line was
   appended and the reply did not arrive) and a resumed session logging intake
@@ -134,18 +140,21 @@ rest stands.)*
   `security-review-close`, a `second_review` outside `none`/`large`/`xlarge`,
   or an empty slug. Without this, one typo would become the first line and lock
   the milestone at exit 19, because the correcting line would be refused.
+  *(Superseded by the amendment of 2026-11-23 in its reason only: a correcting line would now be written, and the typo line would still exit 19.)*
 - Decision 0026 item 1 stands: `grant` still reads the first line and ignores
   later ones. What changes is that the logger no longer writes later ones.
+  *(Superseded by the amendment of 2026-11-23: item 1 is narrowed. `grant` reads every line for the slug, and lines that differ grant nothing.)*
 
 **b. A torn first line: fixed in `grant`.** A line that is not a JSON object,
 and that comes before the slug's first line, exits 19 whatever it mentions. The
 message gives the line number and says to ask the user to repair or remove it.
 Blank lines are skipped. A bad line after the slug's first line is never read.
-*(Since the amendment of 2026-11-23 it is read, and it exits 19 too.)*
+*(Superseded by the amendment of 2026-11-23: a bad line after the slug's first line is read, and it exits 19 too.)*
 
 The cost: one damaged line in `milestones.jsonl` stops every later milestone's
 grant until the user repairs it. That is the fail-closed side, and the file has
 one line per milestone.
+*(Superseded by the amendment of 2026-11-23: it stops every milestone's grant, earlier slugs included.)*
 
 **c. Rewriting `milestones.jsonl` or the shared `.git`: not fixable from inside
 the plugin.** Stated plainly:
@@ -193,7 +202,8 @@ it in its residuals.
   followed `core.worktree` into another repository. `--no-relative` alone stops
   a subdirectory cwd from hiding the rest of the tree. Where a top level is
   still read (for `grant`), only the trailing newline is cut.
-- Decision 0026: item 6 is re-wrapped, and its exit table gains 21 and 22.
+- Decision 0026: item 6 is re-wrapped, and its exit table gains 21 and 22
+  (and 23 and 24 with the amendment of 2026-11-23).
 - `status.js` says in a comment that the bare `coach` key is deliberate.
 
 ## Assumptions behind the rule "the grant never widens past the user's answer"
@@ -206,6 +216,8 @@ it in its residuals.
 | A note cannot change a word | Notes are stripped before the lookup; no word has parentheses | An unbalanced parenthesis exits 17 |
 | The block's words and the log's names mean the same rows | One table in `status.js`; the test reads the template and the intake question through it | An unknown word exits 17, an unknown name 19 |
 
+*(Superseded by the amendment of 2026-11-23: its table replaces the first two rows. The first line is the answer only while every line for the slug agrees, and a line that cannot be read is refused wherever it stands.)*
+
 **Gaps (not tested).**
 
 - Paths are compared after `realpath`, and case-insensitively on Windows. A
@@ -214,6 +226,7 @@ it in its residuals.
 - When git refuses the repository (`safe.directory`, git missing), the project
   is the cwd itself. From a subfolder no log is found, and a block that grants
   something exits 18.
+  *(Superseded by the amendment of 2026-11-23 for a repository git refuses: `grant` exits 24 there, whatever the block says. With git missing this still holds.)*
 
 **Contracts.**
 
@@ -223,12 +236,14 @@ it in its residuals.
   dies leaves at most its own complete line, or a torn last line. The next
   append after a torn line makes one unreadable line, which exits 19 until the
   user repairs it (residual b).
+  *(Superseded by the amendment of 2026-11-23: the reader refuses a torn last line, so the logger appends nothing to it.)*
 - *Fairness.* One file and one reader; nothing queues.
 - *Request amplification.* `grant` runs at most two git processes (the cwd, and
   `CLAUDE_PROJECT_DIR` when set) and reads the log once. `log-event.js
   milestone` reads the log at most twice per call (before and after its append)
   and runs the same two git lookups. Neither grows with anything but the
   number of milestones.
+  *(Superseded by the amendment of 2026-11-23: three git processes, and up to three reads in the logger; see its Contracts.)*
 
 ## Not doing
 
@@ -236,7 +251,7 @@ it in its residuals.
 - A word for task PRs without the close review.
 - Making `grant` refuse when a later line for the slug differs from the first.
   First-line-wins was the user's choice in decision 0026.
-  *(Reversed by the amendment of 2026-11-23: `grant` now does refuse.)*
+  *(Superseded by the amendment of 2026-11-23: `grant` now does refuse. The user confirmed it on 2026-11-23.)*
 - Rewriting this repository's own grant block or log line.
 
 ## Consequences
@@ -250,13 +265,17 @@ it in its residuals.
   names. Nothing in the plugin did.
 - `grant` exits 19 in two cases that passed before: a damaged line ahead of the
   slug's line, and a log line with only `security-review-task`.
+  *(Superseded by the amendment of 2026-11-23: a damaged line anywhere, and such a line for the slug wherever it stands.)*
 - `status.js set` exit 11 now always means "check the file"; it never restores.
 
 ## Amendment 2026-11-23: lines that disagree grant nothing
 
 Same task (FU-22, attempt 3), decided by the architect (claude-fable-5-2,
 effort high) after the security review of PR #175 at `1d3c3a0`. **It narrows
-item 1 of decision 0026, which was the user's choice, so the user confirms it.**
+item 1 of decision 0026, which was the user's choice. Confirmed by the user
+2026-11-23:** asked by the Director in chat, the user answered "Accept".
+Lines for a slug that disagree stop the grant (exit 23) until the user removes
+one, and a log that git tracks is refused (exit 24).
 
 ### What the review found
 
@@ -429,6 +448,15 @@ This table replaces the first two rows of the table above.
   file tracked under a spelling that differs by more than case (a
   Unicode-normalised name, for example), and a log that some other tool
   restores (a sync client, a backup).
+- **When git cannot answer, `grant` exits 24 even for a block that grants
+  nothing.** If
+  `git ls-files` fails in a project that has a `.git` in it or above it
+  (`safe.directory` refusing the repository, a damaged `.git`, a timeout),
+  `grant` exits 24 and the logger exits 1 and writes nothing. That holds also
+  for a block that grants nothing, where exit 0 with an empty grant would have
+  been correct. It fails closed: the grant printed is empty either way, and the
+  user fixes the git setup. Read from the code, not run in a test: a
+  repository that git refuses is hard to build portably.
 - **The index is read through the repository's `.git`,** which agents can
   write (residual c).
 - **UTF-16.** A log saved as UTF-16 (PowerShell 5 `>` or `Out-File`) is not

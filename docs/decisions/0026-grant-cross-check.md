@@ -2,7 +2,7 @@
 id: 0026
 title: The xlarge grant is cross-checked against the intake log line
 date: 2026-11-23
-status: accepted            # the user chose first-line-wins on 2026-11-23; implemented in 1.2.0
+status: accepted            # the user chose first-line-wins on 2026-11-23; implemented in 1.2.0; item 1 narrowed by 0029's amendment, confirmed by the user 2026-11-23
 milestone: coach-followups
 task: FU-6
 decided_by: user
@@ -24,8 +24,9 @@ Builds on decision 0022 (the per-milestone xlarge grant).
 > slug wins only while every line for the slug grants the same. Lines that grant
 > different things exit 23 and grant nothing until the user removes the foreign
 > ones by hand. A later line is therefore no longer ignored: it can stop the
-> grant, and it can never widen it. First-line-wins was the user's choice, so
-> this narrowing is for the user to confirm.
+> grant, and it can never widen it. A log that git tracks is refused as a whole
+> (exit 24). First-line-wins was the user's choice. **Confirmed by the user
+> 2026-11-23:** asked by the Director in chat, the user answered "Accept".
 >
 > The text below is kept as decided; where 0029 differs, 0029 holds.
 
