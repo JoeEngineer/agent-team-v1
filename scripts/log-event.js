@@ -18,6 +18,8 @@
 // `tool` defaults to AGENT_TEAM_TOOL, else "unknown". Director-written lines carry source "director".
 // Every line carries session_id: CLAUDE_CODE_SESSION_ID when set (session_source "env"), else the
 // SessionStart marker's (session_source "marker"). A review line has session_id only.
+// session_id and session_source always name the session that ran this script: a session_id
+// given in the JSON input is ignored (the session fields are written last and win).
 // Writes to <project>/.agent-team/logs/<kind>s.jsonl (pauses.jsonl for pause), adding ts and guidance_version.
 // note, escalation and merge lines get `milestone` from the linked task's delegation card when the JSON has none
 // (the task is the `task` or `task_id` field); a merge also takes it from a `base` of milestone/<name>.
@@ -228,6 +230,7 @@ function main(argv) {
         ...(drift ? { card_drift: drift } : {}),
         ...(task.id ? {} : { uncarded: true }),
         source: 'director',
+        // Last on purpose: a session_id in the JSON input is ignored.
         ...session,
       });
     } else {
@@ -280,6 +283,7 @@ function main(argv) {
     const m = typeof id === 'string' ? records.milestoneFor({}, id, t && typeof t === 'object' ? t : null) : undefined;
     if (m) data.milestone = m;
   }
+  // The session fields come last on purpose: a session_id in the JSON input is ignored.
   const record = { ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data, ...session };
   lib.appendJsonl({}, `${kind}s.jsonl`, record);
   console.log(`logged ${kind} to .agent-team/logs/${kind}s.jsonl`);

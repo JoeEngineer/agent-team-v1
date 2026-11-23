@@ -59,6 +59,16 @@ test('log-event: an empty CLAUDE_CODE_SESSION_ID counts as unset and the marker 
   eq(n[0].session_source, 'marker', 'session source');
 });
 
+test('log-event: a session_id given in the JSON is ignored; the env session (B) is written', () => {
+  const p = projectWithMarker('sess-A');
+  const r = logEvent(p, 'note', { text: 'hi', session_id: 'sess-X', session_source: 'marker' }, { CLAUDE_CODE_SESSION_ID: 'sess-B' });
+  eq(r.status, 0, r.stderr);
+  const n = readLog(p, 'notes.jsonl');
+  eq(n.length, 1, 'one note line: the precondition holds');
+  eq(n[0].session_id, 'sess-B', 'session from the env, not the JSON');
+  eq(n[0].session_source, 'env', 'session source from the env, not the JSON');
+});
+
 test('log-event: no marker and no env var gives a null session id with source marker', () => {
   const p = tmpProject();
   const r = logEvent(p, 'note', { text: 'hi' });
@@ -96,4 +106,22 @@ test('log-event: a review line takes the env session (B) over the marker (A)', (
   const v = readLog(p, 'reviews.jsonl');
   eq(v.length, 1, 'one review line: the precondition holds');
   eq(v[0].session_id, 'sess-B', 'session from the env');
+});
+
+test('log-event: a review line with no env var takes the marker (A)', () => {
+  const p = projectWithMarker('sess-A');
+  const r = logEvent(p, 'review', { card: 'TASK id=X-2 type=review reviewed_task=X-1 pr=9 attempt=1', verdict: 'approve', agent_id: 'r2' });
+  eq(r.status, 0, r.stderr);
+  const v = readLog(p, 'reviews.jsonl');
+  eq(v.length, 1, 'one review line: the precondition holds');
+  eq(v[0].session_id, 'sess-A', 'session from the marker');
+});
+
+test('log-event: a review line with an empty CLAUDE_CODE_SESSION_ID takes the marker (A)', () => {
+  const p = projectWithMarker('sess-A');
+  const r = logEvent(p, 'review', { card: 'TASK id=X-2 type=review reviewed_task=X-1 pr=9 attempt=1', verdict: 'approve', agent_id: 'r3' }, { CLAUDE_CODE_SESSION_ID: '' });
+  eq(r.status, 0, r.stderr);
+  const v = readLog(p, 'reviews.jsonl');
+  eq(v.length, 1, 'one review line: the precondition holds');
+  eq(v[0].session_id, 'sess-A', 'session from the marker');
 });
