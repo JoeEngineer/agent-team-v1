@@ -126,6 +126,24 @@ test('both jobs restore the four Trivy files from the base checkout on pull_requ
   }
 });
 
+test('trivy-fs keeps the PR copies of the four config files in .scan-pr-config so the secret scan reads them', () => {
+  const step = stepNamed('trivy-fs', RESTORE);
+  const mk = step.indexOf('mkdir .scan-pr-config');
+  const keep = step.indexOf('cp "$f" ".scan-pr-config/$f"');
+  const rm = step.indexOf('rm -f "$f"');
+  assert(mk >= 0 && mk < step.indexOf('for f in'), 'mkdir .scan-pr-config (fails if the PR has the path) must precede the loop');
+  assert(keep >= 0 && keep < rm, 'the PR copy must be copied aside before it is removed');
+  assert(step.indexOf('rm -rf .scan-pr-config') < 0, '.scan-pr-config must stay for the scan');
+  const scan = stepNamed('trivy-fs', 'Trivy file system scan');
+  assert(/scan-ref: \.\n/.test(scan) && /scanners: vuln,misconfig,secret/.test(scan) && /exit-code: '1'/.test(scan), 'fs scan must cover the workspace with secret and fail on findings');
+});
+
+test('push runs are limited to main; milestone/** is not a push trigger', () => {
+  const on = wf.split(/^permissions:/m)[0];
+  assert(/^  push:\n    branches:\n      - main\n/m.test(on), 'push must list main');
+  assert(!/milestone\/\*\*'?\n/.test(on.replace(/^#.*$/gm, '')), 'milestone/** is back in the push trigger');
+});
+
 test('the base SHA appears only in with: ref, never in a run script, and no git fetch is used', () => {
   const lines = wf.split('\n').filter((l) => l.includes('base.sha'));
   assert(lines.length === 2, 'expected base.sha in exactly the two base checkouts, got ' + lines.length);

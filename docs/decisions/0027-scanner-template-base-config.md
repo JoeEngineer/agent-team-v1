@@ -75,5 +75,30 @@ job as unscanned.
 ## Consequences
 
 - Changing the scan config takes two steps: merge the change, then it applies.
-- The security reviewer reports `scan: none` only when the tree at `head_sha`
-  has no Dockerfile anywhere, so a skipped `trivy-image` is safe for it.
+- With no Dockerfile at the root, a skipped `trivy-image` plus a passed
+  `trivy-fs` reads `green` in the 0024 scan table (row 7, nothing to scan for
+  some jobs, the others passed). `none` is only "the CI config has no scanner
+  jobs". A skipped `trivy-image` is safe for the reviewer only when the tree at
+  `head_sha` has no Dockerfile anywhere.
+
+## Amendment (FU-19)
+
+Close reviews of the milestone PR found two gaps; the template now does this:
+
+- **The PR's own config files are secret-scanned.** In `trivy-fs` the restore
+  step first copies the PR's version of each of the four files to
+  `.scan-pr-config` (created with `mkdir`, which fails the job if the PR already
+  has that path), then restores the base's. The `.scan-pr-config` folder stays in
+  the workspace, so the one fs scan (base config, `secret` included,
+  `exit-code: '1'`) reads those copies and fails on a secret in them. The copies
+  are not config. Base-config protections from item 1 are unchanged.
+- **Push runs use trusted config.** `milestone/**` is removed from the `push`
+  trigger; `main` pushes are still scanned. Chosen over running push with
+  `main`'s config because a milestone push run used the branch's own config under
+  the same job names as the PR run, and PRs into and out of the milestone branch
+  already get the base config. Cost: no scan on a plain push to a milestone
+  branch until its PR is open.
+- Item 1's "On `push` the tree's own files are used" now applies to `main` only.
+- Residuals are unchanged. Not confirmed live: that Trivy scans dotfiles under
+  `.scan-pr-config` (it does not skip them by default in the docs read), and a
+  base `trivy.yaml` with `skip-dirs` or `skip-files` could still skip that folder.
