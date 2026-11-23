@@ -66,6 +66,7 @@ const stepNamed = (job, name) => {
 };
 const BASE_CHECKOUT = 'Check out base branch config';
 const RESTORE = 'Use base-branch scanner config';
+const GUARD = 'Refuse a .scan-base from the PR';
 const PR_ONLY = "        if: github.event_name == 'pull_request'\n";
 const usesLine = (step) => (step.match(/^ {8}uses: .*$/m) || [''])[0];
 
@@ -85,6 +86,25 @@ test('both jobs check out the base SHA a second time, pinned like the first, wit
   }
 });
 
+// A PR that commits .scan-base (say a symlink to .) would make the second
+// checkout reuse the workspace repo and check the base out over the PR tree.
+test('both jobs fail closed on a .scan-base from the PR, in the step right before the base checkout', () => {
+  for (const job of ['trivy-fs', 'trivy-image']) {
+    const g = indexOfStep(job, GUARD);
+    const b = indexOfStep(job, BASE_CHECKOUT);
+    assert(g >= 0, job + ' lacks the step: ' + GUARD);
+    assert(b >= 0 && g === b - 1, job + ': the .scan-base guard must be the step immediately before the base checkout (guard ' + g + ', checkout ' + b + ')');
+    const step = stepsOf(job)[g];
+    assert(step.includes(PR_ONLY), job + ': the .scan-base guard is not run on pull_request');
+    const run = step.split(/^ {8}run: \|\n/m)[1];
+    assert(run !== undefined, job + ': the .scan-base guard has no run: | script');
+    // -e misses a dangling symlink, so -L is needed too; the branch must exit non-zero, not remove the path.
+    assert(/^ {10}if \[ -e \.scan-base \] \|\| \[ -L \.scan-base \]; then\n {12}echo "::error::[^"\n]+"\n {12}exit 1\n {10}fi\n?$/.test(run),
+      job + ': the guard must be exactly: if [ -e .scan-base ] || [ -L .scan-base ]; then echo "::error::..."; exit 1; fi, got:\n' + run);
+    assert(!/rm |continue-on-error|\|\| true/.test(step), job + ': the guard must fail the job, not remove the path or swallow the exit');
+  }
+});
+
 test('both jobs restore the four Trivy files from the base checkout on pull_request, delete it, all before Trivy', () => {
   for (const job of ['trivy-fs', 'trivy-image']) {
     const step = stepNamed(job, RESTORE);
@@ -101,8 +121,8 @@ test('both jobs restore the four Trivy files from the base checkout on pull_requ
     assert(del > cp, job + ': the base checkout is not deleted after the copy');
     assert(step.indexOf('done', cp) < del, job + ': the base checkout must be deleted after the loop');
     const trivy = stepsOf(job).findIndex((x) => x.includes('aquasecurity/trivy-action'));
-    const order = [indexOfStep(job, 'Check out'), indexOfStep(job, BASE_CHECKOUT), indexOfStep(job, RESTORE), trivy];
-    assert(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), job + ': order must be checkout, base checkout, restore, Trivy: ' + order);
+    const order = [indexOfStep(job, 'Check out'), indexOfStep(job, GUARD), indexOfStep(job, BASE_CHECKOUT), indexOfStep(job, RESTORE), trivy];
+    assert(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), job + ': order must be checkout, .scan-base guard, base checkout, restore, Trivy: ' + order);
   }
 });
 
@@ -119,7 +139,7 @@ test('the base SHA appears only in with: ref, never in a run script, and no git 
       assert(!run.includes('${{'), job + ': inline expression in run of step ' + st.split('\n')[0]);
     }
   }
-  assert(runs >= 4, 'expected at least four run steps, parsed ' + runs);
+  assert(runs === 6, 'expected six run steps (guard and restore in two jobs, detect, build), parsed ' + runs);
   assert(!/git (fetch|show|cat-file)|BASE_SHA/.test(wf), 'a token-less git fetch or BASE_SHA remains');
 });
 
@@ -131,6 +151,21 @@ test('trivy-image is skipped by a job-level if when there is no Dockerfile; dete
   assert(/outputs:\n {6}found: \$\{\{ steps\.dockerfile\.outputs\.found \}\}/.test(d), 'detect job lacks the found output');
   assert(d.includes('[ -f Dockerfile ]'), 'detect job does not look for a root Dockerfile');
   assert(!/::notice::|continue-on-error/.test(wf), 'a passing no-op path remains');
+});
+
+test('team-init step 6 and decision 0027 state the limits of the base-config restore', () => {
+  const step6 = (read('skills/team-init/SKILL.md').match(/^6\. Offer the optional security scan.*$/m) || [''])[0];
+  assert(step6, 'team-init step 6 not found');
+  for (const w of ['shows as skipped, not passed', 'from the base branch', 'base `trivy.yaml` names', 'edit the workflow itself', 'required workflow'])
+    assert(step6.includes(w), 'team-init step 6 lacks: ' + w);
+  const d = read('docs/decisions/0027-scanner-template-base-config.md');
+  const assumptions = (d.split(/^## Assumptions\n/m)[1] || '').split(/^## /m)[0];
+  for (const w of ['except for files a\n  base `trivy.yaml` names', 'A skipped required job does not block a merge', 'Inline `trivy:ignore` comments are not covered',
+    'can\n  still edit the workflow itself', 'unparsed and has had no live run'])
+    assert(assumptions.includes(w), '0027 assumptions lack: ' + w.replace(/\n\s*/g, ' '));
+  assert(!/cannot weaken/.test(wf), 'the template header still claims a PR cannot weaken its scan');
+  for (const w of ['editing this\n# workflow', 'trivy:ignore', 'Dockerfile (trivy-image is then skipped'])
+    assert(wf.split(/^name: /m)[0].includes(w), 'template header lacks the gap: ' + w.replace(/\n# /g, ' '));
 });
 
 test('STATUS template has the xlarge grant section and second-review line', () => {
