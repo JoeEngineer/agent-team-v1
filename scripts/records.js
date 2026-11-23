@@ -169,6 +169,22 @@ function withReview(known, review) {
   return row;
 }
 
+// A verdict that contradicts the review's own top-level severity: a rejection
+// with nothing worse than minor, or an approval with a major or critical.
+function verdictConflict(review) {
+  if (!review || typeof review !== 'object') return false;
+  const { verdict, severity } = review;
+  if (verdict === 'changes_requested' || verdict === 'reject') return severity === 'none' || severity === 'minor';
+  if (verdict === 'approve') return severity === 'major' || severity === 'critical';
+  return false;
+}
+
+const VERDICT_CONFLICT_NUDGE = 'agent-team: your review-json has a verdict that contradicts its severity: ' +
+  'give a `major` with its exploit path, or an `approve`.';
+// The bridge path has no stop hook: the text goes to the Director, not the reviewer.
+const VERDICT_CONFLICT_DIRECTOR_NUDGE = "agent-team: the bridge review's verdict contradicts its severity: " +
+  'ask it for a `major` with its exploit path, or an `approve`.';
+
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
 function logReview(input, record, review, tool = 'claude') {
@@ -198,6 +214,7 @@ function logReview(input, record, review, tool = 'claude') {
     reviewer_tier: record.tier === undefined ? null : record.tier,
   };
   const row = withReview(known, review);
+  if (verdictConflict(review)) row.verdict_conflict = true;
   if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
   lib.appendJsonl(input, 'reviews.jsonl', row);
   return true;
@@ -222,13 +239,15 @@ function findDelegation(input, predicate) {
 // only the fields that changed, or null.
 function cardDrift(input, task, kind) {
   if (kind === 'followup' || !task || !task.id) return null;
+  // A review card carries the task's id by convention and is never the baseline.
+  if (lib.REVIEW_TASK_TYPES.includes(task.type)) return null;
   let first = null;
   try {
     for (const line of fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').split(/\r?\n/)) {
       if (!line.trim()) continue;
       let rec;
       try { rec = JSON.parse(line); } catch { continue; }
-      if (rec && rec.kind !== 'followup' && rec.task && rec.task.id === task.id && (rec.task.type || rec.task.difficulty)) { first = rec.task; break; }
+      if (rec && rec.kind !== 'followup' && rec.task && rec.task.id === task.id && !lib.REVIEW_TASK_TYPES.includes(rec.task.type) && (rec.task.type || rec.task.difficulty)) { first = rec.task; break; }
     }
   } catch { /* no delegations yet */ }
   if (!first) return null;
@@ -705,7 +724,8 @@ function resolveQueuedMerges(input, { dryRun = false, run, limit = MAX_RESOLVE_P
 }
 
 // Why an attempt after the first exists. A followup is not an attempt (kind=followup).
-const ATTEMPT_REASONS = ['sendback', 'escalation', 'fold-in', 'retry'];
+const ATTEMPT_REASONS = ['sendback', 'escalation', 'fold-in', 'retry', 'confirm'];
+const KNOWN_FLAGS = ['security-sensitive', 'above-table'];
 const known = (v) => v != null && v !== '' && !['inherited', 'unknown', 'default'].includes(String(v));
 
 // Compare a task card's requested tier= and effort= with the settings that run:
@@ -728,10 +748,21 @@ function cardSettings(task, ran, kind) {
   if (task.reason && !ATTEMPT_REASONS.includes(task.reason)) {
     messages.push(`agent-team: task ${task.id || '?'} has reason=${task.reason}; use one of ${ATTEMPT_REASONS.join(', ')}.`);
   }
-  if (task.reason === 'escalation' && kind === 'resume' && !fields.tier_mismatch && !fields.effort_mismatch) {
+  const isReview = lib.REVIEW_TASK_TYPES.includes(task.type);
+  if (task.reason === 'confirm' && !isReview) {
+    messages.push(`agent-team: task ${task.id || '?'} has reason=confirm on a ${task.type || 'card without a type'}; confirm is for review cards.`);
+  }
+  messages.push(...flagMessages(task));
+  if (task.reason === 'escalation' && kind === 'resume' && !isReview && !fields.tier_mismatch && !fields.effort_mismatch) {
     messages.push(`agent-team: task ${task.id || '?'} is an escalation sent as a resume, which keeps the original model and effort. Spawn a new agent with the new settings, and put them on the card (tier=, effort=).`);
   }
   return { fields, messages };
+}
+
+// One warning for the unknown flags= on a card. They stay on the card.
+function flagMessages(task) {
+  const unknown = (Array.isArray(task && task.flags) ? task.flags : []).filter((f) => !KNOWN_FLAGS.includes(f));
+  return unknown.length ? [`agent-team: task ${task.id || '?'} has unknown flags=${unknown.join(',')}; known flags: ${KNOWN_FLAGS.join(', ')}.`] : [];
 }
 
 // A role-agent delegation without a TASK line is logged without task fields,
@@ -776,5 +807,5 @@ module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
-  ATTEMPT_REASONS, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
+  ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

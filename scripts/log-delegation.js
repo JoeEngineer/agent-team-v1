@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -206,6 +206,9 @@ function onPostBridge(input) {
     if (task.id && !review._unparsed) logReview(input, record, review);
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
+  // No stop hook runs on the bridge path, so the Director gets the nudge.
+  const messages = [...flagMessages(task), ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_DIRECTOR_NUDGE] : [])];
+  return messages.length ? messages.join('\n') : undefined;
 }
 
 // SendMessage to an existing agent with a task card is a new attempt of that
@@ -397,6 +400,13 @@ function onSubagentStop(input) {
     const block = isReview ? 'review-json' : 'result-json';
     return `agent-team: your reply ended without its \`${block}\` block. End your reply with your \`${block}\` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.`;
   }
+  // A review whose verdict contradicts its severity gets one nudge per turn.
+  // The missing-block nudge above returns first, and the two can't both apply:
+  // a parsed review means the fence was there. So a turn draws at most one nudge,
+  // whatever else its review-json lacks (tests/fu3-logger.test.js pins this).
+  if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && verdictConflict(record.review)) {
+    return VERDICT_CONFLICT_NUDGE;
+  }
 }
 
 // Task card for a completion: the delegation's, with the attempt taken from
@@ -480,7 +490,7 @@ function main() {
   if (SUBAGENT_TOOLS.has(tool)) return emit(event, onPostSubagent(input));
   if (tool === SESSION_START) return onPostSession(input);
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
-  if (isBridge(tool)) return onPostBridge(input);
+  if (isBridge(tool)) return emit(event, onPostBridge(input));
   // A merge-log warning (e.g. a cancel the forge didn't confirm) goes to the Director.
   if (isShell(tool)) return emit(event, logMerges(input, 'claude'));
   if (tool === 'SendMessage') return emit(event, onPostSendMessage(input));
