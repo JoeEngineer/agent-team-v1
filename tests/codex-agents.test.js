@@ -97,7 +97,7 @@ test('xlarge enabled on the tier gives 20 files', () => {
   const files = tomls(out);
   eq(files.length, 20);
   assert(files.includes('scout-xlarge.toml'));
-  eq(parseToml(fs.readFileSync(path.join(out, 'scout-xlarge.toml'), 'utf8')).model, 'gpt-6-astra');
+  eq(parseToml(fs.readFileSync(path.join(out, 'scout-xlarge.toml'), 'utf8')).model, 'gpt-6.2-astra');
 });
 
 test('credits entry without explicit enabled is skipped; with enabled: true it is written', () => {

@@ -112,8 +112,8 @@ Some environments don't have Claude at all, or have only some OpenAI models. So 
 |---|---|---|---|---|
 | small | `haiku` | `gpt-6-luna` ("fast and affordable") | yes | `gpt-reserve` is also listed as "fast and affordable agentic coding". Worth comparing. |
 | medium | `sonnet` | `gpt-6.1-terra` | yes | Below Sol in general ability, reportedly better than Sol at writing. A good fit for `docs`, PR descriptions and decision records. |
-| large | `opus` | `gpt-6.1-sol` ("workhorse") | yes | **Top of the escalation ladder.** |
-| xlarge | `fable` | `gpt-6-astra` ("frontier") | **no** | Opt-in per install, and per task (see the rule below). Installs without access to these models leave the entries out. |
+| large | `opus` | `gpt-6.2-sol` ("workhorse") | yes | **Top of the escalation ladder.** |
+| xlarge | `fable` | `gpt-6.2-astra` ("frontier") | **no** | Opt-in per install, and per task (see the rule below). Installs without access to these models leave the entries out. |
 
 **The tiers aren't equal across families.** Codex `large` (Sol) is a step below the top of its family, while Claude `large` (Opus) is the top of what most plans cover. Expect Codex installs to escalate sooner, and to need `high` effort more often. The Coach should compare results **per model**, using the `model` field Codex reports, not per tier name across tools.
 
@@ -128,15 +128,15 @@ Some environments don't have Claude at all, or have only some OpenAI models. So 
 # Both tools available, with access to the top models
 [tiers.small]   claude = "haiku"   codex = "gpt-6-luna"
 [tiers.medium]  claude = "sonnet"  codex = "gpt-6.1-terra"
-[tiers.large]   claude = "opus"    codex = "gpt-6.1-sol"
+[tiers.large]   claude = "opus"    codex = "gpt-6.2-sol"
 [tiers.xlarge]  enabled = false
   claude = { model = "fable", billing = "credits" }   # API-rate usage credits on some plans
-  codex  = { model = "gpt-6-astra" }                  # only where Astra is available
+  codex  = { model = "gpt-6.2-astra" }                  # only where Astra is available
 
 # Codex only, without Astra: no claude keys, no xlarge
 [tiers.small]   codex = "gpt-6-luna"
 [tiers.medium]  codex = "gpt-6.1-terra"
-[tiers.large]   codex = "gpt-6.1-sol"
+[tiers.large]   codex = "gpt-6.2-sol"
 ```
 
 The routing table names tiers only. Each package resolves them through this map, so the core routing file stays shared. A tool with no entries in the map is simply never routed to. If a mapped model is missing at run time (models change, or an environment doesn't offer it), the Director falls back one tier down, logs `"tier_fallback"`, and tells the user. It never falls back up.

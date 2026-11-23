@@ -27,13 +27,13 @@ test('shorthand and object entries normalise the same', () => {
 });
 
 test('default models resolve for each tool and standard tier', () => {
-  const want = { claude: ['haiku', 'sonnet', 'opus'], codex: ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.1-sol'] };
+  const want = { claude: ['haiku', 'sonnet', 'opus'], codex: ['gpt-6-luna', 'gpt-6.1-terra', 'gpt-6.2-sol'] };
   for (const tool of Object.keys(want)) {
     ['small', 'medium', 'large'].forEach((t, i) => eq(M.autoTier(DEF, tool, t).model, want[tool][i]));
   }
   const x = M.entry(DEF, 'claude', 'xlarge');
   eq([x.model, x.billing, x.enabled, x.auto], ['fable', 'credits', false, false]);
-  eq(M.entry(DEF, 'codex', 'xlarge').model, 'gpt-6-astra');
+  eq(M.entry(DEF, 'codex', 'xlarge').model, 'gpt-6.2-astra');
 });
 
 test('xlarge never auto, even when enabled', () => {
@@ -61,7 +61,7 @@ test('disabled or credits standard tiers are not auto and are skipped', () => {
 
 test('ladderUp(large) is null on defaults', () => {
   eq(M.ladderUp(DEF, 'claude', 'large'), null);
-  eq(M.ladderUp(DEF, 'codex', 'medium').model, 'gpt-6.1-sol');
+  eq(M.ladderUp(DEF, 'codex', 'medium').model, 'gpt-6.2-sol');
 });
 
 test('fallbackDown goes one lower, null at small, never higher', () => {
@@ -162,7 +162,7 @@ test('CLI show reports tiers and differs_from_default', () => {
 test('CLI resolve succeeds and fails with exit 1', () => {
   let r = cli(['resolve', 'large', '--tool', 'codex']);
   eq(r.status, 0);
-  eq(JSON.parse(r.stdout).model, 'gpt-6.1-sol');
+  eq(JSON.parse(r.stdout).model, 'gpt-6.2-sol');
   eq(JSON.parse(cli(['resolve', 'small']).stdout).model, 'haiku');
   r = cli(['resolve', 'huge']);
   eq(r.status, 1);
@@ -186,7 +186,7 @@ test('CLI up/down walk the ladder for claude and codex', () => {
   eq(m(['up', 'small']), 'sonnet');
   eq(m(['up', 'medium']), 'opus');
   eq(m(['up', 'small', '--tool', 'codex']), 'gpt-6.1-terra');
-  eq(m(['up', 'medium', '--tool', 'codex']), 'gpt-6.1-sol');
+  eq(m(['up', 'medium', '--tool', 'codex']), 'gpt-6.2-sol');
   eq(m(['down', 'large']), 'sonnet');
   eq(m(['down', 'medium']), 'haiku');
   eq(m(['down', 'large', '--tool', 'codex']), 'gpt-6.1-terra');
@@ -213,7 +213,7 @@ test('CLI up/down exit 1 when nothing is eligible; xlarge, disabled, credits ski
   map.medium.codex = { model: 'gpt-6.1-terra', billing: 'credits' };
   fs.writeFileSync(f, JSON.stringify(map));
   eq(JSON.parse(cli(['up', 'small'], f).stdout).model, 'opus');
-  eq(JSON.parse(cli(['up', 'small', '--tool', 'codex'], f).stdout).model, 'gpt-6.1-sol');
+  eq(JSON.parse(cli(['up', 'small', '--tool', 'codex'], f).stdout).model, 'gpt-6.2-sol');
   eq(JSON.parse(cli(['down', 'large'], f).stdout).model, 'haiku');
   eq(JSON.parse(cli(['down', 'large', '--tool', 'codex'], f).stdout).model, 'gpt-6-luna');
 });
