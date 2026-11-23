@@ -19,8 +19,7 @@ function base(input, tool = 'claude') {
 }
 
 function startFile(input) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = lib.safeMkdir(path.join(lib.logPath(input), '.pending'));
   return path.join(dir, `${String(input.tool_use_id || 'unknown').replace(/[^\w-]/g, '_')}.json`);
 }
 
@@ -36,12 +35,11 @@ function takeDuration(input) {
 }
 
 // Create a marker file once; false if it already exists. Used to log an event
-// once when several hooks see it.
+// once when several hooks see it. A refused path (a linked folder, see
+// lib.safeWriteNew) claims nothing, so nothing is logged.
 function claimOnce(input, key) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
   try {
-    fs.writeFileSync(path.join(dir, String(key).replace(/[^\w-]/g, '_')), '', { flag: 'wx' });
+    lib.safeWriteNew(path.join(lib.logPath(input), '.pending', String(key).replace(/[^\w-]/g, '_')), '');
     return true;
   } catch {
     return false;
@@ -51,22 +49,23 @@ function claimOnce(input, key) {
 // Best-effort sweep of old .pending entries: dedupe markers (stop-*, resume-*, review-*)
 // and leaked start files (toolu_*.json) older than maxAgeMs. Looks at no more
 // than `cap` entries per run, skips anything else (dotfiles, other tasks'
-// files) and swallows every error.
+// files) and swallows every error. A linked .pending is not listed, so nothing
+// in the folder it points at is deleted (lib.safeListDir).
 const PRUNABLE = /^(stop-|resume-|review-|toolu_.*\.json$)/;
 function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
   try {
     const dir = path.join(lib.logPath(input), '.pending');
     const now = Date.now();
     let seen = 0;
-    for (const name of fs.readdirSync(dir)) {
+    for (const name of lib.safeListDir(dir) || []) {
       if (name.startsWith('.') || !PRUNABLE.test(name)) continue;
       if (++seen > cap) break;
       try {
         const f = path.join(dir, name);
-        if (now - fs.statSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f);
+        if (now - fs.lstatSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f);
       } catch { /* best effort */ }
     }
-  } catch { /* no .pending yet */ }
+  } catch { /* no .pending yet, or refused */ }
 }
 
 const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
@@ -85,13 +84,14 @@ function readJsonl(file) {
 // Serialize writes of one durable event. Unlike claimOnce, a lock is released
 // after writing, so a process that dies before appending cannot consume the
 // event forever. Recover a dead process's lock on a later hook/reconcile run.
+// The lock file is created exclusively in real folders (lib.safeOpenNew); a
+// linked folder throws, and the caller writes nothing.
 function withRecordLock(input, id, fn) {
-  const dir = path.join(lib.logDir(input), '.pending', 'record-locks');
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = path.join(lib.logPath(input), '.pending', 'record-locks');
   const file = path.join(dir, `${shortHash(id)}.lock`);
   let fd;
   try {
-    try { fd = fs.openSync(file, 'wx'); } catch (err) {
+    try { fd = lib.safeOpenNew(file); } catch (err) {
       if (err.code !== 'EEXIST') throw err;
       let dead = false;
       try {
@@ -102,11 +102,11 @@ function withRecordLock(input, id, fn) {
       } catch {
         // The owner may still be writing its pid. Only reap a torn lock after
         // a generous grace period, never while another fresh hook is starting.
-        dead = Date.now() - fs.statSync(file).mtimeMs > 5 * 60 * 1000;
+        dead = Date.now() - fs.lstatSync(file).mtimeMs > 5 * 60 * 1000;
       }
       if (!dead) return false;
       fs.unlinkSync(file);
-      try { fd = fs.openSync(file, 'wx'); } catch (e) {
+      try { fd = lib.safeOpenNew(file); } catch (e) {
         if (e.code === 'EEXIST') return false;
         throw e;
       }
@@ -124,7 +124,7 @@ function withRecordLock(input, id, fn) {
 // The JSONL record, rather than an expiring marker, is the durable receipt.
 function appendOnce(input, file, idField, record) {
   return withRecordLock(input, `${file}:${record[idField]}`, () => {
-    if (readJsonl(path.join(lib.logDir(input), file)).some((r) => r[idField] === record[idField])) return false;
+    if (readJsonl(path.join(lib.logPath(input), file)).some((r) => r[idField] === record[idField])) return false;
     lib.appendJsonl(input, file, record);
     return true;
   });

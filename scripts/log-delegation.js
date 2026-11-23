@@ -72,7 +72,7 @@ function onPre(input) {
   const tool = input.tool_name || '';
   if (SUBAGENT_TOOLS.has(tool) || tool === SESSION_START || isBridge(tool)) closeOpenPause(input, 'delegation');
   if (!input.tool_use_id) return;
-  fs.writeFileSync(startFile(input), JSON.stringify({ started: Date.now() }));
+  lib.safeReplace(startFile(input), JSON.stringify({ started: Date.now() }));
 }
 
 function resolveRouting(input, ti) {

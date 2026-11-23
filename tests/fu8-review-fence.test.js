@@ -330,7 +330,8 @@ function reconcileSetup(report, { agent = 'agent-team:reviewer', type = 'review'
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'agent-fu8.jsonl');
   fs.writeFileSync(file, [
-    { type: 'user', timestamp: '2026-10-30T10:00:00.000Z', message: { role: 'user', content: `TASK id=RC-1 type=${type} difficulty=easy milestone=rc attempt=1 pr=9` } },
+    // cwd: reconcile reads only transcripts recorded in this project (FU-18).
+    { type: 'user', cwd: proj, timestamp: '2026-10-30T10:00:00.000Z', message: { role: 'user', content: `TASK id=RC-1 type=${type} difficulty=easy milestone=rc attempt=1 pr=9` } },
     { type: 'assistant', timestamp: '2026-10-30T10:00:05.000Z', message: { id: 'm0', model: 'claude-sonnet-5-5', usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: report } }] } },
   ].map((l) => JSON.stringify(l)).join('\n') + '\n');
   fs.writeFileSync(file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ agentType: agent }));
