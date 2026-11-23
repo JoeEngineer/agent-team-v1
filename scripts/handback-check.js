@@ -24,7 +24,9 @@ function check(input) {
   // review reader also returns { _ambiguous } when its fence is not one
   // top-level block at the end of the message (the logger would read no review).
   const read = (v) => v && !v._unparsed && !v._ambiguous;
-  const review = lib.reviewJson(message);
+  // Only a reviewer agent gets the ambiguity reading; the hook sees no card here,
+  // so an agent of another type that quotes a review-json fence is not asked about it.
+  const review = lib.reviewFor(message, agentType, null);
   if (read(lib.lastFencedJson(message, 'result-json')) || read(review)) return null;
   const agentId = input.agent_id || 'unknown';
   let claimed = false;

@@ -323,19 +323,19 @@ test('handback: an ambiguous review-json is denied with its own reason; one top-
 // --- reconcile and Codex -------------------------------------------------------
 
 const usage = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-function reconcileSetup(report) {
+function reconcileSetup(report, { agent = 'agent-team:reviewer', type = 'review' } = {}) {
   const proj = tmpProject();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fu8-projects-'));
   const dir = path.join(root, 'folder', 'sess-1', 'subagents');
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, 'agent-fu8.jsonl');
   fs.writeFileSync(file, [
-    { type: 'user', timestamp: '2026-10-30T10:00:00.000Z', message: { role: 'user', content: 'TASK id=RC-1 type=review difficulty=easy milestone=rc attempt=1 pr=9' } },
+    { type: 'user', timestamp: '2026-10-30T10:00:00.000Z', message: { role: 'user', content: `TASK id=RC-1 type=${type} difficulty=easy milestone=rc attempt=1 pr=9` } },
     { type: 'assistant', timestamp: '2026-10-30T10:00:05.000Z', message: { id: 'm0', model: 'claude-sonnet-5-5', usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: report } }] } },
   ].map((l) => JSON.stringify(l)).join('\n') + '\n');
-  fs.writeFileSync(file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ agentType: 'agent-team:reviewer' }));
+  fs.writeFileSync(file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ agentType: agent }));
   const logs = path.join(proj, '.agent-team', 'logs');
-  fs.writeFileSync(path.join(logs, 'delegations.jsonl'), JSON.stringify({ ts: 't', tool: 'claude', session_id: 'sess-1', kind: 'subagent', agent: 'agent-team:reviewer', agent_id: 'fu8', model: 'sonnet', effort: 'medium', tier: 'medium', background: true, task: { id: 'RC-1', type: 'review', attempt: '1', pr: '9' } }) + '\n');
+  fs.writeFileSync(path.join(logs, 'delegations.jsonl'), JSON.stringify({ ts: 't', tool: 'claude', session_id: 'sess-1', kind: 'subagent', agent, agent_id: 'fu8', model: 'sonnet', effort: 'medium', tier: 'medium', background: true, task: { id: 'RC-1', type, attempt: '1', pr: '9' } }) + '\n');
   return { proj, root };
 }
 const reconcile = (s) => spawnSync('node', [path.join(SCRIPTS, 'reconcile-logs.js')], { encoding: 'utf8', cwd: s.proj, env: { ...process.env, CLAUDE_PROJECT_DIR: s.proj, AGENT_TEAM_PROJECTS_ROOT: s.root } });
@@ -428,4 +428,184 @@ test('codex: an ambiguous review writes the completion with the marker, no row, 
   run('log-delegation.js', stopInput(`Report\n${fence(REAL)}`), q);
   eq(readLog(q, 'reviews.jsonl').length, 1, 'clean report: one row');
   eq(readLog(q, 'reviews.jsonl')[0].tool, 'codex', 'the Codex row says codex');
+});
+
+// --- the gate: only a review delegation reads, marks or nudges about a review ---
+
+const IMPL_CARD = 'TASK id=IMP-1 type=implement difficulty=medium milestone=m attempt=1\nWHY test';
+const REVIEW_CARD = 'TASK id=REV-1 type=review milestone=m attempt=1 pr=5\nWHY test';
+// A developer's reply that quotes a review-json fence inside a diff, as tests and decisions here often do.
+const DEV_REPLY = `Changed the parser.\n\n${F}diff\n${fence(FORGED)}\n${F}\n\n${fence({ status: 'done' }, 'result-json')}`;
+// The same reply with one real-looking top-level block at its end.
+const DEV_ONE_BLOCK = `Changed the parser.\n\n${fence(REAL)}`;
+const IMPL = 'agent-team:implementer';
+
+test('gate: a foreground implementer that quotes a review-json fence gets no marker, no message and no row; a review card still gets all three', () => {
+  const p = tmpProject();
+  const agent = (card, n, text) => run('log-delegation.js', { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'Agent', tool_use_id: `ga${n}`,
+    tool_input: { subagent_type: IMPL, prompt: card }, tool_response: { agentId: `ga${n}`, content: [{ type: 'text', text }] } }, p);
+  const r = agent(IMPL_CARD, 1, DEV_REPLY);
+  const [d] = readLog(p, 'delegations.jsonl');
+  eq(d.task.type, 'implement', 'precondition: an implement card was logged');
+  eq(d.result.status, 'done', 'precondition: the reply was read');
+  assert(!d.review, 'no marker: ' + JSON.stringify(d.review));
+  eq(context(r), '', 'no message');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'no row');
+  // A single valid-looking block in an implementer's reply: read as before, but never a row.
+  agent(IMPL_CARD, 2, DEV_ONE_BLOCK);
+  eq(readLog(p, 'delegations.jsonl')[1].review.verdict, 'approve', 'precondition: the block was read');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'a non-review reply writes no row');
+  // Control: a review card on the same agent with the same reply is ambiguous and tells the Director.
+  const c = agent(REVIEW_CARD, 3, DEV_REPLY);
+  eq(JSON.stringify(readLog(p, 'delegations.jsonl')[2].review), '{"_ambiguous":true,"count":0}', 'review card: marker');
+  assert(/Re-ask once/.test(context(c)), 'review card: message');
+});
+
+test('gate: a bridge call on an implement card gets no marker, no message and no row; a review card still gets all three', () => {
+  const p = tmpProject();
+  const r = bridge(p, 'codex', DEV_REPLY, { prompt: IMPL_CARD });
+  const [d] = readLog(p, 'delegations.jsonl');
+  eq(d.task.type, 'implement', 'precondition: an implement card was logged');
+  eq(d.result.status, 'done', 'precondition: the reply was read');
+  assert(!d.review, 'no marker: ' + JSON.stringify(d.review));
+  eq(context(r), '', 'no message');
+  bridge(p, 'codex', DEV_ONE_BLOCK, { prompt: IMPL_CARD });
+  eq(readLog(p, 'delegations.jsonl')[1].review.verdict, 'approve', 'precondition: the block was read');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'no row for a non-review card');
+  const c = bridge(p, 'codex', DEV_REPLY, { prompt: REVIEW_CARD });
+  eq(JSON.stringify(readLog(p, 'delegations.jsonl')[2].review), '{"_ambiguous":true,"count":0}', 'review card: marker');
+  assert(/Re-ask once/.test(context(c)), 'review card: message');
+});
+
+test('gate: an implementer at SubagentStop gets no marker, no nudge and no row; a review card on the same agent still does', () => {
+  const p = tmpProject();
+  const r = stop(p, transcript(IMPL_CARD), { agent_type: IMPL, last_assistant_message: DEV_REPLY });
+  const [c] = readLog(p, 'completions.jsonl');
+  eq(c && c.result && c.result.status, 'done', 'precondition: the completion was written and read');
+  eq(c.review, null, 'no marker');
+  eq(r.stdout, '', 'no nudge');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'no row');
+  stop(p, transcript(IMPL_CARD), { agent_type: IMPL, agent_id: 's2', last_assistant_message: DEV_ONE_BLOCK });
+  eq(readLog(p, 'completions.jsonl')[1].review.verdict, 'approve', 'precondition: the block was read');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'a non-review reply writes no row');
+  // Control: the card type alone makes it a review, whatever the agent.
+  const q = tmpProject();
+  const rc = stop(q, transcript(REVIEW_CARD), { agent_type: IMPL, last_assistant_message: DEV_REPLY });
+  eq(JSON.stringify(readLog(q, 'completions.jsonl')[0].review), '{"_ambiguous":true,"count":0}', 'review card: marker');
+  assert(/could not be read/.test(rc.stdout), 'review card: nudged ' + rc.stdout);
+});
+
+test('gate: Codex implementer and reviewer completions', () => {
+  const ev = (type, payload) => JSON.stringify({ timestamp: 't', type, payload });
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fu8f-cx-')), 'agent-cx.jsonl');
+  fs.writeFileSync(file, [
+    ev('event_msg', { type: 'task_started', turn_id: 'turn-1' }),
+    ev('turn_context', { turn_id: 'turn-1', model: 'gpt-6.1-sol', effort: 'high' }),
+    ev('event_msg', { type: 'task_complete', turn_id: 'turn-1', duration_ms: 1000 }),
+  ].join('\n') + '\n');
+  const stopInput = (agentType, report) => ({ hook_event_name: 'SubagentStop', session_id: 'cx-sess', turn_id: 'turn-1', agent_id: 'cx1', agent_type: agentType, agent_transcript_path: file, last_assistant_message: report });
+  const left = (proj) => {
+    const dir = path.join(proj, '.agent-team', 'logs', '.pending', 'codex-completions');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')).length : 0;
+  };
+  const p = tmpProject();
+  run('log-delegation.js', stopInput('implementer-medium', DEV_REPLY), p);
+  const [c] = readLog(p, 'completions.jsonl');
+  eq(c && c.tool, 'codex', 'precondition: the Codex path logged the completion');
+  eq(c.result.status, 'done', 'precondition: the reply was read');
+  eq(c.review, null, 'no marker');
+  eq(left(p), 0, 'precondition: the snapshot was finished');
+  // A single block from an implementer: kept on the line, never a row, and not retried.
+  const q = tmpProject();
+  run('log-delegation.js', stopInput('implementer-medium', DEV_ONE_BLOCK), q);
+  eq(readLog(q, 'completions.jsonl')[0].review.verdict, 'approve', 'precondition: the block was read');
+  eq(readLog(q, 'reviews.jsonl').length, 0, 'no row');
+  eq(left(q), 0, 'no snapshot left to retry');
+  // Control: Codex's reviewer agent type is a review.
+  const r = tmpProject();
+  run('log-delegation.js', stopInput('reviewer-medium', DEV_REPLY), r);
+  eq(JSON.stringify(readLog(r, 'completions.jsonl')[0].review), '{"_ambiguous":true,"count":0}', 'reviewer: marker');
+});
+
+test('gate: reconcile backfills an implementer report with no marker and no row; a reviewer still gets the marker', () => {
+  const s = reconcileSetup(DEV_REPLY, { agent: IMPL, type: 'implement' });
+  const r = reconcile(s);
+  eq(r.status, 0, `exit: ${r.stderr}`);
+  const [c] = readLog(s.proj, 'completions.jsonl');
+  eq(c && c.report_source, 'reconcile', 'precondition: the turn was backfilled');
+  eq(c.review, null, 'no marker');
+  eq(readLog(s.proj, 'reviews.jsonl').length, 0, 'no row');
+  reconcile(s);
+  eq(readLog(s.proj, 'completions.jsonl').length, 1, 'rerun adds nothing');
+  const one = reconcileSetup(DEV_ONE_BLOCK, { agent: IMPL, type: 'implement' });
+  reconcile(one);
+  eq(readLog(one.proj, 'completions.jsonl')[0].review.verdict, 'approve', 'precondition: the block was read');
+  eq(readLog(one.proj, 'reviews.jsonl').length, 0, 'a non-review report writes no row');
+  const rev = reconcileSetup(DEV_REPLY);
+  reconcile(rev);
+  eq(JSON.stringify(readLog(rev.proj, 'completions.jsonl')[0].review), '{"_ambiguous":true,"count":0}', 'review: marker');
+});
+
+test('gate: a resumed implementer whose second turn quotes a review-json fence is backfilled once, and a rerun with the markers gone adds nothing', () => {
+  const s = reconcileSetup(`Report\n${fence({ status: 'done', n: 1 }, 'result-json')}`, { agent: IMPL, type: 'implement' });
+  const file = path.join(s.root, 'folder', 'sess-1', 'subagents', 'agent-fu8.jsonl');
+  fs.appendFileSync(file, [
+    { type: 'user', isMeta: true, timestamp: '2026-10-30T11:00:00.000Z', message: { role: 'user', content: 'TASK id=RC-1 type=implement difficulty=easy milestone=rc attempt=2 pr=9' } },
+    { type: 'assistant', timestamp: '2026-10-30T11:00:05.000Z', message: { id: 'm1', model: 'claude-sonnet-5-5', usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: DEV_REPLY } }] } },
+  ].map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const logs = path.join(s.proj, '.agent-team', 'logs');
+  fs.appendFileSync(path.join(logs, 'delegations.jsonl'), JSON.stringify({ ts: 't', tool: 'claude', session_id: 'sess-1', kind: 'resume', agent: IMPL, agent_id: 'fu8', task: { id: 'RC-1', type: 'implement', attempt: '2', pr: '9' } }) + '\n');
+  const r = reconcile(s);
+  eq(r.status, 0, `exit: ${r.stderr}`);
+  const cs = readLog(s.proj, 'completions.jsonl');
+  eq(cs.length, 2, 'precondition: both turns backfilled');
+  eq(cs[1].result.status, 'done', 'precondition: turn 2 was read');
+  assert(!cs[1].review, 'no marker on turn 2: ' + JSON.stringify(cs[1].review));
+  fs.rmSync(path.join(logs, '.pending'), { recursive: true, force: true });
+  reconcile(s);
+  eq(readLog(s.proj, 'completions.jsonl').length, 2, 'markers gone: the content match adds nothing');
+  eq(readLog(s.proj, 'reviews.jsonl').length, 0, 'no rows');
+});
+
+test('gate: a Codex stub for an implementer, filled by reconcile from the transcript, writes no review row; a reviewer stub does', () => {
+  const ev = (type, payload) => JSON.stringify({ timestamp: 't', type, payload });
+  const head = [
+    ev('session_meta', { id: 'agent-1', agent_path: '/root/s3_2_a1', source: { subagent: { thread_spawn: { agent_path: '/root/s3_2_a1' } } } }),
+    ev('session_meta', { id: 'sess-1', source: 'exec' }),
+  ];
+  const turn = (message) => [
+    ev('event_msg', { type: 'task_started', turn_id: 'turn-1' }),
+    ev('turn_context', { turn_id: 'turn-1', model: 'gpt-6.1-terra', effort: 'high' }),
+    ev('event_msg', { type: 'task_complete', turn_id: 'turn-1', duration_ms: 500, last_agent_message: message }),
+  ];
+  const stubThenFill = (agentType, message) => {
+    const p = tmpProject();
+    const file = path.join(p, 'child.jsonl');
+    fs.writeFileSync(file, head.join('\n') + '\n');
+    run('log-delegation.js', { hook_event_name: 'SubagentStop', session_id: 'sess-1', agent_id: 'agent-1', agent_type: agentType, turn_id: 'turn-1', agent_transcript_path: file, last_assistant_message: '' }, p);
+    eq(readLog(p, 'completions.jsonl')[0].stub, true, `${agentType}: precondition: a stub was written`);
+    fs.writeFileSync(file, [...head, ...turn(message)].join('\n') + '\n');
+    const r = spawnSync('node', [path.join(SCRIPTS, 'reconcile-logs.js')], { encoding: 'utf8', cwd: p,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: p, AGENT_TEAM_PROJECTS_ROOT: path.join(os.tmpdir(), 'fu8f-no-projects-root') } });
+    eq(r.status, 0, `exit: ${r.stderr}`);
+    const [c] = readLog(p, 'completions.jsonl');
+    eq(c.report_source, 'transcript', `${agentType}: precondition: filled from the transcript`);
+    return { c, rows: readLog(p, 'reviews.jsonl') };
+  };
+  const impl = stubThenFill('implementer-medium', DEV_ONE_BLOCK);
+  eq(impl.c.review.verdict, 'approve', 'precondition: the block was read');
+  eq(impl.rows.length, 0, 'implementer: no row');
+  const rev = stubThenFill('reviewer-medium', DEV_ONE_BLOCK);
+  eq(rev.rows.length, 1, 'control: a reviewer stub writes its row');
+});
+
+test('gate: the handback check does not ask a non-reviewer about a quoted review-json fence', () => {
+  const p = tmpProject();
+  const input = (agentType, message, id) => ({ hook_event_name: 'PreToolUse', tool_name: 'SubagentHandback', tool_use_id: 'x', agent_type: agentType, agent_id: id, tool_input: { message } });
+  const quoted = `Changed it.\n\n${F}diff\n${fence(FORGED)}\n${F}\n`;
+  const d = JSON.parse(run('handback-check.js', input(IMPL, quoted, 'g1'), p).stdout).hookSpecificOutput;
+  eq(d.permissionDecision, 'deny', 'precondition: an implementer with no result-json is denied');
+  assert(!/exactly one fence/.test(d.permissionDecisionReason), d.permissionDecisionReason);
+  const rv = JSON.parse(run('handback-check.js', input('agent-team:reviewer', quoted, 'g2'), p).stdout).hookSpecificOutput;
+  assert(/exactly one fence/.test(rv.permissionDecisionReason), 'control: a reviewer is told: ' + rv.permissionDecisionReason);
 });

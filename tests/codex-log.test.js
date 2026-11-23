@@ -470,7 +470,7 @@ test('codex: pending state recovers a dead writer lock and a failed review appen
   const p = tmpProject();
   const file = transcript(p);
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
-  hook(p, stop(p, file, { last_assistant_message: '```review-json\n{"verdict":"approve"}\n```' }));
+  hook(p, stop(p, file, { agent_type: 'reviewer-medium', last_assistant_message: '```review-json\n{"verdict":"approve"}\n```' }));
   const [pending] = pendingFiles(p);
   const records = require(path.join(SCRIPTS, 'records.js'));
   const lockDir = path.join(p, '.agent-team', 'logs', '.pending', 'record-locks');
@@ -554,8 +554,8 @@ test('codex: a review block in the final message writes one reviews.jsonl line w
   const p = tmpProject();
   const file = transcript(p);
   const msg = 'ok\n```review-json\n{"verdict":"approve","findings":[]}\n```';
-  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: msg }));
-  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: msg }));
+  hook(p, stop(p, file, { agent_type: 'reviewer-medium', turn_id: 'turn-1', last_assistant_message: msg }));
+  hook(p, stop(p, file, { agent_type: 'reviewer-medium', turn_id: 'turn-1', last_assistant_message: msg }));
   const r = readLog(p, 'reviews.jsonl');
   eq(r.length, 1, 'one review (deduped)');
   eq(r[0].tool, 'codex', 'tool');

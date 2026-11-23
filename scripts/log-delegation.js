@@ -136,12 +136,13 @@ function onPostSubagent(input) {
     record.duration_ms = elapsed;
     Object.assign(record, lib.usageFrom(resp));
     record.result = lib.lastFencedJson(text, 'result-json');
-    const review = lib.reviewJson(text);
+    const review = lib.reviewFor(text, ti.subagent_type, record.task);
     if (review) {
       record.review = review;
       // An ambiguous review writes no row; the Director is told to re-ask once.
+      // Only a review delegation writes a row at all (an implementer's reply never does).
       if (isAmbiguous(review)) context = [context, ambiguousDirectorNudge(review)].filter(Boolean).join('\n');
-      else logReview(input, record, review);
+      else if (lib.isReviewDelegation(ti.subagent_type, record.task)) logReview(input, record, review);
     }
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
@@ -205,11 +206,11 @@ function onPostBridge(input) {
   // A review that came back through a bridge is logged as a review, with the
   // bridge's model, so reviews from both families can be compared. A block
   // that doesn't parse is kept as _unparsed and writes no row.
-  const review = lib.reviewJson(text);
+  const review = lib.reviewFor(text, null, task);
   if (review) {
     record.review = review;
-    // The row's `tool` is the bridge (codex, antigravity), not claude.
-    if (task.id && !review._unparsed && !isAmbiguous(review)) logReview(input, record, review, server.replace(/-bridge$/, ''));
+    // The row's `tool` is the bridge (codex, antigravity), not claude. Only a review card gets a row.
+    if (task.id && isReviewTask(task) && !review._unparsed && !isAmbiguous(review)) logReview(input, record, review, server.replace(/-bridge$/, ''));
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
   // No stop hook runs on the bridge path, so the Director gets the nudge.
@@ -394,7 +395,7 @@ function onSubagentStop(input) {
   if (agentId && !claimOnce(input, `stop-${agentId}-${t.turn}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const record = completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report });
   lib.appendJsonl(input, 'completions.jsonl', record);
-  if (record.review) logReview(input, record, record.review);
+  if (record.review && lib.isReviewDelegation(agentType, record.task)) logReview(input, record, record.review);
   // A role agent that ended without its JSON block gets a nudge. SubagentStop's
   // additionalContext is delivered to the subagent (which continues so it can
   // act on it), not to the Director, so the text speaks to the subagent. It
@@ -436,6 +437,7 @@ function completionTask(delegation, t) {
 // scripts/reconcile-logs.js so a backfilled line has the same shape.
 function completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report }) {
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
+  const task = completionTask(delegation, t);
   return {
     ...base(input),
     kind: 'completion',
@@ -457,7 +459,7 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     // The attempt comes from the turn being logged (the TASK line that opened
     // it), not from the latest delegation, so a stale verdict is never stamped
     // with a newer attempt number.
-    task: completionTask(delegation, t),
+    task,
     // Latest turn only (a resumed agent's attempt 2 doesn't include attempt 1).
     // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
@@ -468,7 +470,7 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     tokens_by_class: t.tokens ? { ...t.classes } : null,
     report_source: reportSource,
     result: lib.lastFencedJson(report, 'result-json'),
-    review: lib.reviewJson(report),
+    review: lib.reviewFor(report, agentType, task),
   };
 }
 
@@ -509,7 +511,7 @@ function main() {
   if (tool === 'SendMessage') return emit(event, onPostSendMessage(input));
 }
 
-module.exports = { readSubagentTranscript, readMeta, completionRecord };
+module.exports = { readSubagentTranscript, readMeta, completionRecord, completionTask };
 
 // Only run as the hook; reconcile-logs.js requires this file for the helpers.
 if (require.main === module) {

@@ -643,8 +643,25 @@ function detectTool(input, env = process.env) {
 const REVIEWER_AGENT_TYPES = ['agent-team:reviewer', 'agent-team:security-reviewer'];
 const REVIEW_TASK_TYPES = ['review', 'security-review'];
 
+// Is this delegation a review? A reviewer agent (Claude's `agent-team:reviewer`
+// and `agent-team:security-reviewer`, or Codex's `reviewer-<tier>` and
+// `security-reviewer-<tier>`), or a card whose type is a review type.
+const CODEX_REVIEWER = /^(?:security-)?reviewer-[a-z]+$/;
+function isReviewDelegation(agentType, task) {
+  return REVIEWER_AGENT_TYPES.includes(agentType) || (typeof agentType === 'string' && CODEX_REVIEWER.test(agentType)) ||
+    !!(task && REVIEW_TASK_TYPES.includes(task.type));
+}
+
+// The review in a reply, for this delegation. Only a review delegation gets the
+// `_ambiguous` marker: any other agent may quote a review-json fence (in a diff,
+// a test, a decision) without having written a review, so there it is no review.
+function reviewFor(text, agentType, task) {
+  const review = reviewJson(text);
+  return review && review._ambiguous && !isReviewDelegation(agentType, task) ? null : review;
+}
+
 module.exports = {
-  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES,
+  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor,
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,

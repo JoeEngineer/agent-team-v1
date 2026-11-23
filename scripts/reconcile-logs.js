@@ -27,7 +27,7 @@ const os = require('os');
 const path = require('path');
 const lib = require('./lib');
 const { claimOnce, shortHash, logReview, isAmbiguous, appendOnce, resolveQueuedMerges } = require('./records');
-const { readMeta, completionRecord } = require('./log-delegation');
+const { readMeta, completionRecord, completionTask } = require('./log-delegation');
 const { drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir: codexPendingDir } = require('./codex-log');
 
 // A SendMessage turn on an existing agent: a retry (resume) or a scope addition (followup).
@@ -337,7 +337,7 @@ function backfillCodexTurns(input, { dryRun = false } = {}) {
     }
   }
   if (!dryRun) {
-    for (const r of reviews) if (logReview({ ...input, session_id: r.session_id }, r, r.review, 'codex')) stats.reviews++;
+    for (const r of reviews) if (lib.isReviewDelegation(r.agent, r.task) && logReview({ ...input, session_id: r.session_id }, r, r.review, 'codex')) stats.reviews++;
   }
   return stats;
 }
@@ -460,9 +460,10 @@ function reconcile({ dryRun = false } = {}) {
       const source = [['handback', t.handback], ['text', t.lastText]].find(([, v]) => v && hasBlock(v));
       if (!source) continue; // no report block in this turn: nothing to backfill
       const [, report] = source;
-      const probe = { result: lib.lastFencedJson(report, 'result-json'), review: lib.reviewJson(report) };
       // Turn 1 is the original delegation, later turns are its SendMessage resumes.
       const taskDel = [a.delegation, ...a.dels.filter((d) => isResume(d))][turn - 1] || a.delegation;
+      // The same reading as the completion line gets, so the content match below compares like with like.
+      const probe = { result: lib.lastFencedJson(report, 'result-json'), review: lib.reviewFor(report, agentType, completionTask(taskDel, t)) };
       // A match counts only on the same attempt: a stale line (turn n's report under attempt n+1) must not hide turn n+1.
       const att = String(t.task.attempt || (taskDel && taskDel.task && taskDel.task.attempt) || '');
       turnInfos.push({ attempt: att, probe });
@@ -478,7 +479,7 @@ function reconcile({ dryRun = false } = {}) {
       record.guidance_version = (taskDel && taskDel.guidance_version) || record.guidance_version;
       record.reconciled_by = lib.guidanceVersion();
       lib.appendJsonl(input, 'completions.jsonl', record);
-      if (record.review && !isAmbiguous(record.review)) { logReview(sess, record, record.review); stats.reviews++; }
+      if (record.review && !isAmbiguous(record.review) && lib.isReviewDelegation(agentType, record.task)) { logReview(sess, record, record.review); stats.reviews++; }
     }
     if (a.dels.some((d) => isResume(d))) {
       for (const file of ['completions.jsonl', 'reviews.jsonl']) {
