@@ -46,7 +46,9 @@ function tableRows(src) {
   return rows.slice(2);
 }
 
-// Reference evaluator, ported from decision 0024.
+// Reference evaluator, ported from decision 0024. It is hard-coded, so it stays
+// tied to the role file only because the role file's rows are pinned to
+// EXPECTED_ROWS (and the evaluator's row count is asserted equal to it).
 const UNSCANNED = ['skip', 'missing', 'noscan', 'unconfirmed'];
 function scanState({ head, jobs, readable, states }) {
   const s = states === '-' ? [] : states.split(',');
@@ -73,6 +75,26 @@ function matrix() {
 }
 
 const rows = tableRows(ROLE);
+
+// The whole "Scan status" section of the role file, from its heading to the
+// blank line before "## Coverage", against the fenced text in 0024.
+function section(src) {
+  const a = src.indexOf('## Scan status\n');
+  const b = src.indexOf('## Coverage');
+  assert(a >= 0 && b > a, 'Scan status section not found');
+  return src.slice(a, b);
+}
+
+test('scan table: the Scan status section equals the replacement text in 0024 byte for byte', () => {
+  const m = DECISION.match(/```markdown\n(## Scan status\n[\s\S]*?\n\n)```/);
+  assert(m, 'replacement text not found in 0024');
+  assert(section(ROLE) === m[1], 'the Scan status section differs from 0024');
+});
+
+test('scan table: the evaluator has as many rows as EXPECTED_ROWS', () => {
+  const top = Math.max(...matrix().map((c) => scanState(c)[1]));
+  eq(top, EXPECTED_ROWS.length, 'highest row the evaluator returns');
+});
 
 test('scan table: red is the first row and the head moved row comes after it', () => {
   assert(rows[0][1] === '`red`', `first row is ${rows[0].join(' | ')}`);
