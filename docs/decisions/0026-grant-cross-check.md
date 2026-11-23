@@ -60,8 +60,8 @@ it passes only when the head differs from the reviewed commit in nothing, or in
    A note must be in parentheses: `architect - a note`, `architect — a note`
    (em dash) and `architect; a note` read the note as a role word, exit 17 and
    grant nothing (fail closed). One table in `scripts/status.js` maps the
-   question's words (security reviews, architect, coach at close, hard-fix
-   escalation) to the log's names (`security-review`, `architect`, `coach`,
+   question's words (security reviews, architect, coach (run for this
+   milestone) or the older coach at close, hard-fix escalation) to the log's names (`security-review`, `architect`, `coach`,
    `hard-fix`).
 7. In a linked git worktree the log is read from the main checkout, through the
    same helper the logger uses (`logRoot` in `scripts/lib.js`).

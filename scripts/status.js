@@ -33,6 +33,7 @@
 //   19 grant: the log is unreadable, or its first line for the milestone is torn, has bad fields,
 //      or names the slug in its raw text but parses to another milestone (a repeated key)
 //   20 grant: the slug under "## Current milestone" is not the --milestone slug
+//   21 set: the temp file path already exists (a file or a symlink); nothing was written or followed
 //
 // `--check --since <sha>` decides whether the head (default HEAD) differs from the
 // reviewed commit <sha> only in STATUS.md: `git diff --no-renames --ignore-submodules=none
@@ -61,10 +62,11 @@
 
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const lib = require('./lib');
 
-const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13, notStatusOnly: 14, git: 15, differ: 16, block: 17, noLog: 18, badLog: 19, slug: 20 };
+const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13, notStatusOnly: 14, git: 15, differ: 16, block: 17, noLog: 18, badLog: 19, slug: 20, tmpExists: 21 };
 
 class Refusal extends Error {
   constructor(code, msg) { super(msg); this.code = code; }
@@ -195,14 +197,20 @@ function applySet(text, id, vals) {
 }
 
 // Replace the file's content through a temp file in the same directory. The original mode is kept.
+// The temp file is created exclusively (O_EXCL, which does not follow a symlink either) under a
+// random name, so a file or link already at that path is never written through or removed.
 function writeAtomic(file, text) {
   const mode = fs.statSync(file).mode & 0o7777;
-  const tmp = `${file}.tmp-${process.pid}`;
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomBytes(8).toString('hex')}`;
+  let created = false;
   try {
-    fs.writeFileSync(tmp, text);
+    fs.writeFileSync(tmp, text, { flag: 'wx', mode: 0o600 });
+    created = true;
     fs.chmodSync(tmp, mode);
     fs.renameSync(tmp, file);
   } catch (e) {
+    if (!created && e.code === 'EEXIST') throw new Refusal(EXIT.tmpExists, `the temp path ${tmp} already exists; it was left alone and ${file} is unchanged. Remove it and retry`);
+    // A partial write may have made the file even though the call threw; EEXIST is the only case where it is not ours.
     try { fs.unlinkSync(tmp); } catch { /* nothing to remove */ }
     throw e;
   }
@@ -225,8 +233,11 @@ function git(cwd, args) {
 const gitMsg = (e) => String((e.stderr && e.stderr.toString().trim()) || e.message).split('\n')[0];
 
 // Returns { status_only, reason?, code }. `since` and `head` are full SHAs already validated.
-function statusOnly(cwd, since, head) {
+function statusOnly(callerCwd, since, head) {
   const fail = (reason, code = EXIT.notStatusOnly) => ({ status_only: false, reason, code });
+  // Run at the top level: a diff from a subdirectory (with diff.relative set) lists only that subtree.
+  let cwd;
+  try { cwd = git(callerCwd, ['rev-parse', '--show-toplevel']).trim(); } catch (e) { return fail(`git cannot find the repository: ${gitMsg(e)}`, EXIT.git); }
   try {
     for (const sha of [since, head]) git(cwd, ['cat-file', '-e', `${sha}^{commit}`]);
   } catch (e) { return fail(`git cannot find the commit: ${gitMsg(e)}`, EXIT.git); }
@@ -239,7 +250,7 @@ function statusOnly(cwd, since, head) {
   let names; let raw;
   try {
     // --ignore-submodules=none: a gitlink bump must show even when .gitmodules or config says ignore.
-    const diff = ['diff', '--no-renames', '--no-ext-diff', '--ignore-submodules=none'];
+    const diff = ['diff', '--no-relative', '--no-renames', '--no-ext-diff', '--ignore-submodules=none'];
     names = git(cwd, [...diff, '--name-status', '-z', since, head, '--']).split('\0').filter((x) => x !== '');
     raw = git(cwd, [...diff, '--raw', '-z', since, head, '--']).split('\0').filter((x) => x !== '');
   } catch (e) { return fail(`git diff failed: ${gitMsg(e)}`, EXIT.git); }
@@ -270,6 +281,8 @@ const ROLE_NAMES = {
   'security reviews': 'security-review',
   'architect': 'architect',
   'coach at close': 'coach',
+  // 1.2.0 wording "coach (run for this milestone)"; the note stripper leaves the bare word.
+  'coach': 'coach',
   'hard-fix escalation': 'hard-fix',
 };
 const LOG_ROLES = new Set(Object.values(ROLE_NAMES));
@@ -279,8 +292,15 @@ const SECOND_ORDER = ['none', 'large', 'xlarge'];
 
 // Drop "(...)" notes, however many.
 const stripNotes = (v) => {
-  let s = v;
-  for (let prev = null; prev !== s;) { prev = s; s = s.replace(/\([^()]*\)/g, ''); }
+  // One pass with a stack of "(" positions in the output: a ")" drops back to its "(", so nested
+  // notes cost linear time. An unmatched "(" or ")" stays, and readBlock refuses it.
+  const out = []; const opens = [];
+  for (const ch of v) {
+    if (ch === '(') { opens.push(out.length); out.push(ch); }
+    else if (ch === ')' && opens.length) out.length = opens.pop();
+    else out.push(ch);
+  }
+  const s = out.join('');
   return s.replace(/\s+/g, ' ').trim().replace(/\.$/, '').trim();
 };
 const isPlaceholder = (v) => /^<[^>]*>$/.test(v.trim());
@@ -492,12 +512,19 @@ function main(argv, deps = {}) {
     try {
       if (res.text !== text) writeAtomic(file, res.text);
       back = fs.readFileSync(file, 'utf8');
-    } catch (e) { throw new Refusal(EXIT.verify, `write failed: ${e.code || e.message}`); }
+    } catch (e) {
+      if (e instanceof Refusal) throw e;
+      throw new Refusal(EXIT.verify, `write failed: ${e.code || e.message}`);
+    }
     const a = text.split('\n');
     const b = back.split('\n');
     const differ = a.length === b.length ? b.filter((l, i) => l !== a[i]).length : -1;
     const wantDiffer = res.text === text ? 0 : 1;
     if (back !== res.text || differ !== wantDiffer) {
+      // Restore only while the file still holds what this run left; a later edit by someone else stays.
+      let now = null;
+      try { now = fs.readFileSync(file, 'utf8'); } catch { /* treated as changed */ }
+      if (now !== back) throw new Refusal(EXIT.verify, `read-back check failed (${differ} lines differ) and ${file} has been changed by someone else since; the original was NOT restored, check ${file}`);
       let restored = true;
       try { writeAtomic(file, text); } catch { restored = false; }
       throw new Refusal(EXIT.verify, `read-back check failed (${differ} lines differ); ` + (restored ? 'the original was restored' : `the original could NOT be restored, check ${file}`));
