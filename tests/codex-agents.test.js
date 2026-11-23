@@ -9,7 +9,9 @@ console.log('codex-agents');
 
 const SCRIPT = path.join(SCRIPTS, 'codex-agents.js');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-cx-'));
-const ROLES = ['architect', 'coach', 'implementer', 'reviewer', 'scout'];
+// Roles come from agents/*.md so a new agent file needs no edit here.
+const ROLES = fs.readdirSync(path.join(ROOT, 'agents')).filter((f) => f.endsWith('.md')).map((f) => path.basename(f, '.md')).sort();
+const N = ROLES.length;
 
 function writeMap(map) {
   const f = path.join(tmp(), 'models.json');
@@ -70,14 +72,13 @@ function parseToml(text) {
 const DEF = path.join(ROOT, 'config', 'models.json');
 const defMap = JSON.parse(fs.readFileSync(DEF, 'utf8'));
 
-test('default map gives 15 files, no xlarge, with the required keys', () => {
+test('default map gives roles x 4 files including xlarge, with the required keys', () => {
   const out = path.join(tmp(), 'not', 'yet', 'there'); // out dir does not exist
   const r = gen(out);
   eq(r.status, 0, r.stderr);
   const files = tomls(out);
-  eq(files.length, 15);
-  assert(!files.some((f) => f.includes('xlarge')), 'xlarge present');
-  for (const role of ROLES) for (const t of ['small', 'medium', 'large']) assert(files.includes(`${role}-${t}.toml`), `${role}-${t}`);
+  eq(files.length, N * 4);
+  for (const role of ROLES) for (const t of ['small', 'medium', 'large', 'xlarge']) assert(files.includes(`${role}-${t}.toml`), `${role}-${t}`);
   const t = parseToml(fs.readFileSync(path.join(out, 'implementer-medium.toml'), 'utf8'));
   eq(t.name, 'implementer-medium');
   eq(t.model, defMap.medium.codex);
@@ -89,15 +90,35 @@ test('default map gives 15 files, no xlarge, with the required keys', () => {
   assert(!/[A-Za-z]:\\|\/Users\/|\/home\//.test(fs.readFileSync(path.join(out, 'implementer-medium.toml'), 'utf8').split('\n').slice(0, 4).join('\n')), 'absolute path');
 });
 
-test('xlarge enabled on the tier gives 20 files', () => {
+test('default map writes xlarge files with the map xlarge Codex model', () => {
+  const out = tmp();
+  eq(gen(out).status, 0);
+  assert(tomls(out).includes('scout-xlarge.toml'), 'precondition: xlarge written');
+  for (const role of ROLES) eq(parseToml(fs.readFileSync(path.join(out, `${role}-xlarge.toml`), 'utf8')).model, defMap.xlarge.codex.model);
+});
+
+for (const where of ['tier', 'entry']) {
+  test(`xlarge enabled: false on the ${where} writes no xlarge files and removes stale ones`, () => {
+    const out = tmp();
+    eq(gen(out).status, 0);
+    assert(fs.existsSync(path.join(out, 'scout-xlarge.toml')), 'precondition: xlarge generated');
+    const m = JSON.parse(JSON.stringify(defMap));
+    if (where === 'tier') m.xlarge.enabled = false; else m.xlarge.codex.enabled = false;
+    const r = gen(out, { map: writeMap(m) });
+    eq(r.status, 0);
+    assert(r.stdout.includes(`0 written, ${N * 3} unchanged, ${N} removed`), r.stdout);
+    assert(!tomls(out).some((f) => f.includes('xlarge')), 'xlarge remains');
+    eq(tomls(out).length, N * 3);
+    assert(gen(out, { map: writeMap(m) }).stdout.includes(`0 written, ${N * 3} unchanged, 0 removed`), 'second run changes nothing');
+  });
+}
+
+test('xlarge credits-billed entry without enabled is still written', () => {
   const m = JSON.parse(JSON.stringify(defMap));
-  m.xlarge.enabled = true;
+  m.xlarge.codex = { model: 'gpt-x', billing: 'credits' };
   const out = tmp();
   eq(gen(out, { map: writeMap(m) }).status, 0);
-  const files = tomls(out);
-  eq(files.length, 20);
-  assert(files.includes('scout-xlarge.toml'));
-  eq(parseToml(fs.readFileSync(path.join(out, 'scout-xlarge.toml'), 'utf8')).model, 'gpt-6.2-astra');
+  eq(parseToml(fs.readFileSync(path.join(out, 'scout-xlarge.toml'), 'utf8')).model, 'gpt-x');
 });
 
 test('credits entry without explicit enabled is skipped; with enabled: true it is written', () => {
@@ -105,10 +126,10 @@ test('credits entry without explicit enabled is skipped; with enabled: true it i
   const out = tmp();
   eq(gen(out, { map: writeMap(m) }).status, 0);
   assert(tomls(out).every((f) => f.endsWith('-small.toml')), tomls(out).join());
-  eq(tomls(out).length, 5);
+  eq(tomls(out).length, N);
   m.medium.codex.enabled = true;
   eq(gen(out, { map: writeMap(m) }).status, 0);
-  eq(tomls(out).length, 10);
+  eq(tomls(out).length, N * 2);
 });
 
 test('an override dropping medium writes no medium file and removes a stale one', () => {
@@ -120,15 +141,15 @@ test('an override dropping medium writes no medium file and removes a stale one'
   const r = gen(out, { map: writeMap(m) });
   eq(r.status, 0);
   assert(!tomls(out).some((f) => f.includes('-medium')), 'medium remains');
-  eq(tomls(out).length, 10);
+  eq(tomls(out).length, N * 3);
   // one step past: a second run changes nothing
-  assert(/0 written, 10 unchanged, 0 removed/.test(gen(out, { map: writeMap(m) }).stdout));
+  assert(gen(out, { map: writeMap(m) }).stdout.includes(`0 written, ${N * 3} unchanged, 0 removed`));
 });
 
 test('Codex-less map writes nothing, says so, exits 0 and removes generated files', () => {
   const out = tmp();
   gen(out);
-  assert(tomls(out).length === 15, 'precondition');
+  assert(tomls(out).length === N * 4, 'precondition');
   fs.writeFileSync(path.join(out, 'mine.toml'), 'name = "mine"\n');
   const r = gen(out, { map: writeMap({ small: { claude: 'haiku' } }) });
   eq(r.status, 0);
@@ -145,7 +166,7 @@ test('a user file without the header is kept and warned about', () => {
   eq(r.status, 0);
   eq(fs.readFileSync(mine, 'utf8'), 'name = "mine"\n');
   assert(/warning: scout-small\.toml/.test(r.stdout), r.stdout);
-  eq(tomls(out).length, 15);
+  eq(tomls(out).length, N * 4);
   // survives removal pass too
   gen(out, { map: writeMap({}) });
   assert(fs.existsSync(mine));
@@ -160,7 +181,7 @@ test('TOML round-trips a body with quotes, backticks, triple quotes, CRLF; no-fr
   fs.writeFileSync(path.join(agents, 'quote.md'), 'ends with a quote \'');
   const out = tmp();
   eq(gen(out, { agents }).status, 0);
-  eq(tomls(out).length, 12);
+  eq(tomls(out).length, 16);
   const files = tomls(out);
   assert(files.includes('team-weird-small.toml'), files.join()); // ':' made file-safe
   const w = parseToml(fs.readFileSync(path.join(out, 'team-weird-small.toml'), 'utf8'));
@@ -200,7 +221,7 @@ test('--dry-run changes nothing', () => {
   const r = gen(out, { args: ['--dry-run'] });
   eq(r.status, 0);
   assert(!fs.existsSync(out));
-  assert(/15 to write/.test(r.stdout), r.stdout);
+  assert(r.stdout.includes(`${N * 4} to write`), r.stdout);
 });
 
 test('re-run is idempotent: files byte-identical, nothing rewritten', () => {
@@ -210,6 +231,6 @@ test('re-run is idempotent: files byte-identical, nothing rewritten', () => {
   const before = snap(out);
   const r = gen(out);
   eq(r.status, 0);
-  assert(/0 written, 15 unchanged/.test(r.stdout), r.stdout);
+  assert(r.stdout.includes(`0 written, ${N * 4} unchanged`), r.stdout);
   eq(JSON.stringify(snap(out)), JSON.stringify(before));
 });

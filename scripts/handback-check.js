@@ -27,7 +27,7 @@ function check(input) {
   let claimed = false;
   for (let n = 1; n <= MAX_NUDGES && !claimed; n++) claimed = claimOnce(input, `handback-${agentId}-${n}`);
   if (!claimed) return null;
-  const block = agentType === 'agent-team:reviewer' ? 'review-json' : 'result-json';
+  const block = lib.REVIEWER_AGENT_TYPES.includes(agentType) ? 'review-json' : 'result-json';
   const fenced = /```(result|review)-json/.test(message);
   const why = fenced ? `its \`${block}\` block is not valid JSON` : `it has no \`${block}\` block`;
   return `agent-team: SubagentHandback not sent: ${why}. Call SubagentHandback again with your full report, ending with the fenced \`${block}\` block your instructions describe (valid JSON, no placeholders). The Director and the logs read your result only from that block.`;

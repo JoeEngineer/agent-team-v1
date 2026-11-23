@@ -26,3 +26,4 @@ Verified on Codex CLI 0.166: an agent file that pins only `model` leaves the per
 - Changing the model map or updating the plugin requires re-running the generator; `--check` detects drift.
 - A hand-written agent file with the same name is never overwritten, so it also shadows the generated one.
 - Role names with characters unsafe in file names are sanitised in the file name only; the `name` key keeps the role as written.
+- **Amended by [0022](0022-security-review-and-xlarge-grant.md) (2026-11-22):** xlarge Codex agent files are written unless the map disables xlarge (`enabled: false`), not only on `enabled: true`, because a milestone's xlarge grant needs them to exist. Standard tiers keep the rule above. The text above is not rewritten.

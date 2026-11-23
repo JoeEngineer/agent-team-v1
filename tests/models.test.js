@@ -22,7 +22,7 @@ const MISSING = path.join(tmp(), 'nope.json');
 test('shorthand and object entries normalise the same', () => {
   const a = { small: { claude: 'haiku' } };
   const b = { small: { claude: { model: 'haiku' } } };
-  eq(M.entry(a, 'claude', 'small'), { tier: 'small', model: 'haiku', billing: null, enabled: true, auto: true });
+  eq(M.entry(a, 'claude', 'small'), { tier: 'small', model: 'haiku', note: null, billing: null, enabled: true, auto: true });
   eq(M.entry(a, 'claude', 'small'), M.entry(b, 'claude', 'small'));
 });
 
@@ -32,8 +32,26 @@ test('default models resolve for each tool and standard tier', () => {
     ['small', 'medium', 'large'].forEach((t, i) => eq(M.autoTier(DEF, tool, t).model, want[tool][i]));
   }
   const x = M.entry(DEF, 'claude', 'xlarge');
-  eq([x.model, x.billing, x.enabled, x.auto], ['fable', 'credits', false, false]);
-  eq(M.entry(DEF, 'codex', 'xlarge').model, 'gpt-6.2-astra');
+  const NOTE = 'included, limited, or billed as credits, depending on your plan';
+  eq([x.model, x.note, x.billing, x.enabled, x.auto], ['fable', NOTE, null, true, false]);
+  const xc = M.entry(DEF, 'codex', 'xlarge');
+  eq([xc.model, xc.note, xc.billing, xc.enabled, xc.auto], ['gpt-6.2-astra', NOTE, null, true, false]);
+  eq(M.autoTier(DEF, 'claude', 'xlarge'), null);
+  eq(M.autoTier(DEF, 'codex', 'xlarge'), null);
+  eq(M.ladderUp(DEF, 'claude', 'large'), null);
+  eq(M.ladderUp(DEF, 'codex', 'large'), null);
+  eq('enabled' in DEF.xlarge, false);
+});
+
+test('entry note is a string or null; credits billing in a user map is still not auto', () => {
+  eq(M.entry({ small: { claude: { model: 'a', note: 5 } } }, 'claude', 'small').note, null);
+  eq(M.entry({ small: { claude: { model: 'a', note: 'n' } } }, 'claude', 'small').note, 'n');
+  const x = M.entry({ xlarge: { claude: { model: 'f', billing: 'credits' } } }, 'claude', 'xlarge');
+  eq([x.billing, x.enabled, x.auto], ['credits', true, false]);
+  const s = M.entry({ small: { claude: { model: 'a', billing: 'credits' } } }, 'claude', 'small');
+  eq(s.auto, false);
+  eq(M.entry({ xlarge: { enabled: false, claude: 'f' } }, 'claude', 'xlarge').enabled, false);
+  eq(M.entry({ xlarge: { claude: { model: 'f', enabled: false } } }, 'claude', 'xlarge').enabled, false);
 });
 
 test('xlarge never auto, even when enabled', () => {
@@ -148,8 +166,9 @@ test('CLI show reports tiers and differs_from_default', () => {
   eq(r.status, 0);
   let j = JSON.parse(r.stdout);
   eq(j.source, 'default');
-  eq(j.tiers.medium.claude, { model: 'sonnet', billing: null, enabled: true, auto: true, differs_from_default: false });
+  eq(j.tiers.medium.claude, { model: 'sonnet', note: null, billing: null, enabled: true, auto: true, differs_from_default: false });
   eq(j.tiers.xlarge.claude.auto, false);
+  eq(j.tiers.xlarge.claude.note, 'included, limited, or billed as credits, depending on your plan');
   const f = path.join(tmp(), 'o.json');
   fs.writeFileSync(f, JSON.stringify({ small: { claude: 'x' } }));
   j = JSON.parse(cli(['show', '--tool', 'claude'], f).stdout);

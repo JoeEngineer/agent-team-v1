@@ -56,9 +56,10 @@ function entry(map, tool, tier) {
   if (typeof raw === 'string') raw = { model: raw };
   if (!isMap(raw) || typeof raw.model !== 'string' || !raw.model) return null;
   const billing = raw.billing || null;
+  const note = typeof raw.note === 'string' ? raw.note : null;
   const enabled = tierObj.enabled !== false && raw.enabled !== false;
   const auto = tier !== 'xlarge' && enabled && billing !== 'credits';
-  return { tier, model: raw.model, billing, enabled, auto };
+  return { tier, model: raw.model, note, billing, enabled, auto };
 }
 
 function autoTier(map, tool, tier) {
@@ -142,7 +143,7 @@ function cli(argv) {
         if (!e) continue;
         const d = entry(defMap, tl, t);
         tiers[t][tl] = {
-          model: e.model, billing: e.billing, enabled: e.enabled, auto: e.auto,
+          model: e.model, note: e.note, billing: e.billing, enabled: e.enabled, auto: e.auto,
           differs_from_default: JSON.stringify(e) !== JSON.stringify(d),
         };
       }
