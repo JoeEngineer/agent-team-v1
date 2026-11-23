@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..');
@@ -77,11 +78,155 @@ function logPath(input) {
   return path.join(logRoot(input), '.agent-team', 'logs');
 }
 
+// The logs folder path, created if missing. Throws (see safeMkdir) when
+// `.agent-team` or `logs` is a link or junction.
 function logDir(input) {
-  const dir = logPath(input);
-  fs.mkdirSync(dir, { recursive: true });
+  return safeMkdir(logPath(input));
+}
+
+// --- safe writes under .agent-team/logs/ (begin) ---
+// A cloned repo can commit anything under .agent-team/logs/, links included:
+// `completions.jsonl` -> `~/.bashrc`, or `.pending` -> a folder of the user's.
+// Every write, folder creation, listing for deletion and temp file under the
+// logs folder goes through these helpers, so none of them follows a link.
+// tests/fu18-safe-write.test.js greps scripts/ for raw writes outside this block.
+//
+// The checks: `.agent-team` and every folder below it down to the file's own
+// folder must be a real folder (lstat: not a symlink, not a junction); the
+// file, when it exists, must be a regular file with one name (not a link, not
+// a hard link). The open uses O_NOFOLLOW where the platform has it (not
+// Windows), and fstat after the open catches a hard link made since the check.
+// Accepted: on Windows a file symlink swapped in between the lstat and the open
+// is followed. Making one there takes write access to the logs folder and, on
+// Windows, the symlink privilege; a committed link is always caught.
+//
+// A refusal prints one line to stderr naming the path (once per path per
+// process) and throws an Error with code EAGENTTEAMREFUSED. Hooks catch it
+// and carry on without the write.
+const O_NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
+const REFUSED = 'EAGENTTEAMREFUSED';
+const warnedRefusals = new Set();
+// Test seam: runs between the checks and the open of safeAppend.
+const safeWriteHooks = { beforeOpen: null };
+
+function refuse(file, why) {
+  const err = new Error(`refusing to write ${file}: ${why}`);
+  err.code = REFUSED;
+  err.path = file;
+  if (!warnedRefusals.has(err.message)) {
+    warnedRefusals.add(err.message);
+    try { process.stderr.write(`agent-team: ${err.message}\n`); } catch { /* stderr closed */ }
+  }
+  throw err;
+}
+
+// `.agent-team` and each folder below it, down to `dir`; [dir] for a path with
+// no `.agent-team` component.
+function guardedDirs(dir) {
+  const parts = path.resolve(dir).split(path.sep);
+  const i = parts.lastIndexOf('.agent-team');
+  if (i < 0) return [path.resolve(dir)];
+  const out = [];
+  for (let j = i; j < parts.length; j++) out.push(parts.slice(0, j + 1).join(path.sep) || path.sep);
+  return out;
+}
+
+// 'missing', or 'ok' for a real folder; refuses a link, a junction or a file.
+function dirState(d) {
+  let st;
+  try { st = fs.lstatSync(d); } catch (e) { if (e && e.code === 'ENOENT') return 'missing'; throw e; }
+  if (st.isSymbolicLink()) refuse(d, 'the folder is a link or junction');
+  if (!st.isDirectory()) refuse(d, 'not a folder');
+  return 'ok';
+}
+
+// Create `dir` and the guarded folders above it, one level at a time, each a
+// real folder. Returns dir.
+function safeMkdir(dir) {
+  const chain = guardedDirs(dir);
+  for (const [n, d] of chain.entries()) {
+    if (dirState(d) === 'ok') continue;
+    if (n === 0) fs.mkdirSync(path.dirname(d), { recursive: true }); // the project folder, outside .agent-team
+    try { fs.mkdirSync(d); } catch (e) { if (!e || e.code !== 'EEXIST') throw e; }
+    if (dirState(d) !== 'ok') refuse(d, 'the folder vanished while it was created');
+  }
   return dir;
 }
+
+// The entries of a folder under the logs folder, to drain or prune it; null
+// when it (or a folder above it) is missing. Refuses a linked folder.
+function safeListDir(dir, opts) {
+  for (const d of guardedDirs(dir)) if (dirState(d) === 'missing') return null;
+  return fs.readdirSync(dir, opts);
+}
+
+function checkFile(file, st) {
+  if (st.isSymbolicLink()) refuse(file, 'the file is a link');
+  if (!st.isFile()) refuse(file, 'not a regular file');
+  if (st.nlink > 1) refuse(file, 'the file has another hard link');
+}
+
+// Refuse an existing log that is a link, not a regular file, or hard-linked;
+// also check the folders above it. A missing file passes.
+function checkLogFile(file) {
+  for (const d of guardedDirs(path.dirname(file))) dirState(d);
+  let st = null;
+  try { st = fs.lstatSync(file); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  if (st) checkFile(file, st);
+}
+
+// Append `data` to a log, creating it if missing.
+function safeAppend(file, data) {
+  safeMkdir(path.dirname(file));
+  checkLogFile(file);
+  if (safeWriteHooks.beforeOpen) safeWriteHooks.beforeOpen(file);
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | O_NOFOLLOW, 0o666);
+  } catch (e) {
+    if (e && (e.code === 'ELOOP' || e.code === 'EMLINK')) refuse(file, 'the file is a link');
+    throw e;
+  }
+  try {
+    checkFile(file, fs.fstatSync(fd));
+    fs.writeFileSync(fd, data, 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Create `file` exclusively (it must not exist: EEXIST otherwise) and return
+// the open fd. O_EXCL never follows a link at the name.
+function safeOpenNew(file) {
+  safeMkdir(path.dirname(file));
+  return fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW, 0o666);
+}
+
+// Create `file` exclusively with `data`. Throws EEXIST when the name exists.
+function safeWriteNew(file, data) {
+  const fd = safeOpenNew(file);
+  try { fs.writeFileSync(fd, data, 'utf8'); } finally { fs.closeSync(fd); }
+}
+
+// A temp name next to `file` that no committed file can already hold.
+function tempName(file) {
+  return `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+}
+// A name tempName made. A process that dies between the create and the rename
+// leaves one behind; records.prunePending and archive-logs sweep old ones.
+const TEMP_FILE = /\.[0-9a-f]{16}\.tmp$/;
+
+// Replace `file` with `data`: a new temp file, renamed over it. A rename
+// replaces a link at the name; it never writes to what the link points at.
+function safeReplace(file, data) {
+  const tmp = tempName(file);
+  safeWriteNew(tmp, data);
+  try { fs.renameSync(tmp, file); } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    throw e;
+  }
+}
+// --- safe writes under .agent-team/logs/ (end) ---
 
 // Does this project use agent-team? True when it has an .agent-team folder
 // (team-init, or an earlier log line), or its own settings turn the plugin on
@@ -114,8 +259,9 @@ function enabledHere(input) {
   return process.env.AGENT_TEAM_HOOK_SOURCE === 'project' || inUse(input);
 }
 
+// Append one JSON line to a log. Throws on a refused path (see safeAppend).
 function appendJsonl(input, file, record) {
-  fs.appendFileSync(path.join(logDir(input), file), JSON.stringify(record) + '\n', 'utf8');
+  safeAppend(path.join(logPath(input), file), JSON.stringify(record) + '\n');
 }
 
 function guidanceVersion() {
@@ -694,6 +840,7 @@ function reviewFor(text, agentType, task) {
 module.exports = {
   REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor,
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
+  safeAppend, safeWriteNew, safeOpenNew, safeReplace, safeMkdir, safeListDir, checkLogFile, tempName, TEMP_FILE, safeWriteHooks, REFUSED,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
   glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,

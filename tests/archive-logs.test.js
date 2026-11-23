@@ -317,18 +317,24 @@ const SECRET = 'SECRET-TRANSCRIPT-TEXT-do-not-copy';
 const call = (id, model, usage, ts, text = SECRET) => ({ type: 'assistant', timestamp: ts, message: { id, model, usage, content: [{ type: 'text', text }] } });
 const card = (n) => `TASK id=AU-1 type=implement difficulty=easy milestone=m1 attempt=${n}`;
 
+// Each JSON line of a transcript body with the cwd Claude Code records (the archive reads only
+// transcripts recorded in this project, FU-18); a line that does not parse is kept as it is.
+const withCwd = (body, cwd) => body.split('\n').map((l) => {
+  try { const e = JSON.parse(l); return e && typeof e === 'object' && !Array.isArray(e) ? JSON.stringify({ cwd, ...e }) : l; } catch { return l; }
+}).join('\n');
+
 // Projects root with a Director transcript per session id, and optional subagent transcripts of the first session.
 function usageSetup({ sessions = {}, agents = {}, delegations = [], completions = [] } = {}) {
+  const p = project({ 'delegations.jsonl': jl(delegations), 'completions.jsonl': jl(completions) });
   const root = tmp();
   const folder = path.join(root, 'proj-folder');
   fs.mkdirSync(folder, { recursive: true });
-  for (const [id, body] of Object.entries(sessions)) fs.writeFileSync(path.join(folder, `${id}.jsonl`), body);
+  for (const [id, body] of Object.entries(sessions)) fs.writeFileSync(path.join(folder, `${id}.jsonl`), withCwd(body, p));
   for (const [sid, list] of Object.entries(agents)) {
     const dir = path.join(folder, sid, 'subagents');
     fs.mkdirSync(dir, { recursive: true });
-    for (const [aid, rows] of Object.entries(list)) fs.writeFileSync(path.join(dir, `agent-${aid}.jsonl`), jl(rows));
+    for (const [aid, rows] of Object.entries(list)) fs.writeFileSync(path.join(dir, `agent-${aid}.jsonl`), withCwd(jl(rows), p));
   }
-  const p = project({ 'delegations.jsonl': jl(delegations), 'completions.jsonl': jl(completions) });
   return { p, root, env: { AGENT_TEAM_PROJECTS_ROOT: root } };
 }
 const del = (sid, extra = {}) => ({ ts: 't', tool: 'claude', session_id: sid, kind: 'subagent', agent: 'agent-team:implementer', agent_id: `ag-${sid}`, task: { id: 'AU-1', milestone: 'm1', attempt: '1' }, ...extra });
@@ -408,7 +414,7 @@ test('archive G19: a missing, a torn and an unreadable transcript are counted an
   eq(JSON.stringify(ids), JSON.stringify(['dir-good', 'dir-tail']), 'the readable ones were recorded, the torn tail did not stop its own complete lines');
   assert(fs.existsSync(path.join(destOf(r), 'sessions.jsonl')), 'the archive was still made');
   // recovery: once the missing transcript exists, the next run records it
-  fs.writeFileSync(path.join(s.root, 'proj-folder', 'dir-missing.jsonl'), good);
+  fs.writeFileSync(path.join(s.root, 'proj-folder', 'dir-missing.jsonl'), withCwd(good, s.p));
   const next = arch(s.p, ['m1', '--project', 'proj', '--force'], s.env);
   assert(next.stdout.includes('4 not found') === false && next.stdout.includes('2 not found; 1 session_usage line written'), next.stdout);
 });

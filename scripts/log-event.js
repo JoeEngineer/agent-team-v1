@@ -299,4 +299,11 @@ function main(argv) {
   return 0;
 }
 
-process.exitCode = main(process.argv.slice(2));
+// A refused log path (a link under .agent-team/logs/, see lib.safeAppend) was
+// already named on stderr by the helper: exit 1 without a stack trace.
+try {
+  process.exitCode = main(process.argv.slice(2));
+} catch (err) {
+  if (!err || err.code !== lib.REFUSED) throw err;
+  process.exitCode = 1;
+}

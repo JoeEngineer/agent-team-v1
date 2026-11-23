@@ -22,10 +22,10 @@ try {
   const root = path.join(lib.logRoot(input), '.agent-team');
   // Only write the marker where agent-team is already in use.
   if (fs.existsSync(root)) {
+    // Link-safe (lib.safeReplace): a linked folder is refused with one stderr
+    // line, and a link at the marker's name is replaced, not written through.
     try {
-      const pending = path.join(root, 'logs', '.pending');
-      fs.mkdirSync(pending, { recursive: true });
-      fs.writeFileSync(path.join(pending, 'hooks-alive.json'), JSON.stringify({
+      lib.safeReplace(path.join(root, 'logs', '.pending', 'hooks-alive.json'), JSON.stringify({
         ts: new Date().toISOString(),
         tool,
         guidance_version: version,
@@ -33,7 +33,7 @@ try {
         // The session's resolved model, when the tool passes it. log-event.js
         // uses it to fill decision lines (see sessionSettings there).
         model: (input && typeof input.model === 'string' && input.model) || null,
-      }) + '\n', 'utf8');
+      }) + '\n');
     } catch { /* marker is best effort */ }
   }
 
