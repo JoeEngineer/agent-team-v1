@@ -30,13 +30,29 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
-| FU-0 | Breakdown | architect | xlarge (fable) / medium, granted | 1 | in progress | |
+| FU-0 | Breakdown | architect | xlarge (fable) / medium, granted | 1 | done | |
+| FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-2 | Scan-state table design, decision 0024 (#132) | architect | xlarge (fable) / medium, granted | 1 | in progress | |
+| FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-5 | Usage at archive time: G18, G19 (#135) | implementer (session) | medium (sonnet) / high | 1 | in progress | |
+| FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | planned | |
+| FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | planned | |
+| FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (session) | medium (sonnet) / high | 1 | planned | |
+| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 1 | planned | |
+| FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium | 1 | planned | |
+| FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (session) | medium (sonnet) / high | 1 | planned | |
+| FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 1 | planned | |
+| FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | planned | |
+| FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 1 | planned | |
+
+Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
 States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked`
 
 ## xlarge grant
 
-- Granted roles: security reviews, architect, hard-fix escalation
+- Granted roles: security reviews, architect, hard-fix escalation (the user narrowed security reviews of flagged task PRs to large/high on 2026-11-23; the close review stays xlarge/high)
 - xlarge model and note per tool: Claude: fable, "included, limited, or billed as credits, depending on your plan" · Codex: gpt-6.2-astra, same note
 - Map source: default
 - Second security review: large/high
@@ -64,3 +80,4 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
 - 0021: the guard and the hooks-active line are enabled per project; logs live in the main checkout (asked for by the user 2026-11-20)
 - 0022: a security review at every milestone close, and a per-milestone xlarge grant (accepted by the user 2026-11-22; implemented in 1.1.0)
 - 0023: one same-agent send-back at large/high before xlarge; amends 0022 (chosen by the user 2026-11-23)
+- 0025: guidance budget raises for 1.2.0 (approved by the user 2026-11-23). Reserved: 0024 scan-state table (FU-2), 0026 grant cross-check, first line wins (FU-6), 0027 scanner template (FU-10)
