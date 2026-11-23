@@ -43,7 +43,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #156 |
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #157 |
-| FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 2 (fold-in) | changes requested | #159 |
+| FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 2 (fold-in) | in review | #159 |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | in review | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
 
@@ -97,6 +97,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - The "outside a repo" test no longer exercises the no-repository path on a machine whose temp folder sits inside a repo.
   - The argv-array test matches source text.
 - **Follow-up from FU-14 (PR #158), minor:** the version test checks only the manifests. Nothing checks that the README upgrade note, the `status.js` row or the `docs/guidance.md` budget statement exist.
+- **Follow-up from FU-13 (PR #159), minor:** `agents/coach.md` lost two `pauses.jsonl` caveats and the tentative "try starting lower" when it was trimmed to fit 13,000 bytes. The caveats: `milestone` may come from the latest delegation, and the upper bound exists because the Director may have worked before delegating. The file has 4 bytes of headroom, so restoring them needs a cut or a budget raise.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Accept or reject: scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
 - **Accept or reject: grant check residuals (FU-6, decision 0026).**
