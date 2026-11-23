@@ -326,3 +326,309 @@ test('merge-task.js next names the exact status.js set command for merged, queue
   assert(nextStep('waiting', c).includes(cmd('waiting CI')), nextStep('waiting', c));
   assert(nextStep('waiting', { ...c, waited: true }).includes(cmd('waiting CI')), 'still waiting');
 });
+
+// ---- --check --since ----
+
+const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
+function g(cwd, ...args) {
+  const r = spawnSync('git', args, { cwd, encoding: 'utf8', env: GIT_ENV, timeout: 20000 });
+  assert(r.status === 0, `git ${args.join(' ')}: ${r.stderr}`);
+  return r.stdout.trim();
+}
+function run(args, cwd, env = {}) {
+  const r = spawnSync('node', [path.join(SCRIPTS, 'status.js'), ...args], { encoding: 'utf8', cwd, timeout: 20000, env: { ...process.env, ...env } });
+  let json = null;
+  try { json = JSON.parse(r.stdout.trim()); } catch { /* checked by the caller */ }
+  return { code: r.status, json, out: r.stdout, err: r.stderr };
+}
+const deq = (a, b, m) => eq(JSON.stringify(a), JSON.stringify(b), m);
+let repoN = 0;
+// A repo whose first commit holds a valid STATUS.md and one other file. Returns { dir, base }.
+function repo() {
+  const dir = path.join(DIR, `repo${repoN++}`);
+  fs.mkdirSync(dir);
+  g(dir, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(dir, 'STATUS.md'), FIXTURE);
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
+  g(dir, 'add', 'STATUS.md', 'a.txt');
+  g(dir, 'commit', '-q', '-m', 'base');
+  return { dir, base: g(dir, 'rev-parse', 'HEAD') };
+}
+function commit(dir, msg = 'c') {
+  g(dir, 'commit', '-q', '-a', '-m', msg);
+  return g(dir, 'rev-parse', 'HEAD');
+}
+// Run --check --since and assert the verdict, exit code and output shape.
+function since(dir, sha, extra, want, code, label) {
+  const r = run(['--check', '--since', sha, ...extra], dir);
+  eq(r.code, code, `${label}: exit (${r.out}${r.err})`);
+  assert(r.json && r.json.status_only === want, `${label}: status_only ${want}: ${r.out}`);
+  eq(r.json.since, sha, `${label}: since echoed`);
+  assert(/^[0-9a-f]{40}$/.test(r.json.head), `${label}: head echoed`);
+  assert(want ? r.json.reason === undefined : typeof r.json.reason === 'string' && r.json.reason, `${label}: reason only when false: ${r.out}`);
+  return r;
+}
+
+test('--since: an empty diff and an edit of STATUS.md alone pass, with head defaulting to HEAD', () => {
+  const { dir, base } = repo();
+  since(dir, base, [], true, 0, 'empty diff');
+  fs.appendFileSync(path.join(dir, 'STATUS.md'), 'more\n');
+  const head = commit(dir);
+  eq(g(dir, 'diff', '--name-status', base, head), 'M\tSTATUS.md', 'precondition: the diff is exactly M STATUS.md');
+  const r = since(dir, base, [], true, 0, 'status only');
+  eq(r.json.head, head, 'head defaults to HEAD');
+  since(dir, base, ['--head', head], true, 0, 'explicit head');
+});
+
+test('--since: any other path, alone or with STATUS.md, fails', () => {
+  const { dir, base } = repo();
+  fs.appendFileSync(path.join(dir, 'a.txt'), 'x\n');
+  const h1 = commit(dir);
+  eq(g(dir, 'diff', '--name-status', base, h1), 'M\ta.txt', 'precondition');
+  assert(/a\.txt/.test(since(dir, base, [], false, 14, 'other path').json.reason), 'reason names the path');
+  fs.appendFileSync(path.join(dir, 'STATUS.md'), 'x\n');
+  fs.writeFileSync(path.join(dir, 'new.txt'), 'n\n');
+  g(dir, 'add', 'new.txt');
+  commit(dir);
+  since(dir, base, [], false, 14, 'status plus others');
+});
+
+test('--since: STATUS.md deleted, renamed, or changed in mode or type fails', () => {
+  let r = repo();
+  g(r.dir, 'rm', '-q', 'STATUS.md');
+  commit(r.dir);
+  eq(g(r.dir, 'diff', '--name-status', r.base, 'HEAD'), 'D\tSTATUS.md', 'precondition: deleted');
+  since(r.dir, r.base, [], false, 14, 'deleted');
+
+  r = repo();
+  g(r.dir, 'mv', 'STATUS.md', 'OTHER.md');
+  commit(r.dir);
+  assert(/^R/.test(g(r.dir, 'diff', '--name-status', r.base, 'HEAD')), 'precondition: git sees a rename');
+  since(r.dir, r.base, [], false, 14, 'renamed');
+
+  r = repo();
+  g(r.dir, 'update-index', '--chmod=+x', 'STATUS.md');
+  commit(r.dir);
+  eq(g(r.dir, 'diff', '--name-status', r.base, 'HEAD'), 'M\tSTATUS.md', 'precondition: name-status alone shows only M for a mode change');
+  assert(/mode/.test(since(r.dir, r.base, [], false, 14, 'mode only').json.reason), 'reason says mode');
+
+  r = repo();
+  const lnk = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: r.dir, input: 'a.txt', encoding: 'utf8', env: GIT_ENV }).stdout.trim();
+  g(r.dir, 'update-index', '--cacheinfo', `120000,${lnk},STATUS.md`);
+  g(r.dir, 'commit', '-q', '-m', 'type');
+  assert(/^T/.test(g(r.dir, 'diff', '--name-status', r.base, 'HEAD')), 'precondition: git reports a type change');
+  since(r.dir, r.base, [], false, 14, 'type change');
+  // A symlink edited in place keeps its mode, so only the regular-file check stops it.
+  const lnk2 = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: r.dir, input: 'b.txt', encoding: 'utf8', env: GIT_ENV }).stdout.trim();
+  g(r.dir, 'update-index', '--cacheinfo', `120000,${lnk2},STATUS.md`);
+  g(r.dir, 'commit', '-q', '-m', 'link edit');
+  const typed = g(r.dir, 'rev-parse', 'HEAD~1');
+  eq(g(r.dir, 'diff', '--name-status', typed, 'HEAD'), 'M\tSTATUS.md', 'precondition: a symlink edit shows as M with equal modes');
+  assert(/regular file/.test(since(r.dir, typed, [], false, 14, 'symlink edit').json.reason), 'reason says not a regular file');
+});
+
+test('--since: a sha that is not an ancestor, an unknown sha, and git failing exit non-zero', () => {
+  const { dir, base } = repo();
+  fs.appendFileSync(path.join(dir, 'STATUS.md'), 'x\n');
+  const h1 = commit(dir);
+  g(dir, 'checkout', '-q', '-b', 'side', base);
+  fs.appendFileSync(path.join(dir, 'STATUS.md'), 'y\n');
+  const sib = commit(dir);
+  eq(spawnSync('git', ['merge-base', '--is-ancestor', h1, sib], { cwd: dir, env: GIT_ENV }).status, 1, 'precondition: h1 is not an ancestor of sib');
+  assert(/not an ancestor/.test(since(dir, h1, ['--head', sib], false, 14, 'not an ancestor').json.reason), 'reason');
+  since(dir, '0'.repeat(40), [], false, 15, 'unknown sha');
+  const nogit = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-nogit-'));
+  const r = run(['--check', '--since', base], nogit, { GIT_CEILING_DIRECTORIES: path.dirname(nogit) });
+  eq(r.code, 15, `outside a repo: ${r.out}`);
+});
+
+test('--since: a short sha, a branch name, an uppercase sha and a non-hex argument are refused before git runs', () => {
+  const { dir, base } = repo();
+  for (const bad of [base.slice(0, 12), 'main', base.toUpperCase(), `${base.slice(0, 39)}g`, `${base}0`, '--output=x']) {
+    const r = run(['--check', '--since', bad], dir);
+    eq(r.code, 2, `since ${bad}: ${r.out}`);
+    assert(r.json && r.json.ok === false, 'one JSON refusal');
+  }
+  eq(run(['--check', '--since', base, '--head', 'HEAD'], dir).code, 2, 'head must be a full sha too');
+  eq(run(['--check', '--since'], dir).code, 2, 'value missing');
+  eq(run(['--head', base], dir).code, 2, '--head alone');
+  eq(run(['--check', '--since', base, '--file', 'x'], dir).code, 2, '--file with --since');
+});
+
+test('--since: a head whose STATUS.md fails --check fails, and passes again once fixed', () => {
+  const { dir, base } = repo();
+  fs.writeFileSync(path.join(dir, 'STATUS.md'), FIXTURE.replace(/States:[^\n]*\n/, ''));
+  commit(dir);
+  assert(/--check fails/.test(since(dir, base, [], false, 14, 'broken at head').json.reason), 'reason');
+  fs.writeFileSync(path.join(dir, 'STATUS.md'), FIXTURE.replace('| 1 | in progress |', '| 1 | merged |'));
+  const fixed = commit(dir);
+  eq(since(dir, base, [], true, 0, 'recovered').json.head, fixed, 'head');
+});
+
+test('--since: git runs from an argv array, never a shell', () => {
+  const src = fs.readFileSync(path.join(SCRIPTS, 'status.js'), 'utf8');
+  assert(/execFileSync\('git', args/.test(src), 'execFileSync with an argv array');
+  assert(!/(^|[^.\w])exec\(|\bexecSync\b|shell\s*:/m.test(src), 'no exec, execSync or shell option');
+});
+
+// ---- grant ----
+
+const BLOCK = (roles, second) => `## xlarge grant\n\n- Granted roles: ${roles}\n- xlarge model and note per tool: Claude: fable\n- Map source: default\n- Second security review: ${second}\n`;
+const STATUS_DOC = (slug, roles, second, eol = '\n') => `# Status\n\n## Current milestone\n\n**${slug}**: a goal\nBranch: \`milestone/${slug}\`\n\n${BLOCK(roles, second)}\n## CI\n\n- x\n`.replace(/\n/g, eol);
+const intake = (slug, grantRoles, second = 'none') => JSON.stringify({ ts: 't', milestone: slug, xlarge_grant: grantRoles, second_review: second, map_source: 'default' });
+let projN = 0;
+function project(statusText, logLines) {
+  const dir = path.join(DIR, `proj${projN++}`);
+  fs.mkdirSync(path.join(dir, '.agent-team', 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'STATUS.md'), statusText);
+  if (logLines !== null) fs.writeFileSync(path.join(dir, '.agent-team', 'logs', 'milestones.jsonl'), logLines);
+  return dir;
+}
+const grantIn = (dir, extra = []) => run(['grant', ...extra], dir, { CLAUDE_PROJECT_DIR: dir });
+const REPO_ROLES = 'security reviews, architect, hard-fix escalation (the user narrowed security reviews of flagged task PRs to large/high on 2026-11-23; the close review stays xlarge/high)';
+
+test('grant: block and log agree, the free text after the roles is not read as roles, exit 0', () => {
+  const dir = project(STATUS_DOC('m1', REPO_ROLES, 'large/high'), `${intake('m1', ['security-review', 'architect', 'hard-fix'], 'large')}\n`);
+  const r = grantIn(dir);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant, { roles: ['architect', 'hard-fix', 'security-review'], second_review: 'large' }, 'effective grant');
+  eq(r.json.milestone, 'm1', 'slug from the Current milestone heading');
+});
+
+test('grant: the shipped template and this repo STATUS.md both parse', () => {
+  const tpl = fs.readFileSync(path.join(ROOT, 'templates', 'project', 'STATUS.md'), 'utf8');
+  let r = grantIn(project(tpl, null));
+  eq(r.code, 0, `template with no log: ${r.out}`);
+  deq(r.json.grant, { roles: [], second_review: 'none' }, 'unfilled template is an empty grant');
+  const live = fs.readFileSync(path.join(ROOT, 'STATUS.md'), 'utf8');
+  r = grantIn(project(live, null));
+  assert(r.json && r.code !== 2 && r.code !== 17, `the repo block parses (not unreadable): ${r.out}`);
+});
+
+test('grant: no block and no line prints an empty grant and exits 0; a missing or empty log is the same', () => {
+  const doc = '# Status\n\n## Current milestone\n\n**m1**: g\n';
+  for (const log of [null, '', '\n']) {
+    const r = grantIn(project(doc, log));
+    eq(r.code, 0, r.out);
+    deq(r.json.grant, { roles: [], second_review: 'none' }, 'empty grant');
+  }
+  eq(grantIn(project(STATUS_DOC('m1', 'none', 'no'), null)).code, 0, 'a block that grants nothing, with no log, is fine');
+});
+
+test('grant: a role added to the block is not granted; exit 16 prints both and says use the narrower', () => {
+  const dir = project(STATUS_DOC('m1', 'security reviews, architect, coach at close', 'no'), `${intake('m1', ['security-review', 'architect'])}\n`);
+  const r = grantIn(dir);
+  eq(r.code, 16, r.out);
+  deq(r.json.block.roles, ['architect', 'coach', 'security-review'], 'block shown');
+  deq(r.json.log.roles, ['architect', 'security-review'], 'log shown');
+  deq(r.json.grant.roles, ['architect', 'security-review'], 'narrower');
+  assert(/use the narrower; ask the user/.test(r.json.reason), r.out);
+});
+
+test('grant: a role removed from the block narrows the grant; exit 16', () => {
+  const dir = project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['security-review', 'architect'])}\n`);
+  const r = grantIn(dir);
+  eq(r.code, 16, r.out);
+  deq(r.json.grant.roles, ['architect'], 'narrower');
+});
+
+test('grant: the lower second-review tier wins, from either side; equal tiers exit 0', () => {
+  let r = grantIn(project(STATUS_DOC('m1', 'architect', 'xlarge/high'), `${intake('m1', ['architect'], 'large')}\n`));
+  eq(r.code, 16, r.out);
+  deq(r.json.grant.second_review, 'large', 'log lower');
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'large/high'), `${intake('m1', ['architect'], 'xlarge')}\n`));
+  eq(r.code, 16, r.out);
+  deq(r.json.grant.second_review, 'large', 'block lower');
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'not offered'), `${intake('m1', ['architect'], 'none')}\n`));
+  eq(r.code, 0, `"not offered" is none: ${r.out}`);
+  r = grantIn(project(STATUS_DOC('m1', 'none', 'large/high'), null));
+  eq(r.code, 18, `a second review in the block with no log line: ${r.out}`);
+});
+
+test('grant: a forged block with no log line exits 18 and grants nothing', () => {
+  const dir = project(STATUS_DOC('m1', 'security reviews, architect', 'xlarge/high'), `${intake('other', ['architect'])}\n`);
+  const r = grantIn(dir);
+  eq(r.code, 18, r.out);
+  deq(r.json.grant, { roles: [], second_review: 'none' }, 'nothing granted');
+  eq(grantIn(project(STATUS_DOC('m1', 'architect', 'no'), null)).code, 18, 'log file missing');
+});
+
+test('grant: an unknown role token or tier word in the block exits 17', () => {
+  const log = `${intake('m1', ['architect'])}\n`;
+  for (const roles of ['architect, everything', 'architects', 'architect and coach at close', 'architect (x']) {
+    const r = grantIn(project(STATUS_DOC('m1', roles, 'no'), log));
+    eq(r.code, 17, `${roles}: ${r.out}`);
+  }
+  eq(grantIn(project(STATUS_DOC('m1', 'architect', 'maybe'), log)).code, 17, 'tier word');
+  const twice = STATUS_DOC('m1', 'architect', 'no').replace('- Map source', '- Granted roles: architect, coach at close\n- Map source');
+  eq(grantIn(project(twice, log)).code, 17, 'roles line twice');
+});
+
+test('grant: a torn first log line that could be the intake line exits 19; one for another milestone is skipped', () => {
+  const torn = '{"ts":"t","milestone":"m1","xlarge_grant":["archi';
+  let r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${torn}\n${intake('m1', ['architect'])}\n`));
+  eq(r.code, 19, `torn line mentioning the slug, a later line says the same: ${r.out}`);
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `{"ts":"t","milestone":"zz","xl\n${intake('m1', ['architect'])}\n`));
+  eq(r.code, 0, `torn line for another slug: ${r.out}`);
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['bogus'])}\n`));
+  eq(r.code, 19, `bad role in the log: ${r.out}`);
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'], 'huge')}\n`));
+  eq(r.code, 19, `bad tier in the log: ${r.out}`);
+});
+
+test('grant: two milestones in one log; --milestone picks the slug; the heading picks it otherwise', () => {
+  const log = `${intake('m1', ['architect'])}\n${intake('m2', ['coach'], 'xlarge')}\n`;
+  const dir = project(STATUS_DOC('m2', 'coach at close', 'xlarge/high'), log);
+  let r = grantIn(dir);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant, { roles: ['coach'], second_review: 'xlarge' }, 'm2 from the heading');
+  r = grantIn(dir, ['--milestone', 'm1']);
+  eq(r.code, 16, `m1 against the m2 block: ${r.out}`);
+  eq(r.json.milestone, 'm1', 'slug from --milestone');
+});
+
+test('grant: a later line for the same slug is ignored, whether it widens or narrows', () => {
+  const dir = project(STATUS_DOC('m1', 'architect, coach at close', 'xlarge/high'), `${intake('m1', ['architect'])}\n${intake('m1', ['architect', 'coach'], 'xlarge')}\n`);
+  let r = grantIn(dir);
+  eq(r.code, 16, `the first line (architect, none) is the answer: ${r.out}`);
+  deq(r.json.grant, { roles: ['architect'], second_review: 'none' }, 'first line wins');
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'])}\n${intake('m1', [])}\n`));
+  eq(r.code, 0, `a later narrowing line is ignored too: ${r.out}`);
+});
+
+test('grant: CRLF in the log and the file, and a slug with regex metacharacters', () => {
+  const slug = 'a.b+(c)[d]';
+  let r = grantIn(project(STATUS_DOC('m1', 'architect', 'no', '\r\n'), `${intake('m1', ['architect'])}\r\n`));
+  eq(r.code, 0, `CRLF: ${r.out}`);
+  r = grantIn(project(STATUS_DOC(slug, 'architect', 'no'), `${intake('aXb+(c)[d]', ['coach'])}\n${intake(slug, ['architect'])}\n`));
+  eq(r.code, 0, `metacharacter slug is compared as a string: ${r.out}`);
+  eq(r.json.milestone, slug, 'slug');
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m.', ['coach'])}\n`), ['--milestone', 'm1']);
+  eq(r.code, 18, 'a regex-like neighbour does not match');
+});
+
+test('grant: in a linked worktree it reads the main checkout logs', () => {
+  const main = path.join(DIR, 'wt-main');
+  fs.mkdirSync(main);
+  g(main, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(main, 'STATUS.md'), STATUS_DOC('m1', 'architect', 'no'));
+  g(main, 'add', 'STATUS.md');
+  g(main, 'commit', '-q', '-m', 'x');
+  fs.mkdirSync(path.join(main, '.agent-team', 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(main, '.agent-team', 'logs', 'milestones.jsonl'), `${intake('m1', ['architect'])}\n`);
+  const wt = path.join(DIR, 'wt-linked');
+  g(main, 'worktree', 'add', '-q', '-b', 'wtb', wt);
+  assert(fs.statSync(path.join(wt, '.git')).isFile(), 'precondition: a linked worktree');
+  assert(!fs.existsSync(path.join(wt, '.agent-team')), 'precondition: no logs inside the worktree');
+  const r = run(['grant'], wt, { CLAUDE_PROJECT_DIR: wt });
+  eq(r.code, 0, r.out);
+  deq(r.json.grant.roles, ['architect'], 'read from the main checkout');
+});
+
+test('grant and --since keep the usage rules', () => {
+  eq(run(['grant', 'extra']).code, 2, 'extra word');
+  eq(run(['grant', '--check']).code, 2, 'grant with --check');
+  eq(run(['grant', '--state', 'x']).code, 2, 'grant with --state');
+  eq(run(['set', 'T-1', '--state', 'merged', '--milestone', 'x']).code, 2, 'set with --milestone');
+  eq(run(['grant', '--milestone', '']).code, 2, 'empty slug');
+});
