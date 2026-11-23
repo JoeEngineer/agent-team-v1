@@ -46,12 +46,12 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #159 |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
-| FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | in review | 171 |
-| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium | 1 | in review | 172 |
-| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium | 1 | in review | 170 |
-| FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 1 | in review | 167 |
-| FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 1 | in progress: scan row needs 0024 amendment; follow-up sent | 168 |
-| FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | in review | 169 |
+| FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | merged | 171 |
+| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested: HTML type-6 regex lost its \s escape | 172 |
+| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested: Windows symlink test path form | 170 |
+| FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 2 (fold-in) | in review: fold-in pushed e6e4222; incremental review | 167 |
+| FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | in review: fold-in pushed 5b45a92; incremental review | 168 |
+| FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | in review: approved at ea273eb; security review running; 3 style minors batched into FU-23 | 169 |
 | FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted | 1 | planned: after FU-16, FU-17, FU-20, FU-21 merge | |
 | FU-23 | Close fix: `review-json` fence residuals; security-sensitive (#174) | architect | large (opus) / high | 1 | planned: after FU-22 merges (shares `scripts/lib.js`) | |
 
