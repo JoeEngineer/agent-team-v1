@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 // Generate one Codex agent TOML per role x enabled Codex tier from agents/*.md
 // and the effective model map. Node built-ins only.
+// Standard tiers are written when auto-eligible or explicitly enabled: true; xlarge
+// is written whenever the map has a Codex xlarge model that is not disabled.
 //   node scripts/codex-agents.js [--out <dir>] [--agents <dir>] [--dry-run] [--check]
 // Default out dir: <git root>/.codex/agents. Exit 1 on --check drift or bad usage.
 'use strict';
@@ -29,7 +31,8 @@ function parseAgent(text) {
   return { fm, body: m[2] };
 }
 
-// A tier qualifies when auto-eligible, or explicitly enabled: true (and not disabled).
+// A standard tier qualifies when auto-eligible, or explicitly enabled: true (and not
+// disabled). xlarge is never auto, so it qualifies whenever it is not disabled.
 function codexTiers(map) {
   const out = [];
   for (const tier of models.TIERS) {
@@ -38,7 +41,7 @@ function codexTiers(map) {
     const tierObj = map[tier];
     const raw = tierObj.codex;
     const explicit = tierObj.enabled === true || (isMap(raw) && raw.enabled === true);
-    if (e.auto || explicit) out.push(e);
+    if (e.auto || explicit || tier === 'xlarge') out.push(e);
   }
   return out;
 }
