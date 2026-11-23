@@ -36,8 +36,24 @@ test('override opus gives tier large, source override', () => {
   eq(rec.tier_source, 'override', 'tier source');
 });
 
-test('override fable gives tier xlarge with billing credits', () => {
+// A map override whose xlarge claude entry bills as credits, so the billing path stays covered.
+function creditsMap() {
+  const m = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config', 'models.json'), 'utf8'));
+  m.xlarge.claude = { model: 'fable', billing: 'credits' };
+  const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-credmap-')), 'models.json');
+  fs.writeFileSync(f, JSON.stringify(m));
+  return { AGENT_TEAM_MODELS: f };
+}
+
+test('default map: fable gives tier xlarge with no billing key', () => {
   const rec = delegate(tmpProject(), { subagent_type: 'agent-team:implementer', model: 'fable' });
+  eq(rec.model_source, 'override', 'precondition');
+  eq(rec.tier, 'xlarge', 'tier');
+  assert(!('billing' in rec), 'no billing on the default map');
+});
+
+test('map override with credits billing: fable gives tier xlarge with billing credits', () => {
+  const rec = delegate(tmpProject(), { subagent_type: 'agent-team:implementer', model: 'fable' }, {}, creditsMap());
   eq(rec.tier, 'xlarge', 'tier');
   eq(rec.billing, 'credits', 'billing');
 });
@@ -118,11 +134,12 @@ test('a linked completion for a non-inherited agent reuses the delegation tier',
 
 test('resume (SendMessage) reuses the prior delegation tier', () => {
   const proj = tmpProject();
-  delegate(proj, { subagent_type: 'agent-team:implementer', model: 'fable' }, { isAsync: true, status: 'async_launched', agentId: 'rs1' });
+  const env = creditsMap();
+  delegate(proj, { subagent_type: 'agent-team:implementer', model: 'fable' }, { isAsync: true, status: 'async_launched', agentId: 'rs1' }, env);
   const r = run('log-delegation.js', {
     hook_event_name: 'PostToolUse', tool_name: 'SendMessage', tool_use_id: 'tu2',
     tool_input: { to: 'rs1', message: card.replace('attempt=1', 'attempt=2') }, tool_response: {},
-  }, proj);
+  }, proj, env);
   eq(r.status, 0, 'exit 0');
   const recs = readLog(proj, 'delegations.jsonl');
   eq(recs.length, 2, 'precondition: resume record written');
