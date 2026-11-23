@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-21. The v1 milestone was done by one Claude session working inline (no Director run, no delegation, no reviewer pass), at the user's request while they were away. The changes after it were made the same way._
+_Last updated: 2026-11-22. Milestone security-review is a Director run._
 
 ## Since the milestone
 
@@ -12,25 +12,28 @@ _Last updated: 2026-11-21. The v1 milestone was done by one Claude session worki
 
 ## Current milestone
 
-**v1**: Rewrite the guidance for all roles to be shorter without losing intent, so it costs less context and survives compaction. Version 1.0.0.
-Branch: `milestone/v1` (from `main` at 03fd01f) · Issue: none · Started: 2026-11-13 · **Merged into `main` as #105 on 2026-11-13** (tag `v1.0.0`)
+**security-review**: implement decision 0022 in full (a `security-reviewer` agent, the reviewer's security checklist, the `security-sensitive` flag, a mandatory security review at milestone close, the per-milestone xlarge grant, a plan-neutral model map, the optional second security review through the Codex bridge). Version 1.1.0.
+Branch: `milestone/security-review` (from `main` at 41814ee) · Issue: #112 · Started: 2026-11-22
 
-Previous milestone: **ci-wait** (0.6.0), merged into `main` as #104.
+This run follows the installed 1.0.2 rules: xlarge needs the user's yes per task, and there is no security-review step yet. The new rules apply after this milestone merges.
+
+Previous milestone: **v1** (1.0.0), merged into `main` as #105 on 2026-11-13 (tag `v1.0.0`).
 
 ## Tasks
 
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
-| V1-1 | `scripts/merge-task.js`: gate, merge, comment and log in one call; guard check; tests | (inline) | Fable 5.2 | 1 | merged (#105) | |
-| V1-2 | Director `SKILL.md` and references rewritten in layers, one home per rule | (inline) | Fable 5.2 | 1 | merged (#105) | |
-| V1-3 | Role files: `reviewer`, `implementer` tightened; `coach` regrouped by log file | (inline) | Fable 5.2 | 1 | merged (#105) | |
-| V1-4 | SessionStart note after a compaction | (inline) | Fable 5.2 | 1 | merged (#105) | |
-| V1-5 | Rule inventory, size budgets and single-source tests replace the sentence-matching tests | (inline) | Fable 5.2 | 1 | merged (#105) | |
-| V1-6 | 1.0.0 manifests, README, `docs/guidance.md`, decisions 0019 and 0020, live-harness parser | (inline) | Fable 5.2 | 1 | merged (#105) | |
+| SR-0 | Breakdown | architect | large (opus) / high | 1 | done | |
+| SR-1 | Model map `note`, xlarge on by default but never auto, Codex xlarge agent files (#113) | implementer | medium (sonnet) / medium | 1 | planned | |
+| SR-2 | Logger and handback check know the security reviewer; bridge reviews are logged (#114) | implementer | medium (sonnet) / medium | 1 | planned | |
+| SR-3 | team-init scanner CI template; STATUS template grant block; `security-sensitive` (#115) | implementer | medium (sonnet) / medium | 1 | planned | |
+| SR-4 | Director guidance: grant, intake questions, security reviews, blocking rules, second review (#116) | architect | large (opus) / high | 1 | planned | |
+| SR-5 | Role files: new `security-reviewer`, reviewer checklist, architect flag, Coach (#117); after SR-1, SR-4 | implementer | medium (sonnet) / medium | 1 | planned | |
+| SR-6 | README, docs, "amended by 0022" notes, version 1.1.0 (#118); after SR-1 to SR-5 | implementer | small (haiku) / medium | 1 | planned | |
 
 States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked`
 
-Result: `node tests/run.js` passes on the branch head. What a Claude + GitHub Director loads fell from 42.1 KB to 28 KB; `SKILL.md` from 14.1 KB to 8.1 KB.
+Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed above the table (implement/hard is implementer medium/high): it amends the Director's authorization line and must keep one home per rule across seven files inside the size budgets, which is design work.
 
 ## CI
 
