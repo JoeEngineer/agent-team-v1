@@ -556,7 +556,12 @@ function detectTool(input, env = process.env) {
   return 'claude';
 }
 
+// Agents and card types that report a review-json block instead of result-json.
+const REVIEWER_AGENT_TYPES = ['agent-team:reviewer', 'agent-team:security-reviewer'];
+const REVIEW_TASK_TYPES = ['review', 'security-review'];
+
 module.exports = {
+  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES,
   detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,

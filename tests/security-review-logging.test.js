@@ -6,7 +6,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { ROOT, SCRIPTS, tmpProject, run, readLog, test, assert, eq } = require('./helpers');
 
 console.log('security-review-logging');
@@ -176,4 +176,39 @@ test('codex: a security-reviewer-large completion logs its review with scan and 
   eq(rows[0].role, 'security-review', 'role');
   eq(rows[0].reviewer_tier, 'large', 'tier large');
   eq(rows[0].scan.files, 12, 'scan kept');
+});
+
+// --- block-retry wait ------------------------------------------------------------
+// The block lands in the transcript 500 ms after the hook starts; the hook
+// re-reads every 600 ms (up to four times), so the first read has no block and a
+// later one does. Without the wait the completion would have no review.
+
+const handbackLine = (message) => JSON.stringify({ type: 'assistant', timestamp: '2026-10-30T18:33:42.000Z', message: { id: 'm_late', model: 'claude-opus-5-5', content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message } }] } }) + '\n';
+
+function lateBlockStop(p, agentType, id) {
+  const file = transcript(CARD);
+  assert(!fs.readFileSync(file, 'utf8').includes('review-json'), 'precondition: no block in the transcript when the hook starts');
+  const code = `setTimeout(()=>require('fs').appendFileSync(${JSON.stringify(file)}, ${JSON.stringify(handbackLine(block(REVIEW)))}), 500)`;
+  spawn(process.execPath, ['-e', code], { detached: true, stdio: 'ignore' }).unref();
+  run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: id, agent_type: agentType, agent_transcript_path: file }, p, { AGENT_TEAM_STOP_RETRY_MS: '600' });
+  const cs = readLog(p, 'completions.jsonl');
+  eq(cs.length, 1, 'one completion');
+  return cs[0];
+}
+
+test('SubagentStop retry: a security reviewer whose block lands late is found by the wait', () => {
+  const p = tmpProject();
+  const c = lateBlockStop(p, 'agent-team:security-reviewer', 'late-sec');
+  eq(c.report_source, 'handback', 'report from the late handback');
+  eq(c.review.scan.files, 12, 'review read after the wait');
+  eq(readLog(p, 'reviews.jsonl').length, 1, 'review logged');
+});
+
+test('SubagentStop retry: a security-review card on a non-agent-team agent waits for the block too', () => {
+  const p = tmpProject();
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'tu', tool_input: { subagent_type: 'general-purpose', prompt: CARD }, tool_response: { agentId: 'late-gp', isAsync: true, status: 'async_launched' } }, p);
+  eq(readLog(p, 'delegations.jsonl')[0].task.type, 'security-review', 'precondition: delegation carries the security-review card');
+  const c = lateBlockStop(p, 'general-purpose', 'late-gp');
+  eq(c.report_source, 'handback', 'report from the late handback');
+  eq(readLog(p, 'reviews.jsonl')[0].role, 'security-review', 'review logged with the card type');
 });

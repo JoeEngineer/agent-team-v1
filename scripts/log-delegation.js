@@ -58,9 +58,7 @@ const SESSION_SETTINGS = new Set([
 ]);
 const isBridge = (t) => /^mcp__(codex-bridge|antigravity-bridge)__/.test(t) && !/check_runway|_check$/.test(t);
 // A reviewer reports review-json: the general and the security reviewer, or a card of either review type.
-const REVIEW_AGENTS = new Set(['agent-team:reviewer', 'agent-team:security-reviewer']);
-const REVIEW_TYPES = new Set(['review', 'security-review']);
-const isReviewTask = (task) => !!(task && REVIEW_TYPES.has(task.type));
+const isReviewTask = (task) => !!(task && lib.REVIEW_TASK_TYPES.includes(task.type));
 const isShell = (t) => t === 'Bash' || t === 'PowerShell';
 
 // The delegation record for this agent, to pick up the routing the Director chose.
@@ -395,7 +393,7 @@ function onSubagentStop(input) {
   // quiet. That second stop still writes its own completion line (its report
   // differs); readers use the last line per agent_id + turn.
   if (agentType && agentType.startsWith('agent-team:') && !hasBlock(report) && !input.stop_hook_active) {
-    const isReview = REVIEW_AGENTS.has(agentType) || isReviewTask(delegation && delegation.task);
+    const isReview = lib.REVIEWER_AGENT_TYPES.includes(agentType) || isReviewTask(delegation && delegation.task);
     const block = isReview ? 'review-json' : 'result-json';
     return `agent-team: your reply ended without its \`${block}\` block. End your reply with your \`${block}\` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.`;
   }
