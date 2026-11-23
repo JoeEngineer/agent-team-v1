@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, isAmbiguous, ambiguousNudge, ambiguousDirectorNudge, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -136,10 +136,12 @@ function onPostSubagent(input) {
     record.duration_ms = elapsed;
     Object.assign(record, lib.usageFrom(resp));
     record.result = lib.lastFencedJson(text, 'result-json');
-    const review = lib.lastFencedJson(text, 'review-json');
+    const review = lib.reviewJson(text);
     if (review) {
       record.review = review;
-      logReview(input, record, review);
+      // An ambiguous review writes no row; the Director is told to re-ask once.
+      if (isAmbiguous(review)) context = [context, ambiguousDirectorNudge(review)].filter(Boolean).join('\n');
+      else logReview(input, record, review);
     }
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
@@ -187,10 +189,13 @@ function onPostBridge(input) {
   const text = lib.responseText(input.tool_response);
   const model = ti.model || 'default';
   const task = lib.parseTaskCard(ti.prompt || ti.task || ti.instructions);
+  // The server name is "<name>-bridge" (codex-bridge, antigravity-bridge).
+  const server = input.tool_name.replace(/^mcp__/, '').replace(/__.*/, '');
   const record = {
     ...base(input),
     kind: 'bridge',
-    agent: input.tool_name.replace(/^mcp__/, '').replace(/__.*/, ''),
+    agent: server,
+    tool_use_id: input.tool_use_id || null,
     model,
     effort: ti.effort || ti.reasoning_effort || 'default',
     task,
@@ -200,14 +205,17 @@ function onPostBridge(input) {
   // A review that came back through a bridge is logged as a review, with the
   // bridge's model, so reviews from both families can be compared. A block
   // that doesn't parse is kept as _unparsed and writes no row.
-  const review = lib.lastFencedJson(text, 'review-json');
+  const review = lib.reviewJson(text);
   if (review) {
     record.review = review;
-    if (task.id && !review._unparsed) logReview(input, record, review);
+    // The row's `tool` is the bridge (codex, antigravity), not claude.
+    if (task.id && !review._unparsed && !isAmbiguous(review)) logReview(input, record, review, server.replace(/-bridge$/, ''));
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
   // No stop hook runs on the bridge path, so the Director gets the nudge.
-  const messages = [...flagMessages(task), ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_DIRECTOR_NUDGE] : [])];
+  const messages = [...flagMessages(task),
+    ...(isAmbiguous(review) ? [ambiguousDirectorNudge(review)] : []),
+    ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_DIRECTOR_NUDGE] : [])];
   return messages.length ? messages.join('\n') : undefined;
 }
 
@@ -407,6 +415,11 @@ function onSubagentStop(input) {
   if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && verdictConflict(record.review)) {
     return VERDICT_CONFLICT_NUDGE;
   }
+  // A review-json that is not one top-level block at the end of the reply wrote
+  // no row: tell the reviewer once per turn (quiet under stop_hook_active).
+  if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && isAmbiguous(record.review)) {
+    return ambiguousNudge(record.review);
+  }
 }
 
 // Task card for a completion: the delegation's, with the attempt taken from
@@ -455,7 +468,7 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     tokens_by_class: t.tokens ? { ...t.classes } : null,
     report_source: reportSource,
     result: lib.lastFencedJson(report, 'result-json'),
-    review: lib.lastFencedJson(report, 'review-json'),
+    review: lib.reviewJson(report),
   };
 }
 

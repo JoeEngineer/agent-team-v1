@@ -26,7 +26,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const lib = require('./lib');
-const { claimOnce, shortHash, logReview, appendOnce, resolveQueuedMerges } = require('./records');
+const { claimOnce, shortHash, logReview, isAmbiguous, appendOnce, resolveQueuedMerges } = require('./records');
 const { readMeta, completionRecord } = require('./log-delegation');
 const { drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir: codexPendingDir } = require('./codex-log');
 
@@ -460,7 +460,7 @@ function reconcile({ dryRun = false } = {}) {
       const source = [['handback', t.handback], ['text', t.lastText]].find(([, v]) => v && hasBlock(v));
       if (!source) continue; // no report block in this turn: nothing to backfill
       const [, report] = source;
-      const probe = { result: lib.lastFencedJson(report, 'result-json'), review: lib.lastFencedJson(report, 'review-json') };
+      const probe = { result: lib.lastFencedJson(report, 'result-json'), review: lib.reviewJson(report) };
       // Turn 1 is the original delegation, later turns are its SendMessage resumes.
       const taskDel = [a.delegation, ...a.dels.filter((d) => isResume(d))][turn - 1] || a.delegation;
       // A match counts only on the same attempt: a stale line (turn n's report under attempt n+1) must not hide turn n+1.
@@ -478,7 +478,7 @@ function reconcile({ dryRun = false } = {}) {
       record.guidance_version = (taskDel && taskDel.guidance_version) || record.guidance_version;
       record.reconciled_by = lib.guidanceVersion();
       lib.appendJsonl(input, 'completions.jsonl', record);
-      if (record.review) { logReview(sess, record, record.review); stats.reviews++; }
+      if (record.review && !isAmbiguous(record.review)) { logReview(sess, record, record.review); stats.reviews++; }
     }
     if (a.dels.some((d) => isResume(d))) {
       for (const file of ['completions.jsonl', 'reviews.jsonl']) {

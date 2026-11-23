@@ -140,9 +140,24 @@ function milestoneFor(input, taskId, task) {
   return d ? d.task.milestone : undefined;
 }
 
+// A bridge call has no agent id; its call id (tool_use_id) names the review.
+// The hash input differs from a subagent's, so no existing review_id changes.
+const isBridgeRecord = (record) => !!record && record.kind === 'bridge';
+
+// The effort a bridge ran at: the call's own, else the card's (the call logs 'default' when it gave none).
+const bridgeEffort = (record, task, bridge) =>
+  (bridge && (record.effort == null || record.effort === 'default') && task.effort) || record.effort;
+
 function reviewIdentity(input, record, review, tool = 'claude') {
   const task = record.task || {};
   const identity = task.id || record.turn_id;
+  if (isBridgeRecord(record)) {
+    return task.id && record.tool_use_id ? `review-${shortHash(JSON.stringify([
+      'bridge', tool, record.session_id || input.session_id || null, record.tool_use_id,
+      task.id, task.reviewed_task || null, task.attempt == null ? null : String(task.attempt),
+      task.role || task.type || record.agent || null, review,
+    ]))}` : null;
+  }
   return record.agent_id && identity ? `review-${shortHash(JSON.stringify([
     tool, record.session_id || input.session_id || null, record.agent_id,
     task.id || null, task.reviewed_task || null, task.attempt == null ? null : String(task.attempt),
@@ -158,11 +173,11 @@ const milestoneField = (m) => (m ? { milestone: m } : {});
 // no value for (a Director-written line passes `pr` or `milestone` this way),
 // but never the row's identity (`review_id`, `ts`, `tool`, `guidance_version`).
 const HOOK_ONLY = ['review_id', 'ts', 'tool', 'guidance_version', 'reconciled_by', 'review_shadowed'];
-function withReview(known, review) {
+function withReview(known, review, hookOnly = HOOK_ONLY) {
   const row = { ...known };
   const shadowed = {};
   for (const [key, value] of Object.entries(review && typeof review === 'object' ? review : {})) {
-    if (known[key] == null && !HOOK_ONLY.includes(key)) row[key] = value;
+    if (known[key] == null && !hookOnly.includes(key)) row[key] = value;
     else if (JSON.stringify(known[key]) !== JSON.stringify(value)) shadowed[key] = value;
   }
   if (Object.keys(shadowed).length) row.review_shadowed = shadowed;
@@ -185,10 +200,24 @@ const VERDICT_CONFLICT_NUDGE = 'agent-team: your review-json has a verdict that 
 const VERDICT_CONFLICT_DIRECTOR_NUDGE = "agent-team: the bridge review's verdict contradicts its severity: " +
   'ask it for a `major` with its exploit path, or an `approve`.';
 
+// A reply whose review-json is not exactly one top-level block at its end (see
+// lib.reviewJson) is read as no review: no reviews.jsonl row, and the line it is
+// on carries { _ambiguous: true, count }.
+const isAmbiguous = (review) => !!review && typeof review === 'object' && review._ambiguous === true;
+const ambiguousDetail = (review) => `${review.count} top-level \`review-json\` block${review.count === 1 ? '' : 's'} found`;
+// SubagentStop's text goes to the reviewer itself; the bridge path's to the Director.
+const ambiguousNudge = (review) => `agent-team: your reply's review-json could not be read (${ambiguousDetail(review)}). ` +
+  'It must be exactly one `review-json` fence, at column 0, not inside another fence or a quote, and the last thing in the reply. End your reply with it alone.';
+const ambiguousDirectorNudge = (review) => `agent-team: the bridge review's review-json could not be read (${ambiguousDetail(review)}), so no review row was logged. ` +
+  'Re-ask once for one `review-json` fence at column 0, not inside another fence or a quote, as the last thing in its reply. If it is still ambiguous, treat the review as missing.';
+
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
 function logReview(input, record, review, tool = 'claude') {
+  // Never a row for a review that could not be read unambiguously.
+  if (isAmbiguous(review)) return false;
   const task = record.task || {};
+  const bridge = isBridgeRecord(record);
   const identity = task.id || record.turn_id;
   const reviewId = reviewIdentity(input, record, review, tool);
   if (record.agent_id && !identity && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return false;
@@ -207,13 +236,16 @@ function logReview(input, record, review, tool = 'claude') {
     pr: task.pr,
     attempt: task.attempt,
     ...milestoneField(milestoneFor(input, task.reviewed_task || task.id, task)),
+    // A bridge row also says which bridge ran (`tool` above, `agent` here) and the tier and effort the card asked for.
+    ...(bridge ? { agent: record.agent, tier: task.tier ?? null, effort: task.effort ?? null } : {}),
     reviewer_model: tool === 'codex' && record.resolved_model !== undefined ? record.resolved_model : (record.resolved_model || record.model),
-    reviewer_effort: tool === 'codex' && record.resolved_effort !== undefined ? record.resolved_effort : (record.resolved_effort || record.effort),
+    reviewer_effort: tool === 'codex' && record.resolved_effort !== undefined ? record.resolved_effort : (record.resolved_effort || bridgeEffort(record, task, bridge)),
     requested_model: record.model ?? null,
     requested_effort: record.effort ?? null,
-    reviewer_tier: record.tier === undefined ? null : record.tier,
+    reviewer_tier: record.tier != null ? record.tier : (bridge ? task.tier ?? null : null),
   };
-  const row = withReview(known, review);
+  // The review block can't set a bridge row's attribution either.
+  const row = withReview(known, review, bridge ? [...HOOK_ONLY, 'agent', 'tier', 'effort'] : HOOK_ONLY);
   if (verdictConflict(review)) row.verdict_conflict = true;
   if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
   lib.appendJsonl(input, 'reviews.jsonl', row);
@@ -807,5 +839,5 @@ module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
-  ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
+  ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, isAmbiguous, ambiguousNudge, ambiguousDirectorNudge, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };
