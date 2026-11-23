@@ -1,0 +1,63 @@
+# Security scan template from the agent-team plugin. Optional: team-init copies
+# it into .github/workflows/ only when you say yes.
+# Trivy scans the working tree (not git history) for vulnerabilities,
+# misconfiguration and secrets at HIGH and CRITICAL. Read-only: results stay in the job log.
+# After the first run, add the job names below to your required checks.
+name: security-scan
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'milestone/**'
+
+permissions:
+  contents: read
+
+jobs:
+  trivy-fs:
+    name: trivy-fs
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Trivy file system scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+
+  trivy-image:
+    name: trivy-image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Look for a Dockerfile
+        id: dockerfile
+        run: |
+          if [ -f Dockerfile ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+      - name: Build image
+        if: steps.dockerfile.outputs.found == 'true'
+        run: docker build -t scan-target:ci .
+      - name: Trivy image scan
+        if: steps.dockerfile.outputs.found == 'true'
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.76.2
+          scan-type: image
+          image-ref: scan-target:ci
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'

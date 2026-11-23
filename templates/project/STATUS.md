@@ -13,7 +13,18 @@ Branch: `milestone/<slug>` · Issue: #<n> · Started: <date>
 |---|---|---|---|---|---|---|
 | <SLUG>-1 | ... | implementer | medium (sonnet) / medium | 1 | in progress | |
 
-States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` (auto-merge on, not yet merged) · `changes requested` · `merged` · `blocked`
+States: `planned` · `in progress` · `in security review` · `in review` · `waiting CI` · `queued` (auto-merge on, not yet merged) · `changes requested` · `merged` · `blocked`
+
+Tasks flagged by the breakdown carry `security-sensitive` in the Title.
+
+## xlarge grant
+
+Fill when the milestone starts (decision 0022).
+
+- Granted roles: <security reviews / architect / coach at close / hard-fix escalation, or none>
+- xlarge model and note per tool: <Claude: model, note · Codex: model, note>
+- Map source: <default / user / env>
+- Second security review: <no / large/high / xlarge/high / not offered>
 
 ## CI
 

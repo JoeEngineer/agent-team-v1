@@ -1,6 +1,6 @@
 ---
 name: team-init
-description: Set up the current project for the agent team (STATUS.md, decisions folder, logs folder, gitignore, branch rulesets, and the agent-team section for CLAUDE.md on Claude Code or AGENTS.md on Codex, plus Codex agent files and project hooks when run on Codex). Use when the user wants to initialize or set up a project for the agent team.
+description: Set up the current project for the agent team (STATUS.md, decisions folder, logs folder, gitignore, branch rulesets, and the agent-team section for CLAUDE.md on Claude Code or AGENTS.md on Codex, plus an optional CI security-scan template, and Codex agent files and project hooks when run on Codex). Use when the user wants to initialize or set up a project for the agent team.
 ---
 
 Set up this project for the `agent-team` plugin. The shared steps apply to both tools. Then run the steps for the tool you are running in (Claude Code or Codex), and offer the other tool's steps at the end. If you cannot tell which tool you are in, ask me.
@@ -26,6 +26,7 @@ Set up this project for the `agent-team` plugin. The shared steps apply to both 
 5. Check branch protection (read-only). Don't apply anything: changing repo rules is mine to do, and the guard hook blocks it anyway.
    - **GitHub:** `gh api repos/{owner}/{repo}/rulesets`. If `gh` is not installed or not logged in, say so, skip this check, and tell me to look at the rulesets by hand. If `main` or `milestone/*` is not covered, show me the two rulesets from the plugin README's "Protect your branches" section (`<plugin root>/README.md`) with the repo filled in, and explain why the bypass list stays empty and approvals stay at 0.
    - **GitLab:** `glab api projects/:id/protected_branches`. If `glab` can't answer, say so and tell me to look under Settings → Repository → Protected branches. If `main` isn't protected with push set to No one, or `milestone/*` isn't protected with force push off, show me the settings from the README's "On GitLab" section.
+6. Offer the optional security scan (decision 0022). Show me `templates/project/.github/workflows/security-scan.yml`: a read-only Trivy workflow that scans the file system for vulnerabilities, misconfiguration and secrets at HIGH and CRITICAL, plus an image scan that runs only when a `Dockerfile` exists. Copy it to `.github/workflows/security-scan.yml` only if I say yes, and never overwrite an existing file. Tell me its job names (`trivy-fs`, `trivy-image`) can be added to the required checks after the first run (see "CI names and auto-merge"), and that Trivy's secret scan reads the working tree, not git history. On GitLab the template is GitHub Actions only and none is shipped; the equivalents are a Trivy job in `.gitlab-ci.yml` and GitLab's Secret Detection.
 
 Required checks and auto-merge are not set up here. They come after the first CI run, in the section "CI names and auto-merge" below. Don't add a required-checks rule during setup.
 
@@ -59,7 +60,7 @@ C2. Show me `templates/project/CLAUDE.agent-team.md` and ask whether to append i
 
 Run these only when you are running in Codex.
 
-X1. Agent files. Run `node "<plugin root>/scripts/codex-agents.js"` and show me its summary. It writes one `<role>-<tier>.toml` per agent role and enabled Codex tier into `.codex/agents/`, which is gitignored. If the summary says no Codex entries are enabled in the model map, tell me that no agent files were generated, so the Director cannot route to a Codex tier until the model map enables one.
+X1. Agent files. Run `node "<plugin root>/scripts/codex-agents.js"` and show me its summary. It writes one `<role>-<tier>.toml` per agent role and enabled Codex tier into `.codex/agents/`, which is gitignored. xlarge agent files are written too unless the model map disables xlarge. If the summary says no Codex entries are enabled in the model map, tell me that no agent files were generated, so the Director cannot route to a Codex tier until the model map enables one.
 
 X2. Project hooks. Run `node "<plugin root>/scripts/codex-hooks.js"` and show me its output. It writes `.codex/agent-team-hook.js` and `.codex/hooks.json`, and both are committed. If it reports that `hooks.json` is not valid JSON, it changed nothing: show me the message and skip the rest of this step until I fix the file. Then tell me the Codex CLI does not run plugin hooks, so these project hooks are what make the guard and the logs work. Codex runs project hooks only after I trust them once per project: open `/hooks` or accept the startup prompt. Untrusted hooks do nothing and fail silently. Ask me to confirm I have trusted them, and say that the next session should show an `agent-team hooks: active` line.
 
@@ -71,7 +72,7 @@ When the steps for this tool are done, ask whether I want the other tool set up 
 
 ## Commit
 
-6. Commit on a new branch `chore/agent-team-setup` and tell me what you did. Stage only the paths this run wrote or changed, by name, never with `git add -A` or `git add .`. The possible paths are `STATUS.md`, `docs/decisions/0000-template.md`, `.agent-team/logs/.gitkeep`, `.gitignore`, `.claude/settings.json` (Claude), `CLAUDE.md` (Claude, if appended), `AGENTS.md` (Codex, if appended), and `.codex/hooks.json` and `.codex/agent-team-hook.js` (Codex). Don't stage ignored files such as `.codex/agents/`. Don't push unless I say so.
+7. Commit on a new branch `chore/agent-team-setup` and tell me what you did. Stage only the paths this run wrote or changed, by name, never with `git add -A` or `git add .`. The possible paths are `STATUS.md`, `docs/decisions/0000-template.md`, `.agent-team/logs/.gitkeep`, `.gitignore`, `.github/workflows/security-scan.yml` (if I said yes), `.claude/settings.json` (Claude), `CLAUDE.md` (Claude, if appended), `AGENTS.md` (Codex, if appended), and `.codex/hooks.json` and `.codex/agent-team-hook.js` (Codex). Don't stage ignored files such as `.codex/agents/`. Don't push unless I say so.
 
 ## Running it again
 
