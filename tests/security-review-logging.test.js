@@ -13,7 +13,7 @@ console.log('security-review-logging');
 
 const SCAN = 'unknown';
 const COVERAGE = { checked: ['scripts/'], not_checked: ['image scan job (skipped)'] };
-const REVIEW = { verdict: 'approve', severity: 'none', issues: [], findings: [], summary: 'ok', scan: SCAN, coverage: COVERAGE };
+const REVIEW = { head_sha: 'c0ffee0000000000000000000000000000000000', verdict: 'approve', severity: 'none', issues: [], findings: [], summary: 'ok', scan: SCAN, coverage: COVERAGE };
 const block = (v, tag = 'review-json') => '```' + tag + '\n' + JSON.stringify(v) + '\n```';
 const CARD = 'TASK id=SEC-1 type=security-review reviewed_task=T-1 pr=5 attempt=1\nWHY test';
 

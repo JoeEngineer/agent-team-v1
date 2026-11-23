@@ -430,11 +430,15 @@ function lastFencedJson(text, tag) {
 // diff, a nested fence or a `>` quote must never be read as the verdict.
 //
 // A review block counts when it is a top-level fence (the fence line at column
-// 0, backticks, not inside another fence of any length, not in a `>` quote)
-// and the last non-blank content of the reply. Fences follow CommonMark: a
-// fence opens with three or more backticks or tildes (up to three spaces of
-// indent) and closes on a line of the same character, at least as long, with
-// nothing after it; an unterminated fence runs to the end of the reply.
+// 0, backticks, not inside another fence of any length, not in a `>` quote,
+// not hidden by HTML) and the last non-blank content of the reply. Fences
+// follow CommonMark: a fence opens with three or more backticks or tildes (up
+// to three spaces of indent) and closes on a line of the same character, at
+// least as long, with nothing after it but spaces or tabs; an unterminated
+// fence runs to the end of the reply. Only spaces and tabs are trimmed from a
+// fence line, as CommonMark says: JS trim() would also strip NBSP, VT and FF,
+// so a closing run followed by one of those does not close, and `review-json`
+// followed by one is another info string.
 //
 // Returns:
 //   null                              no review-json fence anywhere in the reply
@@ -442,23 +446,160 @@ function lastFencedJson(text, tag) {
 //   { _ambiguous: true, count }       review-json fences were there but none
 //                                     qualifies, or two or more are top-level;
 //                                     count is the top-level blocks found
-// HTML blocks (CommonMark start conditions 1-6) are raw text, not markdown, so a
-// fence inside one is never the reply's own: <pre|script|style|textarea>, <!-- -->,
-// <? ?>, <!X >, <![CDATA[ ]]> run to their end marker; block tags such as
-// <details> and <div> run to a blank line, and while a <details> or <div> is
-// still open (more opened than closed) every line is skipped, since a renderer
-// shows that content as part of the quote.
-// One pass over the text, one line at a time: no regex runs across the text.
+// (reviewFor below also checks the block against the card's head.)
+//
+// HTML blocks are raw text, not markdown, so a fence inside one is never the
+// reply's own. CommonMark's start conditions:
+//   1-5  <pre|script|style|textarea>, <!-- -->, <? ?>, <!X >, <![CDATA[ ]]> run
+//        to the line with their end marker, and that line is raw too;
+//   6    a block tag such as <details> or <div> runs to a blank line;
+//   7    any other complete open or closing tag alone on its line runs to a
+//        blank line, but can't interrupt a paragraph: after a paragraph line
+//        it is text. A line that may not be paragraph text (a heading, a `>`
+//        quote, a list item, a setext or thematic line) counts as not one, so
+//        the tag is read as HTML: that can hide a block, never forge one.
+// While a <details> or a <div> is open (opened more often than closed, each
+// counted on its own, so a stray </div> can't close a <details>), every line
+// is hidden, even past its HTML block, since a renderer shows that content as
+// part of the quote. Fences are still tracked there, so a closing tag inside
+// one is text, but none of them is a review block.
+// Tags count only where a renderer reads them as tags: in raw HTML (the lines
+// of a type 6 or 7 block, and what follows the end marker of a type 1-5
+// block), outside a comment or a <script>, <style> or <textarea> element. A
+// comment or such an element opened there may span lines, hides every line
+// while it is open, and ends only in raw HTML. In a markdown line (paragraph text, indented code, a
+// line that starts with an NBSP or VT) a <details> or <div> opening tag counts
+// while one is already open, and a closing tag never counts: a code span or an
+// escape can make it text, so it could only fake a close.
+// One pass over the text, one line at a time. No regex runs across the text,
+// and each scan of a line is linear (no regex that backtracks over a line).
 const HTML_BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
 const HTML_STARTS = [
-  [/^<(pre|script|style|textarea)(\s|>|$)/i, /<\/(pre|script|style|textarea)>/i],
+  [/^<(pre|script|style|textarea)([ \t>]|$)/i, /<\/(pre|script|style|textarea)>/i],
   [/^<!--/, /-->/],
   [/^<\?/, /\?>/],
   [/^<![A-Za-z]/, />/],
   [/^<!\[CDATA\[/, /\]\]>/],
-  [new RegExp('^</?(' + HTML_BLOCK_TAGS + ')(\\s|/?>|$)', 'i'), null],
+  [new RegExp('^</?(' + HTML_BLOCK_TAGS + ')([ \\t]|/?>|$)', 'i'), null],
 ];
-const countMatches = (line, re) => (line.match(re) || []).length;
+const isBlank = (c) => c === ' ' || c === '\t';
+// True when s from position k holds only spaces and tabs.
+function onlyBlanks(s, k) {
+  for (; k < s.length; k++) if (!isBlank(s[k])) return false;
+  return true;
+}
+// s without leading and trailing spaces and tabs (not the other Unicode whitespace trim() drops).
+function trimBlanks(s) {
+  let a = 0, b = s.length;
+  while (a < b && isBlank(s[a])) a++;
+  while (b > a && isBlank(s[b - 1])) b--;
+  return s.slice(a, b);
+}
+// Start condition 7: s (a line from its first non-blank character) is one
+// complete open or closing tag, of a name other than pre, script, style or
+// textarea, then only spaces or tabs. A hand-written scan, linear in s.
+const ATTR_START = /[A-Za-z_:]/;
+const ATTR_CHAR = /[A-Za-z0-9_.:-]/;
+const UNQUOTED_STOP = ' \t\n\r"\'=<>`';
+function tagLine(s) {
+  const n = s.length;
+  let k = 1;
+  if (s[0] !== '<') return false;
+  const closing = s[k] === '/';
+  if (closing) k++;
+  const nameStart = k;
+  if (!/[A-Za-z]/.test(s[k] || '')) return false;
+  while (k < n && /[A-Za-z0-9-]/.test(s[k])) k++;
+  if (/^(pre|script|style|textarea)$/i.test(s.slice(nameStart, k))) return false;
+  if (closing) {
+    while (k < n && isBlank(s[k])) k++;
+    if (s[k] !== '>') return false;
+    return onlyBlanks(s, k + 1);
+  }
+  for (;;) {
+    const gap = k;
+    while (k < n && isBlank(s[k])) k++;
+    if (s[k] === '>') return onlyBlanks(s, k + 1);
+    if (s[k] === '/' && s[k + 1] === '>') return onlyBlanks(s, k + 2);
+    if (k === gap || !ATTR_START.test(s[k] || '')) return false; // an attribute starts after a space or tab
+    while (k < n && ATTR_CHAR.test(s[k])) k++;
+    let j = k;
+    while (j < n && isBlank(s[j])) j++;
+    if (s[j] !== '=') continue; // no value: k stays before the blanks, read again as the next gap
+    j++;
+    while (j < n && isBlank(s[j])) j++;
+    if (s[j] === '"' || s[j] === "'") {
+      const close = s.indexOf(s[j], j + 1);
+      if (close < 0) return false;
+      k = close + 1;
+    } else {
+      const v = j;
+      while (j < n && !UNQUOTED_STOP.includes(s[j])) j++;
+      if (j === v) return false;
+      k = j;
+    }
+  }
+}
+// A markdown line (from its first non-blank character, indented three columns
+// or less) that is not paragraph text, or may not be.
+const NOT_PARAGRAPH = [
+  /^#{1,6}([ \t]|$)/,                    // ATX heading
+  /^(?:=+|-+)[ \t]*$/,                    // setext underline
+  /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/,      // thematic break
+  /^>/,                                   // block quote
+  /^(?:[-+*]|\d{1,9}[.)])([ \t]|$)/,      // list item
+];
+// Count <details> and <div> tags in s from position k into st
+// ({ details, div, comment, raw }). In raw HTML (openersOnly false) a comment
+// or a <script>, <style> or <textarea> element is skipped, across lines. In a
+// markdown line (openersOnly true) only an opening <details> or <div> counts.
+const RAW_TEXT_END = { script: /<\/script/gi, style: /<\/style/gi, textarea: /<\/textarea/gi };
+const TAG_AT = /(\/?)([A-Za-z][A-Za-z0-9-]*)/y;
+const CLOSE_REST = /[ \t\n\f\r]*>/y;
+const TAG_NAME_END = ' \t\n\f\r/>';
+function scanTags(s, k, st, openersOnly) {
+  const n = s.length;
+  // Markdown text can't end a comment or raw text opened in raw HTML (its `>`
+  // is escaped), and nothing counts inside one.
+  if (openersOnly && (st.comment || st.raw)) return;
+  while (k < n) {
+    if (st.comment) {
+      const e = s.indexOf('-->', k);
+      if (e < 0) return;
+      st.comment = false;
+      k = e + 3;
+      continue;
+    }
+    if (st.raw) {
+      const re = RAW_TEXT_END[st.raw];
+      re.lastIndex = k;
+      const m = re.exec(s);
+      if (!m) return;
+      st.raw = null;
+      k = m.index + m[0].length;
+      continue;
+    }
+    const lt = s.indexOf('<', k);
+    if (lt < 0) return;
+    k = lt + 1;
+    if (!openersOnly && s.startsWith('!--', k)) { st.comment = true; k += 3; continue; }
+    TAG_AT.lastIndex = k;
+    const m = TAG_AT.exec(s);
+    if (!m) continue;
+    k = TAG_AT.lastIndex;
+    if (k < n && !TAG_NAME_END.includes(s[k])) continue; // `<divx`, `<div\u00a0`: another name
+    const name = m[2].toLowerCase();
+    if (m[1]) {
+      if (openersOnly || (name !== 'details' && name !== 'div')) continue;
+      CLOSE_REST.lastIndex = k;
+      if (CLOSE_REST.exec(s)) { st[name] = Math.max(0, st[name] - 1); k = CLOSE_REST.lastIndex; }
+    } else if (name === 'details' || name === 'div') {
+      st[name]++;
+    } else if (!openersOnly && RAW_TEXT_END[name]) {
+      st.raw = name;
+    }
+  }
+}
 function reviewJson(text) {
   if (typeof text !== 'string' || !text) return null;
   const mentioned = text.includes('```review-json') || text.includes('~~~review-json');
@@ -468,8 +609,10 @@ function reviewJson(text) {
   const blocks = [];        // closed top-level review blocks: { body, closeLine }
   let lineNo = 0;
   let lastContent = -1;     // the last line with anything but blanks on it
-  let html = null;          // the open HTML block: { end } (end null: runs to a blank line)
-  let depth = 0;            // <details>/<div> opened and not yet closed
+  let html = null;          // the open HTML block: { end } (end null: types 6 and 7, which run to a blank line)
+  let para = false;         // the line before is paragraph text, so a type 7 tag can't start a block
+  const tags = { details: 0, div: 0, comment: false, raw: null };
+  const hidden = () => tags.details > 0 || tags.div > 0 || tags.comment || tags.raw !== null;
   let pos = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
   while (pos < n) {
     let end = pos;
@@ -485,38 +628,62 @@ function reviewJson(text) {
       else if (c === '\t') col += 4 - (col % 4);
       else break;
     }
-    if (i < line.length) {
+    if (i >= line.length) {
+      // A blank line: content inside a fence; it ends a type 6 or 7 block and a paragraph.
+      if (!fence) {
+        if (html && !html.end) html = null;
+        para = false;
+      }
+    } else {
       lastContent = lineNo;
       const ch = line[i];
+      const rest = line.slice(i);
       let run = 0;
       if (ch === '`' || ch === '~') { while (i + run < line.length && line[i + run] === ch) run++; }
-      const rest = line.slice(i);
-      if (!fence && html && html.end) {
-        if (html.end.test(rest)) html = null;
-      } else if (!fence && !html && col <= 3 && ch === '<' && HTML_STARTS.some(([start]) => start.test(rest))) {
-        const [, end] = HTML_STARTS.find(([start]) => start.test(rest));
-        if (!end || !end.test(rest.slice(1))) html = { end };
-      }
-      if (!fence && (html || depth > 0)) {
-        // Raw HTML: not scanned for fences.
-      } else if (fence) {
-        // CommonMark's closing rule: same character, at least as long, nothing else on the line.
-        if (col <= 3 && run >= fence.len && ch === fence.ch && line.slice(i + run).trim() === '') {
+      if (fence) {
+        // CommonMark's closing rule: same character, at least as long, then only spaces or tabs.
+        if (col <= 3 && run >= fence.len && ch === fence.ch && onlyBlanks(line, i + run)) {
           if (fence.review) blocks.push({ body: text.slice(fence.bodyStart, pos), closeLine: lineNo });
           fence = null;
         }
-      } else if (col <= 3 && run >= 3) {
-        const info = line.slice(i + run).trim();
-        // A backtick fence's info string can't hold a backtick (that is inline code).
-        if (ch !== '`' || !info.includes('`')) {
-          fence = { ch, len: run, review: col === 0 && ch === '`' && info === 'review-json', bodyStart: next };
+      } else if (html && html.end) {
+        // Inside a type 1-5 block, up to and including the line with its end
+        // marker: raw text, never a fence. Tags after the marker count.
+        const m = rest.match(html.end);
+        if (m) { html = null; scanTags(rest, m.index + m[0].length, tags, false); }
+        para = false;
+      } else {
+        let start = null;
+        if (!html && col <= 3 && ch === '<') {
+          start = HTML_STARTS.find(([re]) => re.test(rest)) || (!para && tagLine(rest) ? [null, null] : null);
+        }
+        if (start) {
+          const endMarker = start[1];
+          if (endMarker) {
+            // A type 1-5 block may end on its own start line.
+            const m = rest.slice(1).match(endMarker);
+            if (m) scanTags(rest, 1 + m.index + m[0].length, tags, false);
+            else html = { end: endMarker };
+          } else {
+            html = { end: null };
+            scanTags(rest, 0, tags, false);
+          }
+          para = false;
+        } else if (html) {
+          scanTags(rest, 0, tags, false); // a line of an open type 6 or 7 block
+          para = false;
+        } else if (col <= 3 && run >= 3 && (ch !== '`' || !line.slice(i + run).includes('`'))) {
+          // A backtick fence's info string can't hold a backtick (that is inline code).
+          const info = trimBlanks(line.slice(i + run));
+          fence = { ch, len: run, review: !hidden() && col === 0 && ch === '`' && info === 'review-json', bodyStart: next };
+          para = false;
+        } else {
+          if (hidden()) scanTags(rest, 0, tags, true);
+          // Four columns of indent continue a paragraph, or are indented code.
+          if (col <= 3) para = !NOT_PARAGRAPH.some((re) => re.test(rest));
         }
       }
     }
-    if (i < line.length && !fence && (html || depth > 0 || /^<\/?(details|div)/i.test(line.slice(i)))) {
-      depth = Math.max(0, depth + countMatches(line, /<(details|div)(\s[^>]*)?>/gi) - countMatches(line, /<\/(details|div)\s*>/gi));
-    }
-    if (i >= line.length && html && !html.end) html = null;
     pos = next;
     lineNo++;
   }
@@ -894,16 +1061,74 @@ function isReviewDelegation(agentType, task) {
     !!(task && REVIEW_TASK_TYPES.includes(task.type));
 }
 
+// The head a review block must name (decision 0030). A block quoted from the
+// PR body, a diff, a hand-back or an older review can be the only top-level
+// block at the end of a reply, and the parser can't tell it from the
+// reviewer's own. So a review of a PR binds its block to a head: when the card
+// names a PR, branch or head (`pr=`, `branch=`, `head=`), the block's
+// `head_sha` must be a full commit SHA, and when the card names `head=` (7 or
+// more hex digits), the SHA must start with it. A file in the diff can't name
+// the commit that contains it, and an older review names an older head. A card
+// with none of the three (a review with no PR) binds nothing. `none` or an
+// empty value counts as absent.
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+const CARD_HEAD = /^[0-9a-f]{7,64}$/i;
+const named = (v) => (typeof v === 'string' || typeof v === 'number') && String(v) !== '' && String(v).toLowerCase() !== 'none';
+function headProblem(review, task) {
+  const t = task && typeof task === 'object' ? task : {};
+  if (!named(t.head) && !named(t.pr) && !named(t.branch)) return null;
+  const sha = review && typeof review === 'object' && typeof review.head_sha === 'string' ? review.head_sha : '';
+  if (!FULL_SHA.test(sha)) return { reason: 'head_sha' };
+  if (named(t.head)) {
+    const head = String(t.head);
+    if (!CARD_HEAD.test(head) || !sha.toLowerCase().startsWith(head.toLowerCase())) return { reason: 'head_mismatch', card_head: head.slice(0, 64) };
+  }
+  return null;
+}
+const HEAD_WHY = {
+  head_sha: 'its `head_sha` is not the full SHA of the head reviewed, and the card names a PR',
+  head_mismatch: 'its `head_sha` is not the head the card names',
+};
+// Why a review marked ambiguous by reviewFor's head check was not read, or null for the parser's own marker.
+function headWhy(review) {
+  if (!review || !HEAD_WHY[review.reason]) return null;
+  return review.card_head ? `${HEAD_WHY[review.reason]} (\`head=${review.card_head}\`)` : HEAD_WHY[review.reason];
+}
+// The re-ask for a head-check marker: to the reviewer (SubagentStop) or to the Director.
+function headNudge(review, to) {
+  const why = headWhy(review);
+  if (!why) return null;
+  return to === 'reviewer'
+    ? `agent-team: your review-json was not logged: ${why}. A block quoted from the PR, a diff or another reply is not your verdict. End your reply with your own \`review-json\` block, with the full SHA of the head you reviewed as \`head_sha\`.`
+    : `agent-team: the review's review-json was not logged: ${why}, so it may be a quoted block. Re-ask once for the reviewer's own block with the full \`head_sha\` it reviewed. If it is still not logged, treat the review as missing.`;
+}
+
 // The review in a reply, for this delegation. Only a review delegation gets the
 // `_ambiguous` marker: any other agent may quote a review-json fence (in a diff,
 // a test, a decision) without having written a review, so there it is no review.
+// A review delegation's block that fails the head check above becomes
+// { _ambiguous: true, count: 1, reason, card_head? }: no row is written for it.
 function reviewFor(text, agentType, task) {
   const review = reviewJson(text);
-  return review && review._ambiguous && !isReviewDelegation(agentType, task) ? null : review;
+  if (!review) return review;
+  const reviewing = isReviewDelegation(agentType, task);
+  if (review._ambiguous) return reviewing ? review : null;
+  if (review._unparsed || !reviewing) return review;
+  const problem = headProblem(review, task);
+  return problem ? { _ambiguous: true, count: 1, ...problem } : review;
+}
+
+// Would scripts/handback-check.js accept this hand-back message? A reviewer
+// agent's needs a review reviewFor can read; any other agent's, a readable
+// result-json or review-json block. `task` is the card, when known.
+function handbackReadable(message, agentType, task) {
+  const read = (v) => !!v && !v._unparsed && !v._ambiguous;
+  const review = reviewFor(message, agentType, task);
+  return REVIEWER_AGENT_TYPES.includes(agentType) ? read(review) : read(lastFencedJson(message, 'result-json')) || read(review);
 }
 
 module.exports = {
-  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor,
+  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor, headProblem, headWhy, headNudge, handbackReadable,
   detectTool, PLUGIN_ROOT, readStdin, projectDir, gitRoot, gitTracks, grantLogRoot, foreignProjectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
   safeAppend, safeWriteNew, safeOpenNew, safeReplace, safeMkdir, safeListDir, checkLogFile, tempName, TEMP_FILE, safeWriteHooks, REFUSED,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,

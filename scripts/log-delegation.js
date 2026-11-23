@@ -141,7 +141,7 @@ function onPostSubagent(input) {
       record.review = review;
       // An ambiguous review writes no row; the Director is told to re-ask once.
       // Only a review delegation writes a row at all (an implementer's reply never does).
-      if (isAmbiguous(review)) context = [context, ambiguousDirectorNudge(review)].filter(Boolean).join('\n');
+      if (isAmbiguous(review)) context = [context, lib.headNudge(review, 'director') || ambiguousDirectorNudge(review)].filter(Boolean).join('\n');
       else if (lib.isReviewDelegation(ti.subagent_type, record.task)) logReview(input, record, review);
     }
   }
@@ -215,7 +215,7 @@ function onPostBridge(input) {
   lib.appendJsonl(input, 'delegations.jsonl', record);
   // No stop hook runs on the bridge path, so the Director gets the nudge.
   const messages = [...flagMessages(task),
-    ...(isAmbiguous(review) ? [ambiguousDirectorNudge(review)] : []),
+    ...(isAmbiguous(review) ? [lib.headNudge(review, 'director') || ambiguousDirectorNudge(review)] : []),
     ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_DIRECTOR_NUDGE] : [])];
   return messages.length ? messages.join('\n') : undefined;
 }
@@ -365,9 +365,13 @@ function onSubagentStop(input) {
       ['text', t.lastText],
     ].filter(([, v]) => v);
     // A handback that carries a review block wins: text said before the handback
-    // (last_assistant_message, the last text) may only quote one.
-    const hasReview = (v) => /(```|~~~)review-json/.test(v);
-    const [reportSource, report] = sources.find(([k, v]) => k === 'handback' && hasReview(v)) ||
+    // (last_assistant_message, the last text) may only quote one. Only a handback
+    // that handback-check accepts wins: a refused one (an ambiguous, unreadable or
+    // tilde-fenced block, or one that fails the head check) is followed by more
+    // of the agent's reply, so a newer hook-input message may hold the real one.
+    const card = completionTask(delegation, t);
+    const accepted = (v) => /```review-json/.test(v) && lib.handbackReadable(v, agentType, card);
+    const [reportSource, report] = sources.find(([k, v]) => k === 'handback' && accepted(v)) ||
       sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
     return { t, reportSource, report };
   };
@@ -420,20 +424,24 @@ function onSubagentStop(input) {
   if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && verdictConflict(record.review)) {
     return VERDICT_CONFLICT_NUDGE;
   }
-  // A review-json that is not one top-level block at the end of the reply wrote
-  // no row: tell the reviewer once per turn (quiet under stop_hook_active).
+  // A review-json that is not one top-level block at the end of the reply, or
+  // that fails the head check (decision 0030), wrote no row: tell the reviewer
+  // why, once per turn (quiet under stop_hook_active).
   if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && isAmbiguous(record.review)) {
-    return ambiguousNudge(record.review);
+    return lib.headNudge(record.review, 'reviewer') || ambiguousNudge(record.review);
   }
 }
 
 // Task card for a completion: the delegation's, with the attempt taken from
 // the turn's own TASK line. With no attempt= on that line (malformed card) the
-// delegation's attempt stays, which may be stale.
+// delegation's attempt stays, which may be stale. A `head=` on the turn's line
+// replaces the delegation's too: a review's block is checked against the head
+// of the turn it answers (lib.reviewFor).
 function completionTask(delegation, t) {
   const turnTask = t.task || {};
   const task = delegation ? { ...delegation.task } : lib.parseTaskCard(t.prompt);
   if (turnTask.attempt != null && Number(turnTask.attempt) !== Number(task.attempt)) task.attempt = turnTask.attempt;
+  if (turnTask.head) task.head = turnTask.head;
   return task;
 }
 

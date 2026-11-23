@@ -7,7 +7,7 @@ const path = require('path');
 const { SCRIPTS, tmpProject, run, readLog, test, assert, eq } = require('./helpers');
 const { spawnSync } = require('child_process');
 
-const REVIEW = (v) => '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[],"summary":"s"}\n```';
+const REVIEW = (v) => '```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"' + v + '","severity":"none","issues":[],"summary":"s"}\n```';
 const CARD = (n) => `TASK id=RC-1 type=review difficulty=easy milestone=rc attempt=${n} pr=9`;
 const usage = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 
@@ -205,7 +205,7 @@ function setupAgents(agents) {
     const task = a.carded === false ? {} : { id: 'RC-1', type: 'review', attempt: '1', pr: '9' };
     delegations += lineOf({ ts: 't', tool: a.tool || 'claude', session_id: 'sess-1', kind: 'subagent', agent: 'agent-team:reviewer', agent_id: a.id, model: 'sonnet', task });
     for (const c of a.comps || []) {
-      const review = { verdict: 'approve', severity: 'none', issues: [], summary: 's' };
+      const review = { head_sha: 'c0ffee0000000000000000000000000000000000', verdict: 'approve', severity: 'none', issues: [], summary: 's' };
       completions += lineOf({ ts: 't1', tool: a.tool || 'claude', session_id: 'sess-1', kind: 'completion', agent: 'agent-team:reviewer', agent_id: a.id, model: 'sonnet', turn: c.turn, task: { ...task, attempt: String(c.turn) },
         duration_ms: 5000, tokens_with_cache: c.tokens, tokens_by_class: c.classes || null, report_source: 'handback', result: null, review, ...(c.extra || {}) });
       reviews += lineOf({ ts: 't1', task_id: 'RC-1', agent_id: a.id, ...review });
