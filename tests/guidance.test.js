@@ -60,8 +60,8 @@ test('inventory: every guidance file has rules, and the script-enforced ones nam
 // safe over-estimate of tokens for this kind of text). The other budgets stop
 // the files growing back a sentence at a time: to add a rule, find the room.
 const BUDGET = {
-  'skills/director/SKILL.md': 10000,
-  'skills/director/references/merging.md': 9500,
+  'skills/director/SKILL.md': 9350,
+  'skills/director/references/merging.md': 9450,
   'skills/director/references/routing.md': 7850,
   'skills/director/references/task-card.md': 6200,
   'skills/director/references/decisions.md': 1800,
