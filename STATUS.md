@@ -1,4 +1,4 @@
-|||||| in progress ||||| 2 (fold-in) | merged | #123 |||||| in progress |||||| merged |||||| merged |||||| merged |||| xlarge (fable) / high, user's yes for this task; attempt 1 was large (opus) / high | 2 (escalation) | changes requested | #122 ||||| 2 (fold-in) | in review | #119 ||||| 2 (fold-in) | in review | #120 |||||| merged | #121 # Status
+|||| small (haiku) / high; attempt 1 was medium effort | 2 (escalation) | merged | #124 |||||| in progress ||||| 2 (fold-in) | merged | #123 |||||| in progress |||||| merged |||||| merged |||||| merged |||| xlarge (fable) / high, user's yes for this task; attempt 1 was large (opus) / high | 2 (escalation) | changes requested | #122 ||||| 2 (fold-in) | in review | #119 ||||| 2 (fold-in) | in review | #120 |||||| merged | #121 # Status
 
 _Last updated: 2026-11-22. Milestone security-review is a Director run._
 
@@ -33,6 +33,8 @@ Previous milestone: **v1** (1.0.0), merged into `main` as #105 on 2026-11-13 (ta
 
 States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked`
 
+**Paused 2026-11-22 at the user's request, to resume in the morning.** All six tasks are merged. Next: the close (milestone PR into `main`, final review at large/high, the security review with `agents/security-reviewer.md` from the branch at large/high, log archive, one CI check). Nothing is running or queued.
+
 Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed above the table (implement/hard is implementer medium/high): it amends the Director's authorization line and must keep one home per rule across seven files inside the size budgets, which is design work.
 
 ## CI
@@ -46,6 +48,9 @@ Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed 
 
 ## Needs the user
 
+- **Required checks on `milestone/*`.** Add the four `test (...)` checks as required status checks with no bypass list, and turn on "Allow auto-merge" (asked 2026-11-22).
+- **After the milestone merges:** tag and release 1.1.0 if wanted; update the installed plugin so the new rules apply.
+- **Follow-ups from this milestone, not fixed in it:** ladder step 3 still says "ask the user" with hard-fix granted; the guidance does not say whether the granted xlarge attempt is the architect's or the implementer's; the logger reports card drift on every review card that carries its task's id; `tests/guidance.test.js` run on its own exits 0 on failure; the SR-2 retry tests are timing-based; the security reviewer's GitLab command has not run against a live GitLab; its OWASP list is the 2021 edition; the scanner workflow template has not been through a YAML parser.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
@@ -55,3 +60,4 @@ Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed 
 - 0019: one script merges a task PR (accepted by the user 2026-11-13)
 - 0020: guidance in layers, one home per rule, size budgets (accepted by the user 2026-11-13)
 - 0021: the guard and the hooks-active line are enabled per project; logs live in the main checkout (asked for by the user 2026-11-20)
+- 0022: a security review at every milestone close, and a per-milestone xlarge grant (accepted by the user 2026-11-22; implemented in 1.1.0 by this milestone)
