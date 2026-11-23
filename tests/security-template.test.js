@@ -133,7 +133,12 @@ test('trivy-fs keeps the PR copies of the four config files in .scan-pr-config s
   const rm = step.indexOf('rm -f "$f"');
   assert(mk >= 0 && mk < step.indexOf('for f in'), 'mkdir .scan-pr-config (fails if the PR has the path) must precede the loop');
   assert(keep >= 0 && keep < rm, 'the PR copy must be copied aside before it is removed');
-  assert(step.indexOf('rm -rf .scan-pr-config') < 0, '.scan-pr-config must stay for the scan');
+  assert(/if \[ -e \.scan-pr-config \] \|\| \[ -L \.scan-pr-config \]; then\n {12}echo "::error::[^"\n]*\.scan-pr-config[^"\n]*Remove it[^"\n]*"\n {12}exit 1\n {10}fi\n {10}mkdir \.scan-pr-config/.test(step), 'a collision must print ::error:: naming .scan-pr-config, then exit 1, before mkdir');
+  // No rm or mv may touch the folder in any trivy-fs step up to the scan.
+  const scanIdx = indexOfStep('trivy-fs', 'Trivy file system scan');
+  for (const st of stepsOf('trivy-fs').slice(0, scanIdx + 1))
+    for (const line of st.split('\n'))
+      assert(!(/\b(rm|mv)\b/.test(line) && line.includes('.scan-pr-config')), 'rm or mv of .scan-pr-config before the scan: ' + line.trim());
   const scan = stepNamed('trivy-fs', 'Trivy file system scan');
   assert(/scan-ref: \.\n/.test(scan) && /scanners: vuln,misconfig,secret/.test(scan) && /exit-code: '1'/.test(scan), 'fs scan must cover the workspace with secret and fail on findings');
 });

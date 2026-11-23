@@ -99,6 +99,9 @@ Close reviews of the milestone PR found two gaps; the template now does this:
   already get the base config. Cost: no scan on a plain push to a milestone
   branch until its PR is open.
 - Item 1's "On `push` the tree's own files are used" now applies to `main` only.
-- Residuals are unchanged. Not confirmed live: that Trivy scans dotfiles under
-  `.scan-pr-config` (it does not skip them by default in the docs read), and a
-  base `trivy.yaml` with `skip-dirs` or `skip-files` could still skip that folder.
+- Confirmed from the Trivy v0.76.2 source (the pinned version): the fs walker
+  skips only `**/.git`, `proc`, `sys` and `dev` by default, and the secret
+  analyzer skips only the exact configured secret-config path, so files under
+  `.scan-pr-config` are scanned. Residual, unchanged: a base `trivy.yaml` with
+  `skip-dirs` or `skip-files` could still skip that folder. The template has had
+  no live run.

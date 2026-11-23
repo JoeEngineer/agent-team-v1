@@ -57,12 +57,16 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .scan-base
           persist-credentials: false
-      # The PR's own copies are kept in .scan-pr-config (mkdir fails the job if the
+      # The PR's own copies are kept in .scan-pr-config (the job fails if the
       # PR already has that path) so the scan below still reads them for secrets,
       # under the base config; they are never used as config.
       - name: Use base-branch scanner config
         if: github.event_name == 'pull_request'
         run: |
+          if [ -e .scan-pr-config ] || [ -L .scan-pr-config ]; then
+            echo "::error::.scan-pr-config exists in the PR tree; the scan keeps the PR's config copies at that path. Remove it from the PR."
+            exit 1
+          fi
           mkdir .scan-pr-config
           for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
             if [ -f "$f" ]; then cp "$f" ".scan-pr-config/$f"; fi
