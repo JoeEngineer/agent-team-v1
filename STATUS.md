@@ -31,15 +31,15 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
 | FU-0 | Breakdown | architect | xlarge (fable) / medium, granted | 1 | done | |
-| FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested | #147 |
+| FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | in review | #147 |
 | FU-2 | Scan-state table design, decision 0024 (#132) | architect | xlarge (fable) / medium, granted | 1 | merged | #145 |
-| FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested | #148 |
+| FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | in review | #148 |
 | FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | merged | #146 |
 | FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #149 |
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | planned | |
 | FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (session) | medium (sonnet) / high | 1 | planned | |
-| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 1 | in review | #152 |
+| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | in review | #152 |
 | FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium | 1 | in review | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (session) | medium (sonnet) / high | 1 | planned | |
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 1 | planned | |
