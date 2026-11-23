@@ -1,6 +1,6 @@
 |||| small (haiku) / high; attempt 1 was medium effort | 2 (escalation) | merged | #124 |||||| in progress ||||| 2 (fold-in) | merged | #123 |||||| in progress |||||| merged |||||| merged |||||| merged |||| xlarge (fable) / high, user's yes for this task; attempt 1 was large (opus) / high | 2 (escalation) | changes requested | #122 ||||| 2 (fold-in) | in review | #119 ||||| 2 (fold-in) | in review | #120 |||||| merged | #121 # Status
 
-_Last updated: 2026-11-22. Milestone security-review is a Director run._
+_Last updated: 2026-11-23. Milestone security-review is a Director run._
 
 ## Since the milestone
 
@@ -33,7 +33,7 @@ Previous milestone: **v1** (1.0.0), merged into `main` as #105 on 2026-11-13 (ta
 
 States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked`
 
-**Paused 2026-11-22 at the user's request, to resume in the morning.** All six tasks are merged. Next: the close (milestone PR into `main`, final review at large/high, the security review with `agents/security-reviewer.md` from the branch at large/high, log archive, one CI check). Nothing is running or queued.
+All six tasks are merged. Milestone PR: #125 into `main` (opened 2026-11-23). The final review (reviewer, large / high) and the security review (the `security-reviewer` role file from the branch, large / high) run on that PR; their verdicts are in the logs and in comments on the PR. Only the user merges it.
 
 Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed above the table (implement/hard is implementer medium/high): it amends the Director's authorization line and must keep one home per rule across seven files inside the size budgets, which is design work.
 
