@@ -139,6 +139,13 @@ function sessionMarker(cwd) {
   }
 }
 
+// The session that ran this script. The marker is overwritten by whichever
+// session started last (G17), so CLAUDE_CODE_SESSION_ID wins when the shell has it.
+function sessionFields(env, marker) {
+  if (env.CLAUDE_CODE_SESSION_ID) return { session_id: env.CLAUDE_CODE_SESSION_ID, session_source: 'env' };
+  return { session_id: marker.session_id || null, session_source: 'marker' };
+}
+
 function main(argv, deps = {}) {
   const out = deps.out || ((l) => process.stdout.write(`${l}\n`));
   const errOut = deps.err || ((l) => process.stderr.write(`${l}\n`));
@@ -253,7 +260,7 @@ function main(argv, deps = {}) {
       lib.appendJsonl(input, 'merges.jsonl', {
         ts: new Date((deps.now || Date.now)()).toISOString(),
         tool: env.AGENT_TEAM_TOOL || marker.tool || 'unknown',
-        session_id: marker.session_id || null,
+        ...sessionFields(env, marker),
         guidance_version: lib.guidanceVersion(),
         command: `merge-task.js ${opts.pr} --sha ${opts.sha} --task ${opts.task} --attempt ${opts.attempt}${opts.allowNone ? ' --allow-none' : ''}${opts.wait ? ` --wait ${opts.wait}` : ''}`,
         pr: String(opts.pr),

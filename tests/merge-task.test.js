@@ -314,6 +314,34 @@ test('the log line takes tool and session from the SessionStart marker', () => {
   const l = readLog(dir, 'merges.jsonl')[0];
   eq(l.tool, 'codex', 'tool');
   eq(l.session_id, 's-1', 'session');
+  eq(l.session_source, 'marker', 'session source');
+});
+
+// G17: the marker is overwritten by whichever session started last, so the
+// session that ran the script comes from its own environment when it has one.
+test('the log line takes the session from CLAUDE_CODE_SESSION_ID over the marker (session A marker, B env)', () => {
+  const dir = tmpProject();
+  fs.mkdirSync(path.join(dir, '.agent-team', 'logs', '.pending'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.agent-team', 'logs', '.pending', 'hooks-alive.json'), JSON.stringify({ tool: 'claude', session_id: 'sess-A' }));
+  const open = pr([ok('build')]);
+  const r = exec(ARGS, { view: [open, open, pr([ok('build')], { state: 'MERGED' })] }, { cwd: dir, env: { CLAUDE_CODE_SESSION_ID: 'sess-B' } });
+  eq(r.code, 0, 'exit');
+  const l = readLog(dir, 'merges.jsonl')[0];
+  eq(l.session_id, 'sess-B', 'session from the env, not the marker');
+  eq(l.session_source, 'env', 'session source');
+});
+
+test('the log line takes the session from the marker when CLAUDE_CODE_SESSION_ID is unset or empty (session A)', () => {
+  for (const env of [{}, { CLAUDE_CODE_SESSION_ID: '' }]) {
+    const dir = tmpProject();
+    fs.mkdirSync(path.join(dir, '.agent-team', 'logs', '.pending'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.agent-team', 'logs', '.pending', 'hooks-alive.json'), JSON.stringify({ tool: 'claude', session_id: 'sess-A' }));
+    const open = pr([ok('build')]);
+    exec(ARGS, { view: [open, open, pr([ok('build')], { state: 'MERGED' })] }, { cwd: dir, env });
+    const l = readLog(dir, 'merges.jsonl')[0];
+    eq(l.session_id, 'sess-A', `session from the marker (env ${JSON.stringify(env)})`);
+    eq(l.session_source, 'marker', `session source (env ${JSON.stringify(env)})`);
+  }
 });
 
 test('process: the real script against the stand-in CLI exits 1 on red and prints one JSON result line', () => {
