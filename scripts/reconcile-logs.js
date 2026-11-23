@@ -13,6 +13,10 @@
 // --merges runs only the auto-merge step: for each `auto-merge-queued` line in
 // merges.jsonl, ask the forge and append a resolution line (see
 // records.resolveQueuedMerges). A plain run does it too, after the rest.
+// It also appends a superseding completion line for a turn whose transcript has
+// more tokens than the last completion line of that agent and turn (a wake-up
+// after the hand-back, or the enforce-nudge turn, ran after the line was
+// written): see supersedeShortTurns. Each transcript is read once per run.
 // Exit code 1 when a log could not be rewritten (the log is then left as it was).
 // Idempotent: a backfilled turn carries the same dedupe markers the hook uses,
 // and a turn whose result/review already appears in completions.jsonl is skipped.
@@ -23,7 +27,7 @@ const os = require('os');
 const path = require('path');
 const lib = require('./lib');
 const { claimOnce, shortHash, logReview, appendOnce, resolveQueuedMerges } = require('./records');
-const { readSubagentTranscript, readMeta, completionRecord } = require('./log-delegation');
+const { readMeta, completionRecord } = require('./log-delegation');
 const { drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir: codexPendingDir } = require('./codex-log');
 
 // A SendMessage turn on an existing agent: a retry (resume) or a scope addition (followup).
@@ -59,6 +63,90 @@ function findTranscript(root, sessionId, agentId) {
     }
   }
   return null;
+}
+
+// A real prompt: a string or a text part, not a tool result. These two helpers
+// and scanTranscript mirror readSubagentTranscript in log-delegation.js (which
+// reads one turn per call), but take every turn in ONE read of the file.
+// tests/reconcile.test.js checks that the two agree turn by turn.
+const isPrompt = (content) =>
+  typeof content === 'string' ? content.trim() !== ''
+    : Array.isArray(content) && content.some((c) => c && c.type === 'text' && c.text) &&
+      !content.some((c) => c && c.type === 'tool_result');
+// A plain prompt starts a turn; a SendMessage resume is an isMeta entry that carries a TASK card. A wake-up
+// notification or the enforce nudge carries no TASK line, so it stays inside the turn it interrupts.
+const startsTurn = (e, content) =>
+  e.type === 'user' && isPrompt(content) && (!e.isMeta || /\bTASK id=/.test(lib.responseText(content)));
+
+const noClasses = () => ({ input: 0, output: 0, cache_read: 0, cache_write: 0 });
+
+// Reads the transcript once and returns one snapshot per turn: { turn, task,
+// tokens, classes, handback, lastText, first, last, model, lastId, prompt }. A
+// message id's usage counts once in the whole file. A file with no turn start
+// gives one snapshot with turn 0.
+function scanTranscript(file) {
+  const snaps = [];
+  let prompt = '', model = null, lastId = null, lastMsgId = null;
+  const seen = new Set();
+  let cur = { turn: 0, task: {}, tokens: 0, classes: noClasses(), handback: null, lastText: '', first: null, last: null };
+  const snap = () => ({ ...cur, classes: { ...cur.classes }, model, lastId, prompt });
+  for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let e;
+    try { e = JSON.parse(line); } catch { continue; }
+    const m = e.message || {};
+    if (e.type === 'user' && !prompt) prompt = lib.responseText(m.content);
+    if (startsTurn(e, m.content)) {
+      if (cur.turn > 0) snaps.push(snap());
+      cur = { turn: cur.turn + 1, task: lib.parseTaskCard(lib.responseText(m.content)), tokens: 0, classes: noClasses(), handback: null, lastText: '', first: e.timestamp ? Date.parse(e.timestamp) : null, last: null };
+      lastMsgId = null;
+    }
+    if (e.type !== 'assistant') continue;
+    if (e.timestamp) cur.last = Date.parse(e.timestamp);
+    lastId = m.id || e.uuid || lastId;
+    if (m.model) model = m.model;
+    if (Array.isArray(m.content)) {
+      for (const c of m.content) {
+        if (c && c.type === 'tool_use' && c.name === 'SubagentHandback' && c.input) cur.handback = lib.responseText(c.input.message);
+      }
+    }
+    if (m.id && !seen.has(m.id) && m.usage) {
+      seen.add(m.id);
+      const u = m.usage;
+      cur.classes.input += u.input_tokens || 0;
+      cur.classes.output += u.output_tokens || 0;
+      cur.classes.cache_read += u.cache_read_input_tokens || 0;
+      cur.classes.cache_write += u.cache_creation_input_tokens || 0;
+      cur.tokens += (u.input_tokens || 0) + (u.output_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0);
+    }
+    const text = Array.isArray(m.content)
+      ? m.content.filter((c) => c && c.type === 'text').map((c) => c.text).join('\n')
+      : typeof m.content === 'string' ? m.content : '';
+    if (text) {
+      cur.lastText = m.id && m.id === lastMsgId ? `${cur.lastText}\n${text}` : text;
+      lastMsgId = m.id || null;
+    }
+  }
+  snaps.push(snap());
+  return { turn: cur.turn, turns: snaps };
+}
+
+// Reads each transcript path at most once per run; `reads` counts the real file reads.
+function transcriptCache() {
+  const scans = new Map();
+  const cache = {
+    reads: 0,
+    // null when the file cannot be read.
+    get(file) {
+      if (scans.has(file)) return scans.get(file);
+      cache.reads++;
+      let scan = null;
+      try { scan = scanTranscript(file); } catch { scan = null; }
+      scans.set(file, scan);
+      return scan;
+    },
+  };
+  return cache;
 }
 
 // Same sanitising as records.claimOnce, to look at a marker without claiming it.
@@ -254,15 +342,76 @@ function backfillCodexTurns(input, { dryRun = false } = {}) {
   return stats;
 }
 
+// G18. A turn can run on after its completion line was written: the agent is
+// woken by a background-task notification after it handed back, or the
+// handback-enforce nudge sends it round again. Both stay inside the same
+// transcript turn (neither carries a TASK line), so the turn's tokens in the
+// transcript exceed the last line for that agent and turn. For each carded
+// Claude agent, append ONE line that copies that last line and carries the
+// full turn's tokens, with `reconciled_by` set. It is a completion line, not a
+// review: reviews.jsonl is not touched, and readers take the last line per
+// agent_id and turn. A rerun finds the totals equal and adds nothing. Lines
+// marked stale_of are ignored. Codex agents are counted and skipped.
+// Returns { checked, superseded, notFound, codex, errors }. Writes only to
+// <logDir>/completions.jsonl, and nothing with dryRun. `scans` is a
+// transcriptCache shared with the caller, so no transcript is read twice.
+function supersedeShortTurns({ logDir, root, dryRun = false, scans = transcriptCache() }) {
+  const out = { checked: 0, superseded: 0, notFound: 0, codex: 0, errors: [] };
+  const agents = new Map();
+  const entry = (id) => {
+    if (!agents.has(id)) agents.set(id, { id, carded: false, session: null, tool: 'claude', last: new Map() });
+    return agents.get(id);
+  };
+  for (const d of readJsonl(path.join(logDir, 'delegations.jsonl'))) {
+    if (!d.agent_id || (d.kind !== 'subagent' && !isResume(d))) continue;
+    const a = entry(d.agent_id);
+    if (d.task && d.task.id) a.carded = true;
+    a.session = d.session_id || a.session;
+    if (d.tool && d.tool !== 'claude') a.tool = d.tool;
+  }
+  for (const c of readJsonl(path.join(logDir, 'completions.jsonl'))) {
+    if (!c.agent_id) continue;
+    const a = entry(c.agent_id);
+    if (c.task && c.task.id) a.carded = true;
+    a.session = a.session || c.session_id;
+    if (c.tool && c.tool !== 'claude') a.tool = c.tool;
+    if (c.stale_of == null && Number.isInteger(c.turn) && c.turn > 0) a.last.set(c.turn, c); // the last line of a turn wins
+  }
+  const file = path.join(logDir, 'completions.jsonl');
+  const version = lib.guidanceVersion();
+  for (const a of agents.values()) {
+    if (!a.carded) continue;
+    if (a.tool !== 'claude') { out.codex++; continue; }
+    if (!a.last.size) continue; // no completion line to supersede (a missing turn is the backfill's job)
+    out.checked++;
+    const tPath = findTranscript(root, a.session, a.id);
+    const scan = tPath && scans.get(tPath);
+    if (!scan) { out.notFound++; continue; }
+    for (const [turn, line] of [...a.last].sort((x, y) => x[0] - y[0])) {
+      const t = scan.turns[turn - 1];
+      if (!t || t.turn !== turn || !(t.tokens > (line.tokens_with_cache || 0))) continue;
+      out.superseded++;
+      if (dryRun) continue;
+      const record = { ...line, ts: new Date().toISOString(), tokens_with_cache: t.tokens, tokens_by_class: { ...t.classes }, reconciled_by: version };
+      try { fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8'); } catch (err) {
+        out.superseded--;
+        out.errors.push(`could not append to completions.jsonl: ${err && err.message || err}`);
+      }
+    }
+  }
+  return out;
+}
+
 function reconcile({ dryRun = false } = {}) {
   const input = {};
+  const scans = transcriptCache();
   const logDir = lib.logDir(input);
   const root = projectsRoot();
   // Codex snapshots already identify their transcript and frozen delegation.
   // Process them even on Codex-only installs with no ~/.claude/projects.
   const codex = drainPending(input, { dryRun, cap: Infinity });
   codex.turns = backfillCodexTurns(input, { dryRun });
-  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, stale: 0, rewritten: [], errors: [], codex };
+  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, stale: 0, superseded: 0, reads: 0, rewritten: [], errors: [], codex };
   const delegations = readJsonl(path.join(logDir, 'delegations.jsonl'));
   const completions = readJsonl(path.join(logDir, 'completions.jsonl'));
   if (!fs.existsSync(root)) return { ...stats, noRoot: root };
@@ -298,16 +447,16 @@ function reconcile({ dryRun = false } = {}) {
     if (done && !resumed) { stats.checked++; stats.present++; continue; }
     stats.checked++;
     const tPath = findTranscript(root, a.session, a.id);
-    if (!tPath) { stats.notFound++; continue; }
+    const scan = tPath && scans.get(tPath);
+    if (!scan) { stats.notFound++; continue; }
     const meta = readMeta(tPath);
     // Content match against lines that existed before this run only. The turn-keyed marker stops reruns; matching lines appended in this run would drop a turn with an identical report.
     const known = [...a.comps, ...a.dels.filter((d) => d.kind === 'subagent')].filter(hasContent);
     const agentType = (a.delegation && a.delegation.agent) || (a.comps.find((c) => c.agent) || {}).agent || meta.agentType || null;
     let added = 0;
     const turnInfos = [];
-    const turns = readSubagentTranscript(tPath).turn;
-    for (let turn = 1; turn <= Math.max(turns, 1); turn++) {
-      const t = readSubagentTranscript(tPath, turn);
+    for (let turn = 1; turn <= Math.max(scan.turn, 1); turn++) {
+      const t = scan.turns[turn - 1];
       const source = [['handback', t.handback], ['text', t.lastText]].find(([, v]) => v && hasBlock(v));
       if (!source) continue; // no report block in this turn: nothing to backfill
       const [, report] = source;
@@ -352,6 +501,12 @@ function reconcile({ dryRun = false } = {}) {
     }
     if (added) stats.backfilled += added; else stats.present++;
   }
+  // After the backfill, so a line written above is already in the log; the
+  // transcripts read above are not read again.
+  const sup = supersedeShortTurns({ logDir, root, dryRun, scans });
+  stats.superseded = sup.superseded;
+  stats.errors.push(...sup.errors);
+  stats.reads = scans.reads;
   return stats;
 }
 
@@ -394,6 +549,9 @@ function main(argv) {
     `${s.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ` +
     `${s.present} already present, ${s.notFound} transcript not found` +
     (s.skipped ? `, ${s.skipped} non-Claude skipped` : ''));
+  if (s.superseded) {
+    console.log(`${dryRun ? '[dry run] ' : ''}${s.superseded} completion line${s.superseded === 1 ? '' : 's'} ${dryRun ? 'would be ' : ''}superseded with the full turn's tokens (the turn ran on after its line was written)`);
+  }
   if (s.stale) {
     console.log(dryRun
       ? `[dry run] ${s.stale} lines would be marked stale_of (content belongs to another attempt)`
@@ -404,7 +562,7 @@ function main(argv) {
   return s.errors.length ? 1 : 0;
 }
 
-module.exports = { reconcile, findTranscript, main, hooks };
+module.exports = { reconcile, supersedeShortTurns, transcriptCache, scanTranscript, findTranscript, projectsRoot, main, hooks };
 
 if (require.main === module) {
   let code = 0;

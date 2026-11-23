@@ -10,9 +10,10 @@ const { SCRIPTS, tmpProject, bareProject, test, assert, eq } = require('./helper
 const SCRIPT = path.join(SCRIPTS, 'archive-logs.js');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-arch-'));
 
+// AGENT_TEAM_PROJECTS_ROOT defaults to an empty folder, so no test reads the real ~/.claude/projects.
 function arch(proj, args, env = {}) {
   return spawnSync('node', [SCRIPT, ...args], {
-    cwd: proj, encoding: 'utf8', env: { ...process.env, AGENT_TEAM_ARCHIVE: tmp(), ...env },
+    cwd: proj, encoding: 'utf8', env: { ...process.env, AGENT_TEAM_ARCHIVE: tmp(), AGENT_TEAM_PROJECTS_ROOT: tmp(), ...env },
   });
 }
 function project(files = { 'delegations.jsonl': '' }) {
@@ -305,4 +306,185 @@ test('archive: warns about unresolved auto-merge-queued merges (offline), exit c
   // An older queued line of a PR with a newer queued line is superseded: only the newer one counts.
   const sup = arch(project({ 'merges.jsonl': [q('5', 'a1'), q('5', 'a2')].join('\n') }), ['m1', '--project', 'proj']);
   assert(sup.stdout.includes('1 auto-merge-queued merges unresolved'), sup.stdout);
+});
+
+// --- usage the hooks missed: G18 (turns after the hand-back) and G19 (the Director's own usage) ---
+
+const U = (input, output, cacheRead, cacheWrite) => ({ input_tokens: input, output_tokens: output, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite });
+const jl = (rows) => rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
+const SECRET = 'SECRET-TRANSCRIPT-TEXT-do-not-copy';
+// An assistant entry of a Director transcript; `text` is what must never reach the logs.
+const call = (id, model, usage, ts, text = SECRET) => ({ type: 'assistant', timestamp: ts, message: { id, model, usage, content: [{ type: 'text', text }] } });
+const card = (n) => `TASK id=AU-1 type=implement difficulty=easy milestone=m1 attempt=${n}`;
+
+// Projects root with a Director transcript per session id, and optional subagent transcripts of the first session.
+function usageSetup({ sessions = {}, agents = {}, delegations = [], completions = [] } = {}) {
+  const root = tmp();
+  const folder = path.join(root, 'proj-folder');
+  fs.mkdirSync(folder, { recursive: true });
+  for (const [id, body] of Object.entries(sessions)) fs.writeFileSync(path.join(folder, `${id}.jsonl`), body);
+  for (const [sid, list] of Object.entries(agents)) {
+    const dir = path.join(folder, sid, 'subagents');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [aid, rows] of Object.entries(list)) fs.writeFileSync(path.join(dir, `agent-${aid}.jsonl`), jl(rows));
+  }
+  const p = project({ 'delegations.jsonl': jl(delegations), 'completions.jsonl': jl(completions) });
+  return { p, root, env: { AGENT_TEAM_PROJECTS_ROOT: root } };
+}
+const del = (sid, extra = {}) => ({ ts: 't', tool: 'claude', session_id: sid, kind: 'subagent', agent: 'agent-team:implementer', agent_id: `ag-${sid}`, task: { id: 'AU-1', milestone: 'm1', attempt: '1' }, ...extra });
+const readLive = (p, f) => {
+  try { return fs.readFileSync(path.join(logs(p), f), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; }
+};
+
+test('archive G19: one session_usage line per session and model, each message id once, no transcript text, copied into the archive', () => {
+  const director = jl([
+    { type: 'user', message: { role: 'user', content: SECRET } },
+    call('a1', 'claude-fable-5-2', U(10, 20, 1000, 100), '2026-11-01T10:00:00.000Z'),
+    call('a1', 'claude-fable-5-2', U(10, 20, 1000, 100), '2026-11-01T10:00:01.000Z'), // the same message id again: counted once
+    call('a2', 'claude-fable-5-2', U(1, 2, 3, 4), '2026-11-01T11:00:00.000Z'),
+    call('b1', 'claude-sonnet-5-5', U(5, 5, 5, 5), '2026-11-01T09:00:00.000Z'),
+    { ...call('c1', 'claude-haiku-4-5', U(9, 9, 9, 9), '2026-11-01T09:30:00.000Z'), isSidechain: true }, // a subagent's call, not the Director's
+    call('s1', '<synthetic>', U(0, 0, 0, 0), '2026-11-01T09:31:00.000Z'),
+  ]);
+  const s = usageSetup({ sessions: { 'dir-1': director }, delegations: [del('dir-1'), del('dir-1', { kind: 'resume', agent_id: 'ag-dir-1' })] });
+  const r = arch(s.p, ['m1', '--project', 'proj'], s.env);
+  eq(r.status, 0, r.stderr);
+  assert(r.stdout.includes('usage: 1 sessions, 0 not found; 2 session_usage lines written'), r.stdout);
+  const lines = readLive(s.p, 'sessions.jsonl');
+  eq(lines.length, 2, 'one line per model');
+  const fable = lines.find((l) => l.model === 'claude-fable-5-2');
+  const sonnet = lines.find((l) => l.model === 'claude-sonnet-5-5');
+  eq(fable.kind, 'session_usage', 'kind');
+  eq(fable.session_id, 'dir-1', 'session id');
+  eq(fable.milestone, 'm1', 'milestone');
+  eq(fable.calls, 2, 'two message ids');
+  eq(JSON.stringify(fable.tokens_by_class), JSON.stringify({ input: 11, output: 22, cache_read: 1003, cache_write: 104 }), 'a1 once, plus a2');
+  eq(fable.first, '2026-11-01T10:00:00.000Z', 'first');
+  eq(fable.last, '2026-11-01T11:00:00.000Z', 'last');
+  eq(sonnet.calls, 1, 'second model');
+  eq(JSON.stringify(sonnet.tokens_by_class), JSON.stringify({ input: 5, output: 5, cache_read: 5, cache_write: 5 }), 'sonnet classes');
+  const dest = destOf(r);
+  const archived = fs.readFileSync(path.join(dest, 'sessions.jsonl'), 'utf8');
+  eq(archived, fs.readFileSync(path.join(logs(s.p), 'sessions.jsonl'), 'utf8'), 'the archive holds the lines');
+  for (const f of fs.readdirSync(dest)) assert(!fs.readFileSync(path.join(dest, f), 'utf8').includes(SECRET), `no transcript text in ${f}`);
+  assert(fs.readFileSync(path.join(dest, 'README.md'), 'utf8').includes('`sessions.jsonl`: 2 line(s)'), 'README counts the file');
+});
+
+test('archive G19: a rerun writes nothing; a line is written only for the model whose totals changed; the last line wins', () => {
+  const first = [call('a1', 'claude-fable-5-2', U(10, 20, 1000, 100), '2026-11-01T10:00:00.000Z'), call('b1', 'claude-sonnet-5-5', U(5, 5, 5, 5), '2026-11-01T09:00:00.000Z')];
+  const s = usageSetup({ sessions: { 'dir-1': jl(first) }, delegations: [del('dir-1')] });
+  arch(s.p, ['m1', '--project', 'proj'], s.env);
+  eq(readLive(s.p, 'sessions.jsonl').length, 2, 'precondition: two lines after the first run');
+  const again = arch(s.p, ['m1', '--project', 'proj', '--force'], s.env);
+  eq(again.status, 0, again.stderr);
+  assert(again.stdout.includes('0 session_usage lines written'), again.stdout);
+  eq(readLive(s.p, 'sessions.jsonl').length, 2, 'unchanged totals: no new line');
+  // The session goes on: only the fable totals change.
+  fs.appendFileSync(path.join(s.root, 'proj-folder', 'dir-1.jsonl'), jl([call('a3', 'claude-fable-5-2', U(1, 1, 1, 1), '2026-11-01T12:00:00.000Z')]));
+  const grown = arch(s.p, ['m1', '--project', 'proj', '--force'], s.env);
+  assert(grown.stdout.includes('1 session_usage line written'), grown.stdout);
+  const lines = readLive(s.p, 'sessions.jsonl');
+  eq(lines.length, 3, 'one new line');
+  eq(lines[2].model, 'claude-fable-5-2', 'for the model that changed');
+  eq(lines[2].calls, 2, 'its new total');
+  eq(lines[2].last, '2026-11-01T12:00:00.000Z', 'its new last call');
+  const after = arch(s.p, ['m1', '--project', 'proj', '--force'], s.env);
+  assert(after.stdout.includes('0 session_usage lines written'), after.stdout);
+  eq(readLive(s.p, 'sessions.jsonl').length, 3, 'one step past: still three');
+});
+
+test('archive G19: a missing, a torn and an unreadable transcript are counted and never change the exit code or stop the others', () => {
+  const good = jl([call('g1', 'claude-fable-5-2', U(1, 1, 1, 1), '2026-11-01T10:00:00.000Z')]);
+  const tornTail = jl([call('t1', 'claude-fable-5-2', U(2, 2, 2, 2), '2026-11-01T10:00:00.000Z')]) + '{"type":"assistant","message":{"id":"t2","usa';
+  const s = usageSetup({
+    sessions: { 'dir-bad': 'not json at all\n{"half', 'dir-tail': tornTail, 'dir-good': good },
+    delegations: [del('dir-missing'), del('dir-bad'), del('dir-tail'), del('dir-good'), del('dir-dir')],
+  });
+  fs.mkdirSync(path.join(s.root, 'proj-folder', 'dir-dir.jsonl')); // unreadable: a folder where the transcript should be
+  const r = arch(s.p, ['m1', '--project', 'proj'], s.env);
+  eq(r.status, 0, `exit code unchanged: ${r.stderr}`);
+  assert(r.stdout.includes('usage: 5 sessions, 3 not found; 2 session_usage lines written; 1 unreadable transcript line skipped'), r.stdout);
+  const ids = readLive(s.p, 'sessions.jsonl').map((l) => l.session_id).sort();
+  eq(JSON.stringify(ids), JSON.stringify(['dir-good', 'dir-tail']), 'the readable ones were recorded, the torn tail did not stop its own complete lines');
+  assert(fs.existsSync(path.join(destOf(r), 'sessions.jsonl')), 'the archive was still made');
+  // recovery: once the missing transcript exists, the next run records it
+  fs.writeFileSync(path.join(s.root, 'proj-folder', 'dir-missing.jsonl'), good);
+  const next = arch(s.p, ['m1', '--project', 'proj', '--force'], s.env);
+  assert(next.stdout.includes('4 not found') === false && next.stdout.includes('2 not found; 1 session_usage line written'), next.stdout);
+});
+
+test('archive G19: Codex sessions and Codex agents are skipped with a printed count; other milestones are not read', () => {
+  const good = jl([call('g1', 'claude-fable-5-2', U(1, 1, 1, 1), '2026-11-01T10:00:00.000Z')]);
+  const s = usageSetup({
+    sessions: { 'dir-claude': good, 'dir-other': good },
+    delegations: [
+      del('dir-claude'),
+      del('cx-session', { tool: 'codex', agent_id: 'cx-agent' }),
+      del('dir-other', { task: { id: 'AU-9', milestone: 'm2' } }),
+    ],
+    completions: [{ ts: 't', tool: 'codex', session_id: 'cx-session', kind: 'completion', agent: 'x', agent_id: 'cx-agent', turn: 1, task: { id: 'AU-1', milestone: 'm1' }, tokens_with_cache: 5 }],
+  });
+  const r = arch(s.p, ['m1', '--project', 'proj'], s.env);
+  eq(r.status, 0, r.stderr);
+  assert(r.stdout.includes('completions: 0 superseded with the full turn\'s tokens, 0 transcripts not found, 1 Codex agents skipped'), r.stdout);
+  assert(r.stdout.includes('usage: 1 sessions, 0 not found, 1 Codex sessions skipped; 1 session_usage line written'), r.stdout);
+  eq(JSON.stringify(readLive(s.p, 'sessions.jsonl').map((l) => l.session_id)), JSON.stringify(['dir-claude']), 'only the Claude session of this milestone');
+});
+
+test('archive G19/G18: --dry-run reads but writes nothing, not even the archive folder', () => {
+  const wake = [
+    { type: 'user', isMeta: false, timestamp: '2026-11-01T10:00:00.000Z', message: { role: 'user', content: card(1) } },
+    { type: 'assistant', timestamp: '2026-11-01T10:00:05.000Z', message: { id: 'w0', model: 'claude-sonnet-5-5', usage: U(10, 20, 100, 5), content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: 'done' } }] } },
+    { type: 'assistant', timestamp: '2026-11-01T10:01:05.000Z', message: { id: 'w1', model: 'claude-sonnet-5-5', usage: U(5, 50, 200, 0), content: [{ type: 'text', text: 'woken' }] } },
+  ];
+  const comp = { ts: 't', tool: 'claude', session_id: 'dir-1', kind: 'completion', agent: 'agent-team:implementer', agent_id: 'ag-dir-1', turn: 1, task: { id: 'AU-1', milestone: 'm1', attempt: '1' }, tokens_with_cache: 135 };
+  const s = usageSetup({
+    sessions: { 'dir-1': jl([call('a1', 'claude-fable-5-2', U(1, 1, 1, 1), '2026-11-01T10:00:00.000Z')]) },
+    agents: { 'dir-1': { 'ag-dir-1': wake } },
+    delegations: [del('dir-1')], completions: [comp],
+  });
+  const archiveRoot = tmp();
+  const before = fs.readFileSync(path.join(logs(s.p), 'completions.jsonl'), 'utf8');
+  const dry = arch(s.p, ['m1', '--project', 'proj', '--root', archiveRoot, '--dry-run'], s.env);
+  eq(dry.status, 0, dry.stderr);
+  assert(dry.stdout.includes('[dry-run] completions: 1 would be superseded'), dry.stdout);
+  assert(dry.stdout.includes('[dry-run] usage: 1 sessions, 0 not found; 1 session_usage line would be written'), dry.stdout);
+  eq(fs.existsSync(path.join(logs(s.p), 'sessions.jsonl')), false, 'no sessions.jsonl');
+  eq(fs.readFileSync(path.join(logs(s.p), 'completions.jsonl'), 'utf8'), before, 'completions.jsonl untouched');
+  eq(fs.readdirSync(archiveRoot).length, 0, 'nothing in the archive root');
+  // recovery control: the same setup, not dry, writes both
+  const real = arch(s.p, ['m1', '--project', 'proj', '--root', archiveRoot], s.env);
+  eq(real.status, 0, real.stderr);
+  eq(readLive(s.p, 'sessions.jsonl').length, 1, 'a real run writes the session line');
+  const cs = readLive(s.p, 'completions.jsonl');
+  eq(cs.length, 2, 'and the superseding line');
+  eq(cs[1].tokens_with_cache, 390, 'with the full turn (135 + 255)');
+  assert(typeof cs[1].reconciled_by === 'string' && cs[1].reconciled_by, 'reconciled_by set');
+});
+
+test('archive G18: the superseding line is written before the copy, so the archive holds it; a rerun adds none', () => {
+  const nudged = [
+    { type: 'user', isMeta: false, timestamp: '2026-11-01T10:00:00.000Z', message: { role: 'user', content: card(1) } },
+    { type: 'assistant', timestamp: '2026-11-01T10:00:05.000Z', message: { id: 'n0', model: 'claude-sonnet-5-5', usage: U(10, 20, 100, 5), content: [{ type: 'text', text: 'report without the tool' }] } },
+    { type: 'user', isMeta: true, timestamp: '2026-11-01T10:00:06.000Z', message: { role: 'user', content: '[handback-send-enforce] Your report has not been delivered.' } },
+    { type: 'assistant', timestamp: '2026-11-01T10:00:09.000Z', message: { id: 'n1', model: 'claude-sonnet-5-5', usage: U(7, 30, 150, 0), content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: 'done' } }] } },
+  ];
+  const comp = { ts: 't', tool: 'claude', session_id: 'dir-1', kind: 'completion', agent: 'agent-team:implementer', agent_id: 'ag-dir-1', turn: 1, task: { id: 'AU-1', milestone: 'm1', attempt: '1' }, tokens_with_cache: 135, report_source: 'hook-input' };
+  const s = usageSetup({ sessions: {}, agents: { 'dir-1': { 'ag-dir-1': nudged } }, delegations: [del('dir-1')], completions: [comp] });
+  const r = arch(s.p, ['m1', '--project', 'proj'], s.env);
+  eq(r.status, 0, r.stderr);
+  assert(r.stdout.includes("completions: 1 superseded with the full turn's tokens, 0 transcripts not found"), r.stdout);
+  const archived = fs.readFileSync(path.join(destOf(r), 'completions.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  eq(archived.length, 2, 'the archive holds the original and the superseding line');
+  eq(archived[1].tokens_with_cache, 322, 'the full turn: 135 + 187');
+  eq(archived[1].report_source, 'hook-input', 'the rest of the line is the line it supersedes');
+  assert(archived[1].reconciled_by, 'reconciled_by');
+  const again = arch(s.p, ['m1', '--project', 'proj', '--force'], s.env);
+  assert(again.stdout.includes('completions: 0 superseded'), again.stdout);
+  eq(readLive(s.p, 'completions.jsonl').length, 2, 'a rerun adds nothing');
+  // a transcript that is not found is counted, and the archive still succeeds
+  const gone = usageSetup({ delegations: [del('dir-1')], completions: [comp] });
+  const g = arch(gone.p, ['m1', '--project', 'proj'], gone.env);
+  eq(g.status, 0, g.stderr);
+  assert(g.stdout.includes('completions: 0 superseded with the full turn\'s tokens, 1 transcripts not found'), g.stdout);
 });
