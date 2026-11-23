@@ -389,14 +389,14 @@ module.exports = [
   ['CO-27', COACH, /`billing` appears only when/, 'billing appears only when a user own map sets it; the grant rows can be proposed for change'],
   ['CO-28', COACH, /`agent` `<name>-bridge`, `tier`, and `effort` from the card/, 'Bridge review rows are read by tool, agent, tier and card effort; no join on the delegation'],
   ['CO-29', COACH, /`confirm` is a review card re-checking an attempt/, 'reason=confirm marks a review card, not a failed-review follow-up'],
-  ['CO-30', COACH, /never count a review card as drift/, 'From 1.2.0 a review card is never card_drift'],
-  ['CO-31', COACH, /`task\.flags` \(`security-sensitive`/, 'task.flags are read and flagged tasks reported apart'],
-  ['CO-32', COACH, /`session_source` \(`env` or `marker`\)/, 'session_id and session_source on delegation, merge and event lines'],
+  ['CO-30', COACH, /it gets no drift line; don't count one in older logs either/, 'A review card is never the card_drift baseline: no drift line from 1.2.0, and none counted in older logs'],
+  ['CO-31', COACH, /Report flagged tasks apart from unflagged/, 'task.flags are read and flagged tasks reported apart from unflagged ones'],
+  ['CO-32', COACH, /`session_source` is on `merge-task\.js` and `log-event\.js` lines/, 'session_source (env, or the weaker marker) is only on merge-task.js and log-event.js lines; review lines have session_id only'],
   ['CO-33', COACH, /_ambiguous: true, count: n\}/, 'An ambiguous review wrote no row; it is counted apart, not as a pass or a failure'],
   ['CO-34', COACH, /whether its one send-back fixed it/, 'Decision 0023: report, per task failed at large/high, whether the send-back fixed it'],
   ['CO-35', COACH, /supersedes a short line of the same turn/, 'A reconciled completion line supersedes a short line of the same turn'],
   ['CO-36', COACH, /take the last line per session\+model/, 'session_usage in sessions.jsonl is cumulative Director cost: last line per session and model'],
-  ['CO-37', COACH, /Count `verdict_conflict: true` rows/, 'verdict_conflict rows are counted apart'],
+  ['CO-37', COACH, /`verdict_conflict: true` \(any review\)/, 'verdict_conflict is read on any review row and counted apart'],
 
   // ---- Security reviewer ----------------------------------------------------
   ['SV-01', SECREV, /List the trust boundaries the diff touches/, 'List the trust boundaries the diff touches, then trace each untrusted input to where it is used'],
