@@ -16,6 +16,8 @@
 //   review       e.g. '{"card":"TASK id=X-2 reviewed_task=X-1 pr=5 ...","verdict":"approve","agent_id":"..."}'
 // `card` is parsed into `task` (task card fields, plus `why` from a WHY line or a `why` field).
 // `tool` defaults to AGENT_TEAM_TOOL, else "unknown". Director-written lines carry source "director".
+// Every line carries session_id: CLAUDE_CODE_SESSION_ID when set (session_source "env"), else the
+// SessionStart marker's (session_source "marker"). A review line has session_id only.
 // Writes to <project>/.agent-team/logs/<kind>s.jsonl (pauses.jsonl for pause), adding ts and guidance_version.
 // note, escalation and merge lines get `milestone` from the linked task's delegation card when the JSON has none
 // (the task is the `task` or `task_id` field); a merge also takes it from a `base` of milestone/<name>.
@@ -81,6 +83,17 @@ function lastTurnContext(file) {
     } catch { /* torn line */ }
   }
   return out;
+}
+
+// The session that ran this script: CLAUDE_CODE_SESSION_ID when the shell has it.
+// The SessionStart marker is overwritten by whichever session started last (G17),
+// so it is only the fallback (Codex, or a shell without the variable).
+// session_source says which one was used.
+function sessionFields() {
+  const env = process.env.CLAUDE_CODE_SESSION_ID;
+  if (env) return { session_id: env, session_source: 'env' };
+  const marker = readJson(path.join(lib.logPath({}), '.pending', 'hooks-alive.json'));
+  return { session_id: (marker && marker.session_id) || null, session_source: 'marker' };
 }
 
 // The Director session's resolved model and effort, from what the hooks saw:
@@ -170,6 +183,7 @@ function main(argv) {
     return 1;
   }
 
+  const session = sessionFields();
   if (kind === 'delegation' || kind === 'review') {
     const { card, why, ...rest } = data;
     const task = { ...(rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };
@@ -214,11 +228,14 @@ function main(argv) {
         ...(drift ? { card_drift: drift } : {}),
         ...(task.id ? {} : { uncarded: true }),
         source: 'director',
+        ...session,
       });
     } else {
-      // Same shape as records.logReview writes for hook-seen reviews.
+      // Same shape as records.logReview writes for hook-seen reviews. The session
+      // id comes in through its input (base takes it from there); logReview does
+      // not write session_source, so a review line has no source field.
       const { agent_id, resolved_model, model, effort, tier, ...review } = rest;
-      records.logReview({}, {
+      records.logReview({ session_id: session.session_id }, {
         agent_id, task, resolved_model, model, effort, tier,
       }, { ...review, source: 'director' }, tool);
     }
@@ -263,7 +280,7 @@ function main(argv) {
     const m = typeof id === 'string' ? records.milestoneFor({}, id, t && typeof t === 'object' ? t : null) : undefined;
     if (m) data.milestone = m;
   }
-  const record = { ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data };
+  const record = { ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data, ...session };
   lib.appendJsonl({}, `${kind}s.jsonl`, record);
   console.log(`logged ${kind} to .agent-team/logs/${kind}s.jsonl`);
   return 0;
