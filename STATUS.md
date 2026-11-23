@@ -31,11 +31,11 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
 | FU-0 | Breakdown | architect | xlarge (fable) / medium, granted | 1 | done | |
-| FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium | 1 | in review | #147 |
+| FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested | #147 |
 | FU-2 | Scan-state table design, decision 0024 (#132) | architect | xlarge (fable) / medium, granted | 1 | merged | #145 |
-| FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium | 1 | in review | #148 |
+| FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested | #148 |
 | FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | merged | #146 |
-| FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | in progress | |
+| FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | in review | #149 |
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | planned | |
 | FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (session) | medium (sonnet) / high | 1 | planned | |
@@ -45,6 +45,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 1 | planned | |
+| FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | in progress | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
