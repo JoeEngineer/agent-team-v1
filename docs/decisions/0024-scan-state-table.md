@@ -100,22 +100,25 @@ Step 5 and everything after it is new. **Steps 3 and 4 also change**, which is
 more than the task card's "from step 5 on": gap 3 cannot be closed without them.
 Step 3 loses "`scan` is `unknown`" (the table says it), and step 4 reads by SHA.
 
-**Size: 1,700 bytes**, measured with `wc -c` on the text below with LF line
+**Size: 1,849 bytes**, measured with `wc -c` on the text below with LF line
 endings, including the one blank line that ends the section. The current section
-is 1,656 bytes measured the same way. The limit is 1,750.
+is 1,656 bytes measured the same way. The limit is 1,850: the Director raised it
+from 1,750 for the review fold-in, which added the definitions of passed,
+pending, missing and "the rest", the unconfirmed-scan rule, and the GitLab and
+step 3 clarifications. One byte is free, so any further wording needs a cut.
 
 ```markdown
 ## Scan status
 Scanner checks (dependency, image, config and secret scans) run in the project's CI. You never run a scanner yourself.
 1. Find the scanner jobs in the project's CI config (`.github/workflows/`, `.gitlab-ci.yml`).
 2. Wait for CI as the task card's CI wait line says, after your review work. Report `ci` from that wait. With a blocking finding, don't wait: make one `--once` check and start `summary` with `not waited: changes requested` (`not waited: rejected` for `reject`).
-3. Confirm the PR head is still `head_sha`. If it moved, review the new commits or say so.
-4. Read the checks of `head_sha` itself, once (`gh pr checks` shows only the current head): `gh api "repos/{owner}/{repo}/commits/<head_sha>/check-runs" --paginate`, or on GitLab `glab api --paginate "projects/:id/pipelines/<id>/jobs"` with the id from `glab api "projects/:id/pipelines?sha=<head_sha>"`.
+3. Confirm the PR head is still `head_sha`. If it moved, review the new commits (the new head is then `head_sha`) or say so.
+4. Read `head_sha`'s own checks once (`gh pr checks` shows only the current head): `gh api "repos/{owner}/{repo}/commits/<head_sha>/check-runs" --paginate`, or on GitLab `glab api --paginate "projects/:id/pipelines/<id>/jobs"` with each id from `glab api "projects/:id/pipelines?sha=<head_sha>"`.
 5. Report `scan` from the first row that matches:
 
 | Scanner jobs, on `head_sha` | `scan` |
 |---|---|
-| Any failed, even if the head moved or others are skipped or unreadable | `red` |
+| Any failed, even with a moved head or others skipped or unreadable | `red` |
 | The head moved | `unknown` |
 | The CI config has none | `none` |
 | Checks unreadable, or any still pending after the wait | `unknown` |
@@ -124,14 +127,26 @@ Scanner checks (dependency, image, config and secret scans) run in the project's
 | All the rest passed | `green` |
 | Anything else | `unknown` |
 
-**Failed**: `failure` or `timed_out` (GitLab `failed`). **Unscanned**: skipped (a job-level `if` too), missing, or passed without scanning. **With cause**: you saw in the tree at `head_sha` that nothing of its kind exists (an image job: no `Dockerfile` anywhere); never trust the job's own notice. List each unscanned job under `not_checked`.
+**Failed**: `failure` or `timed_out` (GitLab `failed`). **Passed**: `success`. **Pending**: not finished. **Unscanned**: skipped (a job-level `if` too), missing (in the config, no check), or passed without a scan you can confirm. **With cause**: you saw in the tree at `head_sha` that nothing of its kind exists (an image job: no `Dockerfile` anywhere); never trust the job's notice. **The rest**: jobs not unscanned with cause. List unscanned jobs under `not_checked`.
 
 ```
 
-"Missing" means a scanner job that is in the CI config and has no check on
-`head_sha` (a workflow that was not triggered, a GitLab job its `rules:` left
-out). In "All the rest passed", "the rest" is every job that is not unscanned
-with cause; row 6 comes first, so the rest is never empty.
+Notes on the definitions (all of them are in the fenced text; this only
+explains them):
+
+- **Passed** is `success` only. `neutral`, `cancelled`, `action_required` and
+  any other state are neither passed nor failed, so they reach row 8.
+- **Missing** covers a workflow that was not triggered and a GitLab job its
+  `rules:` left out.
+- **Passed without a scan you can confirm** covers both a job that is known not
+  to have scanned and one whose scan step the reviewer cannot confirm ran (a
+  conditional step and no readable log). Both are unscanned.
+- **The rest** is never empty at row 7, because row 6 comes first.
+- **GitLab, "each id"**: one commit can have a branch pipeline and a
+  merge-request pipeline. The jobs of every pipeline for the SHA count, so a
+  failure in any of them is `red`, and `green` needs all of them passed.
+- **Step 3**: once the reviewer has reviewed the new commits, the new head is
+  `head_sha`, step 4 reads that head, and "the head moved" no longer applies.
 
 ## Rows and the cases they cover
 
@@ -163,9 +178,9 @@ moved):
   `conclusion`. For a short listing add
   `--jq '.check_runs[]|[.name,.status,.conclusion]|@tsv'`.
 - GitLab: `glab api "projects/:id/pipelines?sha=<head_sha>"` gives the pipelines
-  of that commit, newest first; then
-  `glab api --paginate "projects/:id/pipelines/<id>/jobs"`. There is no single
-  GitLab command.
+  of that commit (there can be a branch pipeline and a merge-request pipeline);
+  then `glab api --paginate "projects/:id/pipelines/<id>/jobs"` for each of
+  them. There is no single GitLab command.
 
 ## Worked matrix
 
@@ -175,10 +190,12 @@ FU-9 turns this into tests. Columns are fixed:
 - `jobs`: `some` or `none` (scanner jobs in the CI config).
 - `readable`: `yes` or `no` (the read in step 4 worked).
 - `states`: the scanner jobs' states on `head_sha`, comma-separated, or `-` for
-  none read. Each is one of `pass`, `fail`, `pending`, `cancelled`, `skip`,
-  `missing`, `noscan` (passed without scanning). `skip`, `missing` and `noscan`
-  may carry `+cause`: the reviewer confirmed in the tree that nothing of that
-  kind exists.
+  none read. Each is one of `pass`, `fail`, `pending`, `cancelled`, `neutral`,
+  `skip`, `missing`, `noscan` (passed, known not to have scanned),
+  `unconfirmed` (passed, and the reviewer cannot confirm the scan step ran).
+  `skip`, `missing`, `noscan` and `unconfirmed` are the unscanned states and may
+  carry `+cause`: the reviewer confirmed in the tree that nothing of that kind
+  exists.
 - `scan`: the expected value. `row`: the table row that decides it.
 
 | id | head | jobs | readable | states | scan | row |
@@ -207,15 +224,23 @@ FU-9 turns this into tests. Columns are fixed:
 | M22 | same | some | yes | pending,skip | unknown | 4 |
 | M23 | moved | some | no | - | unknown | 2 |
 | M24 | same | some | yes | fail,noscan+cause | red | 1 |
+| M25 | same | some | yes | pass,neutral | unknown | 8 |
+| M26 | same | some | yes | neutral,skip+cause | unknown | 8 |
+| M27 | same | some | yes | pass,unconfirmed | unknown | 5 |
+| M28 | same | some | yes | pass,unconfirmed+cause | green | 7 |
+| M29 | same | some | yes | unconfirmed | unknown | 5 |
+| M30 | same | some | yes | fail,neutral | red | 1 |
 
 M13 is the notice case: the job printed "nothing to scan" and the reviewer did
 not confirm it. M16 is FU-10's `trivy-image` with no `Dockerfile` in the tree.
+M25 and M26 show that `neutral` is not passed. M27 and M29 are a passed job
+whose scan step cannot be confirmed.
 
-Reference evaluator. The matrix above was run through it: 24 rows, 0
+Reference evaluator. The matrix above was run through it: 30 rows, 0
 mismatches, all 8 rows hit.
 
 ```js
-const UNSCANNED = ['skip', 'missing', 'noscan'];
+const UNSCANNED = ['skip', 'missing', 'noscan', 'unconfirmed'];
 function scanState({ head, jobs, readable, states }) {
   const s = states === '-' ? [] : states.split(',');
   const cause = (x) => x.endsWith('+cause');
@@ -245,23 +270,22 @@ untested assumption falls back to `unknown`.
 | 3 | A cancelled job shows `cancelled`, not `failure` or `success` | tested (commit `d6534bc`) | Row 8, `unknown` |
 | 4 | A job skipped by a job-level `if` shows as a check run with `conclusion: skipped` | untested (GitHub docs; this repository has no skipped run) | If it does not show at all it is "missing", the same row: `unknown` without cause |
 | 5 | A workflow that was not triggered leaves no check run, and the reviewer notices by comparing with the jobs from step 1 | untested | "Missing": row 5, `unknown` |
-| 6 | The reviewer can tell that a passed job did not scan (a conditional scan step in the CI config, or the job log) | untested | Gap, see below |
+| 6 | The reviewer can tell that a passed job did not scan (a conditional scan step in the CI config, or the job log) | untested | In the section text: a pass without a scan the reviewer can confirm is unscanned. Row 5, `unknown` (M27) |
 | 7 | Scanner jobs report as check runs. A scanner that reports through the commit status API is not in the call | untested | It reads as "missing": row 5, `unknown` |
 | 8 | `--paginate` returns every run when there are more than 30 | untested (the largest set read had 4) | A job not in the output is "missing": row 5, `unknown`. A failed job on an unread page is the one case that could hide a `red`; it still cannot give `green` |
 | 9 | The call returns the latest attempt of a re-run job | untested (GitHub docs: `filter=latest` is the default) | A re-run that passed is a real pass. A stale failure would give `red`, the safe side |
-| 10 | GitLab: `pipelines?sha=` lists the commit's pipelines, and a job left out by `rules:` is absent from the job list | untested (no `glab` here; live GitLab is out of this milestone's scope) | Command fails: row 4. Job absent: row 5. Both `unknown` |
-| 11 | The reviewer applies the rows in order | untested (FU-9's anchors pin the text, not the behaviour) | Row 8 is `unknown` and `green` needs a positive match on row 7, so a missed row tends to `unknown` |
-| 12 | The tree the reviewer checks for "with cause" is the tree at `head_sha` | tested by row order: if the head moved, row 2 gives `unknown` before rows 5 to 7 are reached (M06) | `unknown` |
-| 13 | The Director blocks on `red` | holds by `merging.md`, "Security results", which this record does not change | Not in this section's control |
+| 10 | GitLab: `pipelines?sha=` lists every pipeline of the commit (branch and merge-request), and a job left out by `rules:` is absent from the job list | untested (no `glab` here; live GitLab is out of this milestone's scope) | Command fails: row 4. Job absent: row 5. Both `unknown` |
+| 11 | The reviewer applies the rows in order | untested (FU-9's anchors pin the text, not the behaviour) | `unknown`: a case that matches no row is row 8, and `green` is given only by a positive match on row 7 |
+| 12 | The tree the reviewer checks for "with cause" is the tree at `head_sha` | tested (matrix rows M06 and M23 through the evaluator: with a moved head, row 2 gives `unknown` before rows 5 to 7 are reached) | `unknown` |
+| 13 | The Director blocks on `red` | untested here (it is `merging.md`, "Security results", pinned by anchors M-45 and M-46, and outside this section) | `unknown` is the fallback inside this section; nothing in this section can make the Director block |
 
 ### Gaps
 
-- **Assumption 6: a pass that did not scan.** The table says what to do once the
-  reviewer knows a job did not scan, not how to find out. The fallback is: when
-  the job's steps are conditional and the reviewer cannot confirm the scan step
-  ran, treat it as unscanned without cause (`unknown`). This is not in the
-  section text, for size. After FU-10 the template has no step-level condition
-  left, which removes the known instance.
+- **Assumption 6: a pass that did not scan.** The section now says that a pass
+  without a scan the reviewer can confirm is unscanned, so the unsure case is
+  `unknown`. It does not say how to confirm; that is reading the job's steps and
+  log. After FU-10 the template has no step-level condition left, which removes
+  the known instance.
 - **A scanner that runs and is configured not to fail** (for example Trivy with
   `exit-code: '0'` already on the base branch). The scan ran, so the rule holds
   as written, but `green` then says less than it seems to. The table does not
@@ -273,8 +297,9 @@ untested assumption falls back to `unknown`.
 
 ### Cost of the read
 
-Step 4 is one call on GitHub (one more request per 30 check runs) and two on
-GitLab, once per reviewed head. A moved head that the reviewer goes on to review
+Step 4 is one call on GitHub (one more request per 30 check runs). On GitLab it
+is one call to list the pipelines plus one per pipeline of the SHA, usually one
+or two. Both are made once per reviewed head. A moved head that the reviewer goes on to review
 is a new `head_sha` and one more read. There is no retry and no polling in this
 section; waiting belongs to step 2.
 
@@ -290,7 +315,9 @@ section; waiting belongs to step 2.
   that is already known to block.
 - A scanner job that is in the config and never ran on `head_sha` ("missing") is
   now `unknown`. Under the old text it was undefined and could read as `green`.
-- The section grows 44 bytes (1,656 to 1,700), inside decision 0025's ceiling.
+- The section grows 193 bytes (1,656 to 1,849). The Director confirmed that
+  `agents/security-reviewer.md` still fits under decision 0025's 8,100 with
+  FU-9's other additions.
 - **For FU-9.** Apply the fenced text byte for byte. These anchors in
   `tests/guidance-rules.js` pin text that is gone and need new patterns: SV-07,
   SV-08, SV-13, SV-14, SV-15, SV-16, SV-21, SV-22, SV-23. SV-05, SV-06, SV-09 and
