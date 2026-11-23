@@ -327,6 +327,64 @@ test('merge-task.js next names the exact status.js set command for merged, queue
   assert(nextStep('waiting', { ...c, waited: true }).includes(cmd('waiting CI')), 'still waiting');
 });
 
+test('set creates the temp file exclusively: a file or symlink already at that path is never followed, exit 21', () => {
+  const crypto = require('crypto');
+  const realRandom = crypto.randomBytes;
+  crypto.randomBytes = () => Buffer.from('0123456789abcdef', 'hex');
+  try {
+    const f = fixture(FIXTURE);
+    const tmp = `${f}.tmp-${process.pid}-0123456789abcdef`;
+    const before = fs.readFileSync(f);
+    // A file already there.
+    fs.writeFileSync(tmp, 'precious');
+    let r = withStub('renameSync', (rn) => rn, ['set', 'T-1', '--state', 'merged', '--file', f]);
+    eq(r.code, 21, `exit: ${r.out}`);
+    assert(r.json.ok === false && r.json.reason.includes('already exists'), r.out);
+    eq(fs.readFileSync(tmp, 'utf8'), 'precious', 'the pre-existing file is untouched and not removed');
+    assert(Buffer.compare(before, fs.readFileSync(f)) === 0, 'file changed');
+    fs.unlinkSync(tmp);
+    // A symlink already there, pointing at a victim.
+    const victim = path.join(DIR, `victim${n++}.txt`);
+    fs.writeFileSync(victim, 'victim');
+    let made = true;
+    try { fs.symlinkSync(victim, tmp, 'file'); } catch (e) { if (e.code !== 'EPERM' && e.code !== 'EACCES') throw e; made = false; }
+    if (made) {
+      r = withStub('renameSync', (rn) => rn, ['set', 'T-1', '--state', 'merged', '--file', f]);
+      eq(r.code, 21, `symlink exit: ${r.out}`);
+      eq(fs.readFileSync(victim, 'utf8'), 'victim', 'the link target is not overwritten');
+      assert(fs.lstatSync(tmp).isSymbolicLink(), 'the link is still there');
+      assert(Buffer.compare(before, fs.readFileSync(f)) === 0, 'file changed (symlink case)');
+      fs.unlinkSync(tmp);
+    }
+    // Recovery control: with the path free the same command works.
+    r = withStub('renameSync', (rn) => rn, ['set', 'T-1', '--state', 'merged', '--file', f]);
+    eq(r.code, 0, `recovery: ${r.out}`);
+  } finally { crypto.randomBytes = realRandom; }
+});
+
+test('set does not roll back over an edit made by someone else after the read-back', () => {
+  const f = fixture(FIXTURE);
+  const real = fs.writeFileSync;
+  const realRead = fs.readFileSync;
+  let reads = 0;
+  let tampered = false;
+  // The first write is corrupted so the read-back fails; right after that read-back, another writer edits the file.
+  fs.writeFileSync = (p, data, ...rest) => real(p, `X${data}`, ...rest);
+  fs.readFileSync = (p, ...rest) => {
+    const out = realRead(p, ...rest);
+    if (path.resolve(String(p)) === path.resolve(f) && ++reads === 2) { real(f, 'SOMEONE ELSE EDITED\n'); tampered = true; }
+    return out;
+  };
+  let r;
+  try { status.main(['set', 'T-1', '--state', 'merged', '--file', f], { out: (l) => { r = l; } }); } finally { fs.writeFileSync = real; fs.readFileSync = realRead; }
+  assert(tampered, 'precondition: the other writer edited after the read-back');
+  const j = JSON.parse(r);
+  eq(j.code, 11, r);
+  assert(j.reason.includes('changed by someone else') && j.reason.includes('NOT restored'), r);
+  eq(fs.readFileSync(f, 'utf8'), 'SOMEONE ELSE EDITED\n', 'the other edit is left in place');
+  noTemp('rollback');
+});
+
 // ---- --check --since ----
 
 const GIT_ENV = { ...process.env, GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@example.com', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@example.com' };
@@ -429,6 +487,28 @@ test('--since: STATUS.md deleted, renamed, or changed in mode or type fails', ()
   const typed = g(r.dir, 'rev-parse', 'HEAD~1');
   eq(g(r.dir, 'diff', '--name-status', typed, 'HEAD'), 'M\tSTATUS.md', 'precondition: a symlink edit shows as M with equal modes');
   assert(/regular file/.test(since(r.dir, typed, [], false, 14, 'symlink edit').json.reason), 'reason says not a regular file');
+});
+
+test('--since: diff.relative and a subdirectory cwd do not hide a change outside the subdirectory', () => {
+  const r = repo();
+  fs.mkdirSync(path.join(r.dir, 'sub'));
+  fs.writeFileSync(path.join(r.dir, 'sub', 'b.txt'), 'b\n');
+  g(r.dir, 'add', 'sub/b.txt');
+  g(r.dir, 'commit', '-q', '-m', 'sub');
+  const base = g(r.dir, 'rev-parse', 'HEAD');
+  g(r.dir, 'config', 'diff.relative', 'true');
+  fs.writeFileSync(path.join(r.dir, 'a.txt'), 'changed\n');
+  commit(r.dir);
+  const sub = path.join(r.dir, 'sub');
+  // Precondition: from sub with diff.relative, a plain git diff does not list the outside change.
+  eq(g(sub, 'diff', '--name-status', base, 'HEAD'), '', 'precondition: the relative diff is blind to a.txt');
+  const out = since(sub, base, [], false, 14, 'outside change from a subdirectory');
+  assert(out.json.reason.includes('a.txt'), out.out);
+  // Recovery control: a STATUS.md-only change from the subdirectory still passes.
+  const head = g(r.dir, 'rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(r.dir, 'STATUS.md'), FIXTURE.replace('planned', 'queued'));
+  commit(r.dir);
+  since(sub, head, [], true, 0, 'status only from a subdirectory');
 });
 
 test('--since: a sha that is not an ancestor, an unknown sha, and git failing exit non-zero', () => {
@@ -627,7 +707,7 @@ function liveGrant(text) {
     return s.replace(/\s+/g, ' ').trim().replace(/\.$/, '').trim().toLowerCase();
   };
   const unset = (v) => v === null || /^<[^>]*>$/.test(v);
-  const ROLE = { 'security reviews': 'security-review', 'architect': 'architect', 'coach at close': 'coach', 'hard-fix escalation': 'hard-fix' };
+  const ROLE = { 'security reviews': 'security-review', 'architect': 'architect', 'coach at close': 'coach', 'coach': 'coach', 'hard-fix escalation': 'hard-fix' };
   const SECOND = { 'no': 'none', 'not offered': 'none', 'large/high': 'large', 'xlarge/high': 'xlarge' };
   out.rolesRaw = field('granted roles');
   if (!unset(out.rolesRaw) && !['none', ''].includes(words(out.rolesRaw))) {
@@ -671,6 +751,47 @@ test('grant: a role word only inside a parenthetical note is not granted', () =>
   for (const roles of ['architect - a note', 'architect — a note', 'architect; a note']) {
     eq(grantIn(project(STATUS_DOC('m1', roles, 'no'), log)).code, 17, `unparenthesised note "${roles}"`);
   }
+});
+
+test('grant: every role label in the template and the milestone intake question parses to a known role', () => {
+  const tpl = fs.readFileSync(path.join(ROOT, 'templates', 'project', 'STATUS.md'), 'utf8');
+  const skill = fs.readFileSync(path.join(ROOT, 'skills', 'milestone', 'SKILL.md'), 'utf8');
+  const tplLine = /^- Granted roles: (.*)$/m.exec(tpl.replace(/\r/g, ''));
+  const qLine = /^\s*> Use xlarge in this milestone for: (.*)\?\s*$/m.exec(skill.replace(/\r/g, ''));
+  assert(tplLine && qLine, 'precondition: both the template line and the intake question were found');
+  const labels = (list) => list.replace(/^<|>$/g, '').replace(/, or none$/, '').split(/\s*\/\s*|,\s+(?![^()]*\))/).map((x) => x.trim()).filter(Boolean);
+  const fromTpl = labels(tplLine[1]);
+  const fromQ = labels(qLine[1]);
+  assert(fromTpl.length >= 4 && fromQ.length >= 4, `precondition: four or more labels each: ${fromTpl} | ${fromQ}`);
+  const all = [...new Set([...fromTpl, ...fromQ, 'coach at close'])];
+  const names = new Set();
+  for (const label of all) {
+    const r = grantIn(project(STATUS_DOC('m1', label, 'no'), `${intake('m1', [])}\n`));
+    assert(r.code !== 17, `label "${label}" is not a known role: ${r.out}`);
+    assert(r.json.block.roles.length === 1, `label "${label}" gives one role: ${r.out}`);
+    names.add(r.json.block.roles[0]);
+  }
+  deq([...names].sort(), ['architect', 'coach', 'hard-fix', 'security-review'], 'every role is reachable from the labels');
+  // The 1.2.0 coach label is a full grant when the log agrees; an unknown word still fails closed.
+  const ok = grantIn(project(STATUS_DOC('m1', 'architect, coach (run for this milestone)', 'no'), `${intake('m1', ['architect', 'coach'])}\n`));
+  eq(ok.code, 0, ok.out);
+  deq(ok.json.grant.roles, ['architect', 'coach'], 'coach granted');
+  eq(grantIn(project(STATUS_DOC('m1', 'coach (run) extra', 'no'), `${intake('m1', ['coach'])}\n`)).code, 17, 'unknown word beside a coach label');
+});
+
+test('note stripping is linear in nested parentheses: 5,000 levels finish quickly, deeper ones too', () => {
+  const dir = project(STATUS_DOC('m1', `architect ${'('.repeat(5000)}note${')'.repeat(5000)}`, 'no'), `${intake('m1', ['architect'])}\n`);
+  const t0 = Date.now();
+  const r = grantIn(dir);
+  assert(Date.now() - t0 < 5000, `took ${Date.now() - t0} ms`);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant.roles, ['architect'], 'nested note dropped');
+  const big = project(STATUS_DOC('m1', `architect ${'('.repeat(200000)}x${')'.repeat(200000)}`, 'no'), `${intake('m1', ['architect'])}\n`);
+  const t1 = Date.now();
+  eq(grantIn(big).code, 0, 'very deep');
+  assert(Date.now() - t1 < 5000, `very deep took ${Date.now() - t1} ms`);
+  // One unmatched parenthesis still fails closed.
+  eq(grantIn(project(STATUS_DOC('m1', `architect ${'('.repeat(5000)}x${')'.repeat(4999)}`, 'no'), `${intake('m1', ['architect'])}\n`)).code, 17, 'unbalanced');
 });
 
 test('grant: the shipped template and this repo STATUS.md both parse', () => {
@@ -793,7 +914,7 @@ test('grant: a first line that names the slug but parses to another milestone ex
 
 test('grant: two milestones in one log; --milestone picks the line', () => {
   const log = `${intake('m1', ['architect'])}\n${intake('m2', ['coach'], 'xlarge')}\n`;
-  let r = grantIn(project(STATUS_DOC('m2', 'coach at close', 'xlarge/high'), log), [], 'm2');
+  let r = grantIn(project(STATUS_DOC('m2', 'coach (run for this milestone)', 'xlarge/high'), log), [], 'm2');
   eq(r.code, 0, r.out);
   deq(r.json.grant, { roles: ['coach'], second_review: 'xlarge' }, 'm2');
   r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), log), [], 'm1');
@@ -804,7 +925,7 @@ test('grant: two milestones in one log; --milestone picks the line', () => {
 // The reviewer's attack: STATUS.md is pointed at an earlier milestone whose first line granted more,
 // and that grant is copied into the block. The Director's own slug is "cur".
 const WIDE = ['architect', 'coach', 'hard-fix', 'security-review'];
-const WIDE_WORDS = 'security reviews, architect, coach at close, hard-fix escalation';
+const WIDE_WORDS = 'security reviews, architect, coach (run for this milestone), hard-fix escalation';
 const SWAP_LOG = `${intake('old', WIDE, 'xlarge')}\n${intake('cur', [])}\n`;
 
 test('grant: a STATUS.md slug other than --milestone exits 20, prints both and grants nothing', () => {
