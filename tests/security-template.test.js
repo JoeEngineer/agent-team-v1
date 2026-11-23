@@ -46,20 +46,55 @@ test('checkout does not persist credentials; Trivy is pinned; no commands/ strin
   assert(!/upload|sarif/i.test(wf), 'upload or SARIF found');
 });
 
-test('job names are exactly trivy-fs and trivy-image', () => {
+test('job names trivy-fs and trivy-image are unchanged, with the detect job between', () => {
   const names = [...wf.matchAll(/^    name: (.+)$/gm)].map((m) => m[1].trim());
-  assert(JSON.stringify(names) === JSON.stringify(['trivy-fs', 'trivy-image']), 'job names: ' + names.join(','));
+  assert(JSON.stringify(names) === JSON.stringify(['trivy-fs', 'detect-dockerfile', 'trivy-image']), 'job names: ' + names.join(','));
 });
 
-test('image build and Trivy image steps carry the Dockerfile guard; skip notice has the inverse', () => {
-  const guard = "if: steps.dockerfile.outputs.found == 'true'";
-  const steps = wf.split(/^      - name: /m).slice(1);
-  const build = steps.find((s) => s.startsWith('Build image'));
-  const scan = steps.find((s) => s.startsWith('Trivy image scan'));
-  assert(build && build.includes(guard), 'build step lacks guard');
-  assert(scan && scan.includes(guard), 'image scan step lacks guard');
-  const note = steps.find((s) => s.includes('::notice::No Dockerfile'));
-  assert(note && note.includes("found != 'true'"), 'skip notice missing or unguarded');
+const jobBlock = (id) => {
+  const part = wf.split(new RegExp('^  ' + id + ':\\n', 'm'))[1];
+  assert(part, 'job missing: ' + id);
+  return part.split(/^  (?=[\w-]+:\n)/m)[0];
+};
+const restoreStep = (job) => {
+  const m = jobBlock(job).split(/^      - name: /m).find((x) => x.startsWith('Use base-branch scanner config'));
+  assert(m, job + ' lacks the base-branch restore step');
+  return m;
+};
+
+test('both jobs restore the four Trivy files from the base SHA on pull_request, before Trivy', () => {
+  for (const job of ['trivy-fs', 'trivy-image']) {
+    const step = restoreStep(job);
+    assert(step.includes("if: github.event_name == 'pull_request'"), job + ': restore not limited to pull_request');
+    for (const f of ['trivy.yaml', '.trivyignore', '.trivyignore.yaml', 'trivy-secret.yaml']) assert(step.includes(f), job + ': restore misses ' + f);
+    assert(step.includes('git show "$BASE_SHA:$f" > "$f"'), job + ': no restore from base');
+    assert(step.includes('rm -f "$f"'), job + ': no removal when the base has none');
+    assert(/git fetch [^\n]*"\$BASE_SHA"/.test(step), job + ': base commit not fetched');
+    const j = jobBlock(job);
+    assert(j.indexOf('Use base-branch scanner config') < j.indexOf('aquasecurity/trivy-action'), job + ': restore must precede Trivy');
+  }
+});
+
+test('base SHA reaches the script through env, never inline in run', () => {
+  for (const job of ['trivy-fs', 'trivy-image']) {
+    const step = restoreStep(job);
+    assert(step.includes('        env:\n          BASE_SHA: ${{ github.event.pull_request.base.sha }}\n'), job + ': BASE_SHA not set via env');
+    const run = step.split(/^ {8}run: \|\n/m)[1];
+    assert(run && !run.includes('${{'), job + ': run script has an inline expression');
+  }
+  // every run: block in the file is free of inline expressions
+  const runs = wf.split(/^ {8}run: /m).slice(1).map((r) => r.split(/^ {6}- /m)[0].split(/^\S|^ {2}\S/m)[0]);
+  for (const r of runs) assert(!r.includes('${{'), 'inline expression in run: ' + r.slice(0, 40));
+});
+
+test('trivy-image is skipped by a job-level if when there is no Dockerfile; detect job gives the output', () => {
+  const j = jobBlock('trivy-image');
+  assert(/^ {4}needs: detect-dockerfile$/m.test(j), 'trivy-image must need the detect job');
+  assert(/^ {4}if: needs\.detect-dockerfile\.outputs\.found == 'true'$/m.test(j), 'trivy-image lacks the job-level if');
+  const d = jobBlock('detect-dockerfile');
+  assert(/outputs:\n {6}found: \$\{\{ steps\.dockerfile\.outputs\.found \}\}/.test(d), 'detect job lacks the found output');
+  assert(d.includes('[ -f Dockerfile ]'), 'detect job does not look for a root Dockerfile');
+  assert(!/::notice::|continue-on-error/.test(wf), 'a passing no-op path remains');
 });
 
 test('STATUS template has the xlarge grant section and second-review line', () => {

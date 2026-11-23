@@ -3,6 +3,10 @@
 # Trivy scans the working tree (not git history) for vulnerabilities,
 # misconfiguration and secrets at HIGH and CRITICAL. Read-only: results stay in the job log.
 # After the first run, add the job names below to your required checks.
+# On pull requests the scanner config and ignore files (trivy.yaml, .trivyignore,
+# .trivyignore.yaml, trivy-secret.yaml) are taken from the base branch, so a PR
+# cannot weaken its own scan; its change to them applies after it merges.
+# With no Dockerfile at the repo root, trivy-image shows as skipped, not passed.
 name: security-scan
 
 on:
@@ -25,6 +29,21 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A PR must not weaken its own scan: use the base branch's copy of each file,
+      # or none if the base has none. BASE_SHA comes in through env, not inline.
+      - name: Use base-branch scanner config
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
+            if git cat-file -e "$BASE_SHA:$f" 2>/dev/null; then
+              git show "$BASE_SHA:$f" > "$f"
+            else
+              rm -f "$f"
+            fi
+          done
       - name: Trivy file system scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -35,10 +54,12 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
 
-  trivy-image:
-    name: trivy-image
+  detect-dockerfile:
+    name: detect-dockerfile
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      found: ${{ steps.dockerfile.outputs.found }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,14 +70,34 @@ jobs:
         id: dockerfile
         run: |
           if [ -f Dockerfile ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
-      - name: Note that the image scan is skipped
-        if: steps.dockerfile.outputs.found != 'true'
-        run: echo "::notice::No Dockerfile at the repo root, image scan skipped"
+
+  trivy-image:
+    name: trivy-image
+    needs: detect-dockerfile
+    if: needs.detect-dockerfile.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use base-branch scanner config
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
+            if git cat-file -e "$BASE_SHA:$f" 2>/dev/null; then
+              git show "$BASE_SHA:$f" > "$f"
+            else
+              rm -f "$f"
+            fi
+          done
       - name: Build image
-        if: steps.dockerfile.outputs.found == 'true'
         run: docker build -t scan-target:ci .
       - name: Trivy image scan
-        if: steps.dockerfile.outputs.found == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.2
