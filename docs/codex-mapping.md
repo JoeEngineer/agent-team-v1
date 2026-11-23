@@ -102,35 +102,38 @@ Both families have **four** models, largest first:
 - **Claude:** Fable → Opus → Sonnet → Haiku.
 - **OpenAI:** Astra → Sol → Terra → Luna. Terra is the newest and reportedly better than Sol at writing.
 
-`models_cache.json` only gives short descriptions, so the orderings come from user reports. The top model of each family is off by default, because not every user can use it:
-- **Fable** is billed as **usage credits** (API rates) on some Claude plans, not covered by the plan.
+`models_cache.json` only gives short descriptions, so the orderings come from user reports. The top model of each family is never chosen by the routing table or the escalation ladder, because not every user can use it:
+- **Fable** depends on the plan: the shipped map's `note` says it is "included, limited, or billed as credits, depending on your plan". The map makes no claim about any plan.
 - **Astra** isn't available in every OpenAI environment.
 
 Some environments don't have Claude at all, or have only some OpenAI models. So both families get the same shape: three **standard** tiers built from widely available models, plus an opt-in **xlarge** tier.
 
-| Tier | Claude | Codex | On by default? | Notes |
+| Tier | Claude | Codex | Used by default? | Notes |
 |---|---|---|---|---|
 | small | `haiku` | `gpt-6-luna` ("fast and affordable") | yes | `gpt-reserve` is also listed as "fast and affordable agentic coding". Worth comparing. |
 | medium | `sonnet` | `gpt-6.1-terra` | yes | Below Sol in general ability, reportedly better than Sol at writing. A good fit for `docs`, PR descriptions and decision records. |
 | large | `opus` | `gpt-6.2-sol` ("workhorse") | yes | **Top of the escalation ladder.** |
-| xlarge | `fable` | `gpt-6.2-astra` ("frontier") | **no** | Opt-in per install, and per task (see the rule below). Installs without access to these models leave the entries out. |
+| xlarge | `fable` | `gpt-6.2-astra` ("frontier") | **no**, asked per milestone | The milestone intake asks for the xlarge grant (see the rule below). Installs without access to these models set `enabled: false` on xlarge, or leave the entries out. |
 
 **The tiers aren't equal across families.** Codex `large` (Sol) is a step below the top of its family, while Claude `large` (Opus) is the top of what most plans cover. Expect Codex installs to escalate sooner, and to need `high` effort more often. The Coach should compare results **per model**, using the `model` field Codex reports, not per tier name across tools.
 
-**Rule for opt-in tiers:** an xlarge tier, or any tier marked `billing = "credits"` or `enabled = false`, is never chosen by the routing table or the escalation ladder.
-- When the ladder runs out at `large`, the Director stops and asks the user, as it does today.
-- It can *offer* xlarge with a note on cost or availability, and only uses it after a yes for that task.
-- The log line records `tier: xlarge` and the billing flag, so the Coach can show what those tasks cost and whether they passed review.
+**Rule for opt-in tiers:** an xlarge tier, or any entry a user map marks `billing = "credits"` or `enabled = false`, is never chosen by the routing table or the escalation ladder.
+- At the start of each milestone, the Director asks for the xlarge grant whenever the effective map has an xlarge model for the tool that is not disabled. The answer is the roles that may use xlarge in that milestone (decision 0022). Choosing nothing is valid.
+- xlarge is used for the granted roles, or with a yes for that task. When the ladder runs out at `large`, the Director stops and asks the user, as it does today, and it may offer xlarge with its `note` (the shipped map says "included, limited, or billed as credits, depending on your plan").
+- `scripts/codex-agents.js` writes the xlarge agent files unless the map disables xlarge, because a grant needs them.
+- The log line records `tier: xlarge`, and `billing` when the map sets one, so the Coach can show what those tasks cost and whether they passed review.
 
 **Per-install model map** (a sketch; the restructure decides the file name):
 
 ```toml
-# Both tools available, with access to the top models
+# Both tools available, with access to the top models. No `enabled` on xlarge:
+# the milestone intake asks for the xlarge grant. Add `enabled = false` on the
+# xlarge tier to stop that question.
 [tiers.small]   claude = "haiku"   codex = "gpt-6-luna"
 [tiers.medium]  claude = "sonnet"  codex = "gpt-6.1-terra"
 [tiers.large]   claude = "opus"    codex = "gpt-6.2-sol"
-[tiers.xlarge]  enabled = false
-  claude = { model = "fable", billing = "credits" }   # API-rate usage credits on some plans
+[tiers.xlarge]
+  claude = { model = "fable", billing = "credits" }   # a user map may set billing; the entry is then never auto-routed
   codex  = { model = "gpt-6.2-astra" }                  # only where Astra is available
 
 # Codex only, without Astra: no claude keys, no xlarge

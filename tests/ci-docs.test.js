@@ -161,7 +161,7 @@ test('README: a queue example, where shown, is gated by --queue-check on the sam
   assert(!queue.test('gh pr merge <n> --disable-auto'), '--disable-auto is not a queue call');
 });
 
-test('plugin manifests are 1.0.2', () => {
-  eq(JSON.parse(read('plugin.json')).version, '1.0.2', 'plugin.json version');
-  eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '1.0.2', '.claude-plugin/plugin.json version');
+test('plugin manifests are 1.1.0', () => {
+  eq(JSON.parse(read('plugin.json')).version, '1.1.0', 'plugin.json version');
+  eq(JSON.parse(read('.claude-plugin/plugin.json')).version, '1.1.0', '.claude-plugin/plugin.json version');
 });

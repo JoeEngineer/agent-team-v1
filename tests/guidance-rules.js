@@ -385,4 +385,6 @@ module.exports = [
   ['SV-11', SECREV, /scratch worktree/, 'Read-only: scratch worktrees under its scratchpad, never a checkout in the shared tree'],
   ['SV-12', SECREV, /"scan": "green \| red \| none \| unknown", "coverage": \{"checked"/, 'review-json carries scan and coverage {checked, not_checked}, as the last block; no result-json'],
   ['SV-13', SECREV, /every scanner job was skipped on this head/, 'All scanner jobs skipped on this head is scan unknown, never green'],
+  ['SV-14', SECREV, /checks can't be read, are still pending after the wait/, 'scan unknown causes: checks cannot be read, still pending after the wait, the head moved, or every scanner job skipped'],
+  ['SV-15', SECREV, /all were skipped on this head, `scan` is `unknown`, never `green`/, 'A skipped scan is never green: all scanner jobs skipped on this head is unknown'],
 ];

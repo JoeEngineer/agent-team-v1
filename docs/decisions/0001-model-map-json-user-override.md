@@ -25,3 +25,4 @@ Routing names tiers (small, medium, large, and an opt-in xlarge) instead of mode
 - Installs with only one tool simply have no keys for the other.
 - The Coach compares results per logged model, since tiers are not equal across families.
 - A mistyped override silently degrades to the default, but `models.js show` surfaces the error.
+- **Amended by [0022](0022-security-review-and-xlarge-grant.md) (2026-11-22):** the shipped map no longer disables xlarge, and its `billing: "credits"` became a neutral `note` ("included, limited, or billed as credits, depending on your plan"). A per-milestone xlarge grant replaces the per-task yes for the roles it names. Without a grant the per-task yes still holds, and xlarge is still never chosen by the table or the ladder. The text above is not rewritten.

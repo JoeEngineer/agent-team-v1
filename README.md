@@ -7,9 +7,9 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | Path | What |
 |---|---|
 | `skills/director/` | The Director's instructions (`SKILL.md`: the rules that always hold, and the loop) and its `references/`: routing table, task-card format, decision-record format, merge rules, and the Codex and GitLab steps. How these files are kept small: [`docs/guidance.md`](docs/guidance.md) |
-| `agents/` | Role agents with a default tier and effort: `scout` (small/low), `implementer` (medium/medium), `architect` (large/high), `reviewer` (medium/high), `coach` (large/high). Each tier maps to a model per tool via `config/models.json` |
+| `agents/` | Role agents with a default tier and effort: `scout` (small/low), `implementer` (medium/medium), `architect` (large/high), `reviewer` (medium/high), `coach` (large/high), `security-reviewer` (large/high). Each tier maps to a model per tool via `config/models.json` |
 | `skills/` | `director` plus `team-init`, `milestone`, `status`, `coach`. In Claude Code they're invoked as `/agent-team:<name>`; in Codex, as `$agent-team:<name>` |
-| `config/models.json` | Tier → model map per tool, with `enabled` and `billing` (see [Models and tiers](#models-and-tiers)) |
+| `config/models.json` | Tier → model map per tool, with the entry fields `enabled`, `note` and `billing` (see [Models and tiers](#models-and-tiers)) |
 | `hooks/hooks.json` | The plugin's hook set for Claude Code: logger, guard, handback check, pause close on user reply, and the SessionStart hooks-active check. The Codex CLI doesn't run plugin hooks, so on Codex `team-init` writes project hooks from this file ([Codex](#codex)) |
 | `scripts/log-delegation.js` | Logs delegations, results, reviews and merges to `.agent-team/logs/*.jsonl` in the project |
 | `scripts/handback-check.js` | Claude Code only. Denies a role agent's `SubagentHandback` (up to twice per agent) when the message has no parseable `result-json`/`review-json` block, so the agent sends it again with the block. The handback ends the agent's run, so the stop-hook re-ask can't reach it. Not written to Codex projects |
@@ -19,7 +19,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/log-event.js` | Manual logging: decisions, escalations, notes, pauses, and the Director's own delegation and review lines (used for Codex) |
 | `scripts/models.js` | `show` prints the effective tier → model map; `resolve <tier> [--tool t]` prints the model for a tier; `up <tier>` and `down <tier>` move to the next auto-eligible tier for a tool |
 | `scripts/codex-log.js` | Codex hook handler. Writes full records (delegation, completion, review, merge) into the shared log files with `tool: "codex"`, and selected raw fields of Codex events into `codex-events.jsonl` |
-| `scripts/codex-agents.js` | Writes `.codex/agents/<role>-<tier>.toml` for each role and enabled Codex tier, from the model map. Per machine, gitignored. `--check` reports drift |
+| `scripts/codex-agents.js` | Writes `.codex/agents/<role>-<tier>.toml` for each role and enabled Codex tier, from the model map. The xlarge files are written unless the map disables xlarge. Per machine, gitignored. `--check` reports drift |
 | `scripts/codex-hooks.js` | Writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Both are committed |
 | `scripts/session-start.js` | SessionStart hook. Tells the session `agent-team hooks: active (<tool>, <version>)` so the Director can see that hooks run (silent in a project not set up for agent-team), plus `agent-team forge: gitlab` on a GitLab project. After a compaction it also tells the Director to re-read `STATUS.md` and the reference file for its next step |
 | `scripts/merge-task.js` | Merges one reviewed task PR or MR into its milestone branch in one call: checks the base and the reviewed head, gates on CI with `ci-wait.js`, merges pinned to that head (or queues auto-merge when CI is pending and the forge will hold it), comments, and writes the merge log line. Prints one JSON line whose `next` field says what the Director does now. Exit codes are in the script's header |
@@ -27,7 +27,7 @@ A plugin for **Claude Code and Codex** that runs the **Director pattern**: one s
 | `scripts/archive-logs.js` | Milestone close: copies the project's logs to an archive folder outside the repo, and with `--clear` removes the live copies once the archive is verified |
 | `scripts/reconcile-logs.js` | Drains snapshots from observed Codex stops and backfills Claude completion/review records from transcripts. With `--merges`, checks the merges queued by auto-merge and appends how each one ended to `merges.jsonl`. May rewrite `completions.jsonl`/`reviews.jsonl` to add `stale_of` to lines holding another attempt's report; all other lines are kept as they were |
 | `plugin.json` (root) | Portable Agent Plugins manifest that Codex reads; `.claude-plugin/` stays for Claude Code |
-| `templates/project/` | Files `/agent-team:team-init` copies into a project, including the Codex hook shim |
+| `templates/project/` | Files `/agent-team:team-init` copies into a project, including the Codex hook shim and the optional security-scan workflow (`templates/project/.github/workflows/security-scan.yml`, copied only on your yes) |
 
 ## How it works
 
@@ -46,6 +46,7 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 - **Codex logging:** Codex records go into the same log files as Claude's, with `tool: "codex"`. The spawn message is encrypted on Codex, so the Director logs each Codex delegation itself before spawning it (`log-event.js delegation` with the task card and a `task_name`). The hooks then link the subagent's completion and review to that line by `task_name`, and only add a fallback line if the Director didn't log one. `codex-events.jsonl` is a raw debug log, not used by the Coach.
 - **Records:** each log line carries `guidance_version` (this plugin's version), so the Coach can compare results before and after a routing change.
 - **GitHub or GitLab:** works with GitHub and with GitLab, including self-hosted GitLab. On GitLab the Director uses `glab` and merge requests; see [GitLab](#gitlab), `skills/director/references/gitlab.md`, and [`docs/gitlab-mapping.md`](docs/gitlab-mapping.md) for the full mapping and what's verified.
+- **Security review:** every milestone closes with a `security-reviewer` pass on the milestone PR against `main`, next to the final `reviewer` pass. A task PR that the breakdown flags `security-sensitive` gets one too, after the reviewer approves. On Claude with the Codex bridge present, intake also asks whether to run a second, independent security review through the bridge. Scanners run in the project's own CI, under the existing CI gate: the plugin does not supply them, and `team-init` offers a security-scan workflow template the project may adopt. A `major` or `critical` finding blocks, `scan: red` blocks, and `scan: unknown` makes the Director ask you.
 - **Merges:** GitHub won't let an account approve its own PR, so the reviewer's verdict is recorded in the logs and as a PR comment, and the Director merges task PRs into the milestone branch. The guard hook stops it from merging into `main`.
 - **CI waits:** the reviewer waits for CI with `scripts/ci-wait.js` after its review. The Director then merges in one call, `scripts/merge-task.js`: the CI gate, then the merge, then the PR comment, each running only if the one before succeeded. If CI is still pending, it queues auto-merge when the `milestone/*` ruleset names its required checks and the repo allows auto-merge; otherwise it waits for CI in a background check (Claude) or asks the reviewer to wait again (Codex). The queue is gated: the script runs `ci-wait.js <n> --queue-check --sha <head_sha>` first and queues only on exit 0, so a wrong note in STATUS.md can't cause an ungated merge. It checks queued merges with `reconcile-logs.js --merges` at checkpoints, only when something is queued. A milestone is reported complete only after its PR's checks finish green.
 - **Without the helper:** `gh pr checks <n> --required` is a quick check, and `gh pr checks <n> --watch --fail-fast --interval 30` waits until the checks finish. The watch has no deadline of its own, and `--required` can fail when the base has no required checks. On GitLab, read `head_pipeline.status` from `glab mr view <n> --output json`.
@@ -57,19 +58,20 @@ hooks ──▶ .agent-team/logs/{delegations,reviews,merges,decisions,completio
 
 Agents and the routing table name tiers, not models. Each tier maps to a model per tool:
 
-| Tier | Claude | Codex | On by default |
+| Tier | Claude | Codex | Used by default |
 |---|---|---|---|
 | small | haiku | gpt-6-luna | yes |
 | medium | sonnet | gpt-6.1-terra | yes |
 | large | opus | gpt-6.2-sol | yes |
-| xlarge | fable (billed as usage credits on some plans) | gpt-6.2-astra (not available everywhere) | **no** |
+| xlarge | fable | gpt-6.2-astra | asked per milestone; the map's note: "included, limited, or billed as credits, depending on your plan" |
 
 - The model names are the shipped defaults. The Director never assumes a model is available: if a mapped model is missing, it falls back as described below. An account without one of the tools can drop that column with an override.
-- Routing and the escalation ladder never pick xlarge or any entry with `enabled: false` or `billing: "credits"`. The Director may offer xlarge, and uses it only after you say yes for that task.
+- xlarge is never chosen by the table or the ladder. It is used for the roles in the milestone's xlarge grant, or with your yes for that task. The Director asks for the grant at each milestone's intake, and choosing nothing is a valid answer. `enabled: false` on xlarge in `~/.agent-team/models.json` stops the question.
+- Routing and the escalation ladder also never pick an entry that a user map marks `enabled: false` or `billing: "credits"`.
 - A tool with no entries in the map is never routed to.
-- **Override:** copy `config/models.json` to `~/.agent-team/models.json` (or point `AGENT_TEAM_MODELS` at a file) and edit it. The override replaces the whole map, so it must list every tier you use. Run `node scripts/models.js show` to see the effective map. Example: a Codex-only install deletes the `claude` keys and leaves xlarge disabled.
+- **Override:** copy `config/models.json` to `~/.agent-team/models.json` (or point `AGENT_TEAM_MODELS` at a file) and edit it. The override replaces the whole map, so it must list every tier you use. Run `node scripts/models.js show` to see the effective map. Example: a Codex-only install deletes the `claude` keys, and sets `enabled: false` on xlarge if it doesn't want the xlarge question.
 - **Fallback:** if a mapped model isn't available at run time, the Director falls back one tier down, logs `tier_fallback`, and tells you. It never falls up.
-- **Logs** record `tier`, `tier_source`, `resolved_model` and `billing`.
+- **Logs** record `tier`, `tier_source`, `resolved_model`, and `billing` when your map sets one.
 
 ## Install
 
@@ -121,7 +123,7 @@ Then in the project: `/agent-team:team-init`, then `/agent-team:milestone <slug>
    This installs the skills. Invoke them as `$agent-team:<skill>`, for example `$agent-team:team-init`. The Codex CLI doesn't run plugin hooks, so the guard and logging need step 2.
 
 2. **Run `$agent-team:team-init` in each project.** On Codex it:
-   - generates `.codex/agents/<role>-<tier>.toml` from the model map. These are gitignored, because they bake in your model map. Re-run `node scripts/codex-agents.js` after a plugin update or a map change (after upgrading to 1.0.0 in particular, so the agent TOMLs carry the rewritten role text);
+   - generates `.codex/agents/<role>-<tier>.toml` from the model map. These are gitignored, because they bake in your model map. Re-run `node scripts/codex-agents.js` after a plugin update or a map change (after upgrading to 1.0.0 in particular, so the agent TOMLs carry the rewritten role text). **Upgrading to 1.1.0:** re-run it in each Codex project, so `security-reviewer-<tier>.toml` and the xlarge files get written;
    - writes the project's `.codex/hooks.json` and `.codex/agent-team-hook.js`. Commit both. They are what make the guard and logging work on Codex.
 
 3. **Trust the project and its hooks, once.** Accept the startup prompt, or open `/hooks` and trust them. Untrusted hooks fail silently: nothing is guarded or logged, and no error is shown. Trust them again after a plugin update or regeneration that changes the hook set.
