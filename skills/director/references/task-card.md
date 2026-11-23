@@ -15,7 +15,8 @@ Space-separated `key=value`, no spaces inside values.
 |---|---|---|
 | `id`, `type`, `difficulty`, `milestone`, `attempt` | always | `type`: `research`, `breakdown`, `design`, `implement`, `fix`, `test`, `docs`, `review`, `security-review`, `coach`. `difficulty`: `easy`, `medium`, `hard`. `milestone=none` for side work that belongs to no milestone. |
 | `tier`, `effort` | always | what you chose from the routing table: `small|medium|large|xlarge`, `low|medium|high|xhigh|max`. The logger warns when something else ran (`tier_mismatch`, `effort_mismatch`). |
-| `reason` | from attempt 2 | `sendback` (changes requested, same settings), `escalation` (new tier or effort), `fold-in` (approved with minors), `retry` (the last turn was cut off). |
+| `reason` | from attempt 2 | `sendback` (changes requested, same settings), `escalation` (new tier or effort), `fold-in` (approved with minors), `retry` (the last turn was cut off). A review card carries the reason of the attempt it reviews; `confirm` is for a close reviewer resumed on an incremental diff. |
+| `flags` | optional | `flags=security-sensitive[,above-table]`: the breakdown's flags for the task. The logger warns about any other. |
 | `base` | any task in a worktree | the branch to start from, usually `milestone/<slug>`. |
 | `branch`, `pr`, `issue` | optional | |
 | `worktree` | set by the Codex Director | repo-relative path of the folder the task runs in. |
