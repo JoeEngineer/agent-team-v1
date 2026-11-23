@@ -52,11 +52,12 @@ test('logReview: the block fills a field the hook has no value for, and equal va
   withProject(proj, () => {
     // A Director-written line: the card has no pr or milestone, the JSON does.
     const record = { agent_id: 'agentB', task: { id: 'T-3', attempt: 1 }, model: 'sonnet' };
-    records.logReview({}, record, { verdict: 'approve', pr: '7', milestone: 'm2', attempt: 1, source: 'director' });
+    records.logReview({}, record, { verdict: 'approve', pr: '7', milestone: 'm2', attempt: 1, note: 'kept' }, 'claude', { source: 'director' });
     const [row] = readLog(proj, 'reviews.jsonl');
     eq(row.pr, '7', 'pr filled');
     eq(row.milestone, 'm2', 'milestone filled');
-    eq(row.source, 'director', 'extra field kept');
+    eq(row.source, 'director', 'the logger-set extra field is kept');
+    eq(row.note, 'kept', 'a content field of the block is kept');
     eq(row.review_shadowed, undefined, 'nothing shadowed');
   });
 });
