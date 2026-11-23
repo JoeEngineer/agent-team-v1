@@ -24,19 +24,49 @@ function readStdin() {
 // cwd for the life of this process: a hook run is short, and a folder does not
 // become a repo mid-run.
 const GIT_ROOTS = new Map();
-function projectDir(input) {
-  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
-  const cwd = (input && typeof input.cwd === 'string' && input.cwd) || process.cwd();
+// The git top level of `cwd`, or `cwd` itself outside a repository. git runs
+// without the caller's GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG*, ...),
+// so the environment cannot name another repository as this folder's project
+// (decision 0029, residual d). Only the one trailing newline is cut: a folder
+// name may end in a space.
+function gitRoot(cwd) {
   if (GIT_ROOTS.has(cwd)) return GIT_ROOTS.get(cwd);
   let found = cwd;
   try {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
     const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
-    }).trim();
+      cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    }).replace(/\r?\n$/, '');
     if (top) found = top;
   } catch { /* not a git folder, or git missing */ }
   GIT_ROOTS.set(cwd, found);
   return found;
+}
+function projectDir(input) {
+  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  return gitRoot((input && typeof input.cwd === 'string' && input.cwd) || process.cwd());
+}
+
+// Where the xlarge grant's intake line lives for the project that holds `dir`:
+// the git top level of `dir` (GIT_* ignored, CLAUDE_PROJECT_DIR not consulted),
+// or the main checkout when that is a linked worktree. `status.js grant` reads
+// there and `log-event.js milestone` writes there, so the two cannot disagree.
+function grantLogRoot(dir) {
+  const top = gitRoot(dir);
+  return mainCheckout(top) || top;
+}
+function samePath(a, b) {
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const [x, y] = [real(a), real(b)];
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+// CLAUDE_PROJECT_DIR may agree with the cwd's project; it may not move the grant
+// check or the intake line to another project. Returns null when it is unset or
+// agrees, else { env, root } for the message.
+function foreignProjectDir(cwd) {
+  const env = process.env.CLAUDE_PROJECT_DIR;
+  const root = grantLogRoot(cwd);
+  return env && !samePath(grantLogRoot(env), root) ? { env, root } : null;
 }
 
 // The main checkout of a linked git worktree, or null when `dir` is the main
@@ -839,7 +869,7 @@ function reviewFor(text, agentType, task) {
 
 module.exports = {
   REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor,
-  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
+  detectTool, PLUGIN_ROOT, readStdin, projectDir, gitRoot, grantLogRoot, foreignProjectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
   safeAppend, safeWriteNew, safeOpenNew, safeReplace, safeMkdir, safeListDir, checkLogFile, tempName, TEMP_FILE, safeWriteHooks, REFUSED,
   agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,

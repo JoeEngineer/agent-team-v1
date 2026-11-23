@@ -24,6 +24,11 @@
 // note, escalation and merge lines get `milestone` from the linked task's delegation card when the JSON has none
 // (the task is the `task` or `task_id` field); a merge also takes it from a `base` of milestone/<name>.
 // merge: `command` is stored without leading `cd …` segments or absolute local paths.
+// milestone: the intake line of the xlarge grant (decisions 0026 and 0029). It is written once per slug:
+//   a line `status.js grant` would not accept is refused, and so is a second line for a slug that
+//   grants something else (the first line is printed; ask the user). The same grant again writes
+//   nothing and exits 0. It goes to the project of the cwd; CLAUDE_PROJECT_DIR naming another
+//   project is refused. Every refusal exits 1.
 // decision: a duplicate `id` is rejected; `model`/`effort` given as a family name, "unknown" or nothing
 //   are filled from the session's resolved settings (the text given is kept as model_given).
 // delegation: `kind` is subagent (default), resume or followup (scope added without a review verdict;
@@ -155,6 +160,55 @@ function duplicateDecision(data) {
     `${next ? ` The next free id is ${next}.` : ''} Nothing was written.`;
 }
 
+// The intake line of the xlarge grant. One line per slug, in the log `status.js grant` reads,
+// found and read the way grant does it. Returns the exit code.
+function logMilestone(data, session) {
+  const status = require('./status');
+  const bad = status.intakeProblem(data);
+  if (bad) {
+    console.error(`invalid milestone line: ${bad}. Nothing was written.`);
+    return 1;
+  }
+  const cwd = process.cwd();
+  const foreign = lib.foreignProjectDir(cwd);
+  if (foreign) {
+    console.error(`CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${foreign.root}); the intake line would land where \`status.js grant\` does not read. Nothing was written. Run from the project folder.`);
+    return 1;
+  }
+  const file = path.join(lib.grantLogRoot(cwd), '.agent-team', 'logs', 'milestones.jsonl');
+  const slug = data.milestone;
+  const first = () => {
+    try { return status.readLog(file, slug); } catch (err) {
+      if (!(err instanceof status.Refusal)) throw err;
+      console.error(`cannot tell whether "${slug}" already has an intake line: ${err.message}. Nothing more was written. Write no grant; ask the user.`);
+      return undefined;
+    }
+  };
+  const want = [...new Set(data.xlarge_grant)].sort().join(',');
+  const same = (l) => [...l.roles].sort().join(',') === want && l.second === data.second_review;
+  const taken = (l, how) => {
+    if (same(l)) {
+      console.log(`milestone "${slug}" already has this intake line (line ${l.n} of .agent-team/logs/milestones.jsonl); nothing written`);
+      return 0;
+    }
+    console.error(`milestone "${slug}" already has an intake line${how}, and it grants something else. The first line holds and yours was refused:\n${l.line}\nWrite no grant; show the user that line and ask.`);
+    return 1;
+  };
+  lib.checkLogFile(file);
+  const before = first();
+  if (before === undefined) return 1;
+  if (before) return taken(before, '');
+  const text = JSON.stringify({ ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data, ...session });
+  lib.safeAppend(file, `${text}\n`);
+  // No lock: two writers can both find no line and both append. The append is atomic, so one
+  // line is first, and that is the one grant reads. The other writer learns of it here.
+  const after = first();
+  if (after === undefined) return 1;
+  if (after && after.line !== text) return taken(after, ' (written at the same moment as yours)');
+  console.log('logged milestone to .agent-team/logs/milestones.jsonl');
+  return 0;
+}
+
 function main(argv) {
   const [kind, ...args] = argv;
   if (!KINDS.has(kind)) {
@@ -186,6 +240,7 @@ function main(argv) {
   }
 
   const session = sessionFields();
+  if (kind === 'milestone') return logMilestone(data, session);
   if (kind === 'delegation' || kind === 'review') {
     const { card, why, ...rest } = data;
     const task = { ...(rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };

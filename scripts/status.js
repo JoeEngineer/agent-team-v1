@@ -422,29 +422,24 @@ function readLog(file, slug) {
     const roles = new Set(o.xlarge_grant.flatMap((r) => (has(OLD_LOG_ROLES, r) ? OLD_LOG_ROLES[r] : [r])));
     // No intake answer grants flagged task PRs without the close review.
     if (roles.has(SEC_TASK) && !roles.has(SEC_CLOSE)) throw new Refusal(EXIT.badLog, `the first line for "${slug}" grants ${SEC_TASK} without ${SEC_CLOSE}; no intake answer does`);
-    return { roles, second: o.second_review };
+    return { roles, second: o.second_review, line, n: n + 1 };
   }
   return null;
 }
 
-// The folder whose .agent-team/logs the grant is checked against: the git top level of the cwd
-// (the cwd itself outside a repository), or the main checkout when that is a linked worktree.
-// git runs without the caller's GIT_* variables, so GIT_DIR or GIT_WORK_TREE cannot point the
-// check at another project's log (decision 0029, residual d). Only the one trailing newline is
-// cut: a folder name may end in a space.
-function logRootOf(dir) {
-  let top = dir;
-  try {
-    const t = git(dir, ['rev-parse', '--show-toplevel']).replace(/\r?\n$/, '');
-    if (t) top = t;
-  } catch { /* not a repository, or git missing: the folder itself */ }
-  return lib.mainCheckout(top) || top;
+// What `log-event.js milestone` checks before it writes an intake line: the fields `grant` will
+// read, by the same tables. Returns a message, or null when `grant` would accept the line.
+function intakeProblem(o) {
+  if (typeof o.milestone !== 'string' || o.milestone.trim() === '') return '"milestone" must be the slug, a non-empty string';
+  if (!Array.isArray(o.xlarge_grant)) return `"xlarge_grant" must be an array of ${[...LOG_ROLES].join(', ')} ([] for none)`;
+  for (const r of o.xlarge_grant) {
+    if (typeof r === 'string' && has(OLD_LOG_ROLES, r)) return `"${r}" is the name from before 1.2.0; write ${OLD_LOG_ROLES[r].join(' and ')} for all security reviews, or ${SEC_CLOSE} alone for the close review only`;
+    if (typeof r !== 'string' || !LOG_ROLES.has(r)) return `unknown role ${JSON.stringify(r)} in "xlarge_grant" (known: ${[...LOG_ROLES].join(', ')})`;
+  }
+  if (o.xlarge_grant.includes(SEC_TASK) && !o.xlarge_grant.includes(SEC_CLOSE)) return `${SEC_TASK} needs ${SEC_CLOSE}: no intake answer grants flagged task PRs without the close review`;
+  if (typeof o.second_review !== 'string' || !SECOND_ORDER.includes(o.second_review)) return '"second_review" must be none, large or xlarge';
+  return null;
 }
-const samePath = (a, b) => {
-  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
-  const [x, y] = [real(a), real(b)];
-  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
-};
 
 // `slug` is the Director's own (the card's milestone=, or the milestone/<slug> branch), never
 // STATUS.md's: the file under check cannot pick which log line it is checked against.
@@ -455,12 +450,13 @@ function grant(text, slug, cwd) {
   if (statusSlug !== null && statusSlug !== slug) {
     return { ok: false, code: EXIT.slug, milestone: slug, status_milestone: statusSlug, grant: none, reason: `STATUS.md names milestone "${statusSlug}" under "## Current milestone" but --milestone is "${slug}"; no grant. Check which milestone is current; ask the user` };
   }
-  const root = logRootOf(cwd);
-  // CLAUDE_PROJECT_DIR is where the logger writes when Claude sets it. It may agree with the cwd;
+  // The project is found from the cwd, with no GIT_* variable in git's environment
+  // (lib.grantLogRoot; decision 0029, residual d). CLAUDE_PROJECT_DIR may agree with the cwd;
   // it may not move the check to another project's log.
-  const envDir = process.env.CLAUDE_PROJECT_DIR;
-  if (envDir && !samePath(logRootOf(envDir), root)) {
-    return { ok: false, code: EXIT.env, milestone: slug, grant: none, reason: `CLAUDE_PROJECT_DIR (${envDir}) is not the project of the cwd (${root}); the log cannot be chosen by the environment. No grant. Run from the project folder; ask the user` };
+  const root = lib.grantLogRoot(cwd);
+  const foreign = lib.foreignProjectDir(cwd);
+  if (foreign) {
+    return { ok: false, code: EXIT.env, milestone: slug, grant: none, reason: `CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${root}); the log cannot be chosen by the environment. No grant. Run from the project folder; ask the user` };
   }
   const logFile = path.join(root, '.agent-team', 'logs', 'milestones.jsonl');
   const log = readLog(logFile, slug);
@@ -588,4 +584,4 @@ function main(argv, deps = {}) {
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
-module.exports = { main, parse, check, applySet, splitCells, startsWithState, EXIT };
+module.exports = { main, parse, check, applySet, splitCells, startsWithState, EXIT, Refusal, readLog, intakeProblem };

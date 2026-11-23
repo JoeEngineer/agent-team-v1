@@ -101,11 +101,20 @@ until the milestone closes.
 **a. A slug line appended ahead of the Director: fixed in the logger.**
 `log-event.js milestone` refuses a second line for a slug.
 
-- It reads `milestones.jsonl` with the same reader `grant` uses, under the
-  logger's lock, so "is there a line for this slug" has one answer in both
-  places.
+- It reads `milestones.jsonl` with the same reader `grant` uses
+  (`status.readLog`), so "is there a line for this slug" has one answer in both
+  places. It writes to the folder `grant` reads (`lib.grantLogRoot`), through
+  the link-safe `lib.safeAppend` of FU-18.
 - A line already there with a different grant: nothing is written, the existing
-  line is printed, and the exit code is non-zero. The intake guidance tells the
+  line is printed on stderr, and the exit code is 1, the logger's code for
+  every refusal.
+- There is no lock. Two writers can both find no line and both append. The
+  append is atomic, so one line is first. Each writer reads the log again after
+  its append; the one whose line is not first is told so and exits 1. Its line
+  stays in the file as a later line, which `grant` ignores. A lock would need
+  a stale-lock rule for a writer that died holding it; this needs no cleanup.
+- A log the reader refuses (a damaged line ahead of the slug) is not appended
+  to: exit 1, ask the user. The intake guidance tells the
   Director to write no grant, show the user that line, and ask.
 - A line already there with the same roles and the same second review: nothing
   is written and the exit is 0. This is the lost-response case (the line was
@@ -200,10 +209,15 @@ it in its residuals.
 
 - *Lost response.* An intake append that succeeded with a lost reply is retried
   as the same line, which exits 0 and writes nothing.
+- *Cleanup.* The logger holds no lock and makes no temp file, so a writer that
+  dies leaves at most its own complete line, or a torn last line. The next
+  append after a torn line makes one unreadable line, which exits 19 until the
+  user repairs it (residual b).
 - *Fairness.* One file and one reader; nothing queues.
 - *Request amplification.* `grant` runs at most two git processes (the cwd, and
   `CLAUDE_PROJECT_DIR` when set) and reads the log once. `log-event.js
-  milestone` reads the log once per call. Neither grows with anything but the
+  milestone` reads the log at most twice per call (before and after its append)
+  and runs the same two git lookups. Neither grows with anything but the
   number of milestones.
 
 ## Not doing

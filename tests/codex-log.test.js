@@ -877,8 +877,8 @@ test('log-event argv: the <kind> <json> form still works, and an empty argument 
   eq(logEventWith(p, ['note', '{"text":"argv"}']).status, 0, 'argv ok');
   eq(readLog(p, 'notes.jsonl')[0].text, 'argv', 'argv body');
   // an empty argument is {} (unchanged behaviour), not an error
-  eq(logEventWith(p, ['milestone', '']).status, 0, 'empty argv is {}');
-  eq(readLog(p, 'milestones.jsonl').length, 1, 'milestone with no body');
+  eq(logEventWith(p, ['escalation', '']).status, 0, 'empty argv is {}');
+  eq(readLog(p, 'escalations.jsonl').length, 1, 'escalation with no body');
 });
 
 test('log-event: unknown kind prints all three forms and exits 1', () => {
