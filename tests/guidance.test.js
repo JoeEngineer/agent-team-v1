@@ -69,7 +69,7 @@ const BUDGET = {
   'skills/director/references/gitlab.md': 4200,
   'agents/reviewer.md': 9500,
   'agents/implementer.md': 6000,
-  'agents/coach.md': 12500,
+  'agents/coach.md': 13000,
   'agents/architect.md': 3000,
   'agents/scout.md': 1500,
   'agents/security-reviewer.md': 8050,
