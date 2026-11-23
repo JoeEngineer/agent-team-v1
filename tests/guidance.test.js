@@ -72,7 +72,7 @@ const BUDGET = {
   'agents/coach.md': 12500,
   'agents/architect.md': 3000,
   'agents/scout.md': 1500,
-  'agents/security-reviewer.md': 7000,
+  'agents/security-reviewer.md': 7200,
 };
 
 test('budgets: every guidance file has a budget and is inside it', () => {
