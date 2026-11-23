@@ -39,8 +39,8 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | planned | |
 | FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (session) | medium (sonnet) / high | 1 | planned | |
-| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 1 | in progress | |
-| FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 1 | in review | #152 |
+| FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium | 1 | in review | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (session) | medium (sonnet) / high | 1 | planned | |
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | planned | |
