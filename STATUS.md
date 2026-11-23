@@ -48,11 +48,11 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
 | FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | merged | 171 |
 | FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | merged | 172 |
-| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | changes requested: security review: lib.appendJsonl and .pending pruning follow links | 170 |
+| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 4 (sendback) | merged | 170 |
 | FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | 167 |
 | FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
 | FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
-| FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted | 1 | planned: after FU-16, FU-17, FU-20, FU-21 merge | |
+| FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted | 1 | in progress: phase A pushed (draft #175); phase B waits FU-18 | 175 |
 | FU-23 | Close fix: `review-json` fence residuals; security-sensitive (#174) | architect | large (opus) / high | 1 | planned: after FU-22 merges (shares `scripts/lib.js`) | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
