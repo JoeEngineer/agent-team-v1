@@ -119,7 +119,7 @@ test('scan table: the row order and values equal 0024, and Anything else is last
   eq(rows[rows.length - 1][0], 'Anything else', 'last row');
 });
 
-test('scan table: the worked matrix has 30 cases and every case resolves by first match', () => {
+test('scan table: the worked matrix has 31 cases and every case resolves by first match', () => {
   const cases = matrix();
   eq(cases.length, 31, 'matrix cases parsed from 0024');
   const hit = new Set();

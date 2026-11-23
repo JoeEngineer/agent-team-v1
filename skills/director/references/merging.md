@@ -27,6 +27,7 @@ node "<plugin root>/scripts/merge-task.js" <n> --sha <head_sha> --task <ID> --at
 
 - Add `--allow-none` only when the review says `ci: none` with `tests_passed: true`.
 - Add `--names` on the first task PR whose CI has run ("First CI run" below).
+- Same line in bash and PowerShell, GitHub and GitLab.
 
 The script checks that the PR is open, targets `milestone/*` and is still at `head_sha`; gates on CI; merges pinned to `head_sha`; comments on the PR; and writes the merge log line. It prints one JSON result line. **Do what its `next` field says.**
 
@@ -101,6 +102,6 @@ From each security review at close:
 
 ## Approvals and branch rules
 
-GitHub doesn't let an account approve its own PR, and the team acts as the user's account, so the reviewer's verdict lives in the logs and a PR comment, not in a GitHub approval. If the project uses a separate reviewer bot account, its `CLAUDE.md` says so.
+The reviewer's verdict lives in the logs and a PR comment, not in a GitHub approval. If the project uses a separate reviewer bot account, its `CLAUDE.md` says so.
 
 The expected rules for `main` and `milestone/*` are in the plugin README, "Protect your branches".
