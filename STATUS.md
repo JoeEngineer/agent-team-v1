@@ -44,7 +44,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #156 |
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #157 |
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | in review | #159 |
-| FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 1 | in review | #158 |
+| FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | changes requested | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
@@ -96,6 +96,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - `lib.projectDir` runs `git rev-parse` with the caller's environment. `GIT_DIR`, `GIT_WORK_TREE` or `CLAUDE_PROJECT_DIR` can move where `grant` reads `milestones.jsonl`. The fix: apply the same `GIT_*` filter there, and note it in 0026.
   - The "outside a repo" test no longer exercises the no-repository path on a machine whose temp folder sits inside a repo.
   - The argv-array test matches source text.
+- **Follow-up from FU-14 (PR #158), minor:** the version test checks only the manifests. Nothing checks that the README upgrade note, the `status.js` row or the `docs/guidance.md` budget statement exist.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Accept or reject: scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
 - **Accept or reject: grant check residuals (FU-6, decision 0026).**
