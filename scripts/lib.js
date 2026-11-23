@@ -245,7 +245,7 @@ const HTML_STARTS = [
   [/^<\?/, /\?>/],
   [/^<![A-Za-z]/, />/],
   [/^<!\[CDATA\[/, /\]\]>/],
-  [new RegExp('^</?(' + HTML_BLOCK_TAGS + ')(\s|/?>|$)', 'i'), null],
+  [new RegExp('^</?(' + HTML_BLOCK_TAGS + ')(\\s|/?>|$)', 'i'), null],
 ];
 const countMatches = (line, re) => (line.match(re) || []).length;
 function reviewJson(text) {

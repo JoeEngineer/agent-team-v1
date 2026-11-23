@@ -26,6 +26,22 @@ const WRAPS = {
   'div with blank lines': (b) => `<div class="x">\n\n${b}\n\n</div>`,
   comment: (b) => `<!--\n${b}\n-->`,
   pre: (b) => `<pre>\n${b}\n</pre>`,
+  // Type-6 block tags with attributes: only the depth counter masked <details> and <div>,
+  // so these are the ones that exercise the start rule itself (a lost \s in its regex).
+  'blockquote with class': (b) => `<blockquote class="x">\n${b}\n</blockquote>`,
+  'p with class': (b) => `<p class=x>\n${b}\n</p>`,
+  'p with a trailing space': (b) => `<p >\n${b}\n</p>`,
+  'table with border': (b) => `<table border=1>\n${b}\n</table>`,
+  'section with id': (b) => `<section id=a>\n${b}\n</section>`,
+  'self-closing hr': (b) => `<hr/>\n${b}`,
+  // Types 1-5 and upper case.
+  script: (b) => `<script>\n${b}\n</script>`,
+  'script with type': (b) => `<script type="x">\n${b}\n</script>`,
+  style: (b) => `<style>\n${b}\n</style>`,
+  textarea: (b) => `<textarea>\n${b}\n</textarea>`,
+  'upper-case DIV': (b) => `<DIV>\n${b}\n</DIV>`,
+  'upper-case BLOCKQUOTE with attributes': (b) => `<BLOCKQUOTE CLASS="x">\n${b}\n</BLOCKQUOTE>`,
+  'upper-case PRE': (b) => `<PRE>\n${b}\n</PRE>`,
 };
 
 test('html block: an unclosed <details> swallows a quoted block, which is then ambiguous', () => {
@@ -43,6 +59,20 @@ for (const [name, wrap] of Object.entries(WRAPS)) {
     eq(both.summary, 'real', 'the real block');
   });
 }
+
+// Opened and never closed, on tags the depth counter does not track: the start rule alone
+// has to hold the quoted block back.
+for (const open of ['<blockquote class="x">', '<p class=x>', '<p >', '<table border=1>', '<section id=a>', '<BLOCKQUOTE CLASS="x">']) {
+  test(`html block (${open}, never closed): a quoted approve is not taken as the verdict`, () => {
+    const r = lib.reviewJson(`Report.\n\n${open}\n${Q}`);
+    assert(r && r._ambiguous === true && r.count === 0, JSON.stringify(r));
+  });
+}
+
+test('html block: a type-6 tag with attributes ends at a blank line, so a real block after it is read', () => {
+  eq(lib.reviewJson(`<p class=x>hi\n\n${R}`).summary, 'real', 'p with a class, blank line, real block');
+  eq(lib.reviewJson(`<table border=1>\n<tr><td>x</td></tr>\n</table>\n\n${R}`).summary, 'real', 'closed table');
+});
 
 test('html block: a real block after a closed html block and ordinary markdown is still read', () => {
   eq(lib.reviewJson(`<div>x</div>\n\ntext\n\n${R}`).summary, 'real', 'closed div, blank line, real block');
