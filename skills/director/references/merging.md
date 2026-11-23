@@ -27,7 +27,7 @@ node "<plugin root>/scripts/merge-task.js" <n> --sha <head_sha> --task <ID> --at
 
 - Add `--allow-none` only when the review says `ci: none` with `tests_passed: true`.
 - Add `--names` on the first task PR whose CI has run ("First CI run" below).
-- The line is the same in bash and PowerShell, on GitHub and GitLab.
+- Same line in bash and PowerShell, GitHub and GitLab.
 
 The script checks that the PR is open, targets `milestone/*` and is still at `head_sha`; gates on CI; merges pinned to `head_sha`; comments on the PR; and writes the merge log line. It prints one JSON result line. **Do what its `next` field says.**
 
@@ -55,7 +55,7 @@ Whether a pending PR is queued is decided live by the script's queue check, not 
 - Cancelled or red: cancel auto-merge if it is still on, then send it back to the implementer with the failing check names.
 - Head moved: cancel auto-merge at once, then get the incremental review.
 - Closed: ask the user.
-- `WARNING: PR <n> merged at <X>, not the reviewed <Y>: check it`: it merged at a head nobody reviewed. Set `merged (head moved)`, tell the user which commits merged unreviewed (`git log <Y>..<X>`), and don't build on it until they decide.
+- `WARNING: PR <n> merged at <X>, not the reviewed <Y>: check it`: it merged at a head nobody reviewed. Run `status.js set <ID> --state merged --note "head moved"`, tell the user which commits merged unreviewed (`git log <Y>..<X>`), and don't build on it until they decide.
 - `no queued merges (…)`: remove any stale `queued` row.
 - `no merges.jsonl at <path>; hooks may be off`: tell the user the hooks may be off, and check each queued PR with `gh pr view <n> --json state,autoMergeRequest`.
 
@@ -72,7 +72,7 @@ If the names are already recorded, skip `--names`. Detail: the team-init skill, 
 
 When a reviewer approves with minor findings, decide before merging. An `approve` still means "may merge as is": folding in is a cost choice, not a new gate.
 
-- **Fold in** a finding that has exact replacement text, or that touches only this PR's own files and needs no design choice. Missing tests for this PR's own code, in its own test files, count too. Send it to the same implementer (`SendMessage`, warm context) with a TASK line for the same `id`, `attempt` incremented, `reason=fold-in`. Then send the reviewer the incremental diff only (`git diff <reviewed-sha>..HEAD`) and act on that review. One fold-in round per PR; a minor found later becomes a `STATUS.md` follow-up.
+- **Fold in** a finding that has exact replacement text, or that touches only this PR's own files and needs no design choice. Missing tests for this PR's own code count too. Send it to the same implementer (`SendMessage`, warm context) with a TASK line for the same `id`, `attempt` incremented, `reason=fold-in`. Then send the reviewer the incremental diff only (`git diff <reviewed-sha>..HEAD`) and act on that review. One fold-in round per PR; a minor found later becomes a `STATUS.md` follow-up.
 - **Batch** docs-wording findings into the milestone's next docs task, if there is one. A finding on a test, an anchor or a role-file rule is never batched: fold it in if it meets those conditions, else a follow-up.
 - **Follow-up task** only for findings that need real work: a behaviour change, or another area of the code.
 
@@ -81,12 +81,12 @@ When a reviewer approves with minor findings, decide before merging. An `approve
 In this order:
 
 1. Nothing is queued: if `STATUS.md` has a `queued` row, the checkpoint shows it resolved.
-2. Open the milestone → `main` PR. Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue, follow-up tasks included, but not work that was dropped or moved to a later milestone. (A task PR's `Closes` does nothing: issues close only on a merge into the default branch.) List them with `gh issue list --label agent-team --state open` and check against `STATUS.md`.
-3. The final `reviewer` pass runs on that PR (milestone branch vs. `main`) and waits for its CI.
+2. Open the milestone → `main` PR. Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue, follow-up tasks included, but not work that was dropped or moved to a later milestone. (A task PR's `Closes` does nothing: only a merge into the default branch closes an issue.) List them with `gh issue list --label agent-team --state open` and check against `STATUS.md`.
+3. The final `reviewer` pass runs on that PR and waits for its CI.
 4. The security review runs on the same PR, in every milestone: a separate `security-reviewer` pass, routed by `routing.md`. If the user asked for the second review at intake, start it in parallel (`routing.md`, "Local-only routes").
 5. Archive the logs: `node "<plugin root>/scripts/archive-logs.js" <slug>` (the milestone slug: letters, digits, `.`, `_`, `-`). Tell the user the destination. Exit 1 means there were no logs: say so and carry on. Add `--clear` only if the user says so.
 6. Check CI once: `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once`.
-7. Report "complete" only on green, with no blocking security result ("Security results" below). With no CI (exit 3) and a final review of `ci: none` with `tests_passed: true`, rerun with `--sha <head_sha> --allow-none` and report complete with "no CI" stated. Otherwise report "PR open, CI <red, pending or unknown> at <sha>". On pending, Claude waits in the background (`ci-wait.js <milestone PR> --timeout 1800`) and reports again; Codex reports it as pending. Report a head only if both close reviewers approved that exact SHA, or `node "<plugin root>/scripts/status.js" --check --since <full SHA both approved>` exits 0 (only `STATUS.md` changed since; `--head` defaults to HEAD). CI on it is still required.
+7. Report "complete" only on green, with no blocking security result ("Security results" below). With no CI (exit 3) and a final review of `ci: none` with `tests_passed: true`, rerun with `--sha <head_sha> --allow-none` and report complete with "no CI" stated. Otherwise report "PR open, CI <red, pending or unknown> at <sha>". On pending, Claude waits in the background (`ci-wait.js <milestone PR> --timeout 1800`) and reports again; Codex reports it as pending. Report a head only if every close reviewer (the final reviewer, the security review, and the second security review when the user asked for one at intake) approved that exact SHA, or `node "<plugin root>/scripts/status.js" --check --since <full SHA all approved> --head <PR head>` exits 0 (only `STATUS.md` changed since). The PR head is the one `ci-wait.js` reports, or `gh pr view <n> --json headRefOid`, not the local HEAD. CI on it is still required.
 
 Minors from the close reviews go to `STATUS.md` follow-ups unless the user asks otherwise.
 
@@ -94,7 +94,7 @@ Then hand the PR to the user. You don't merge it.
 
 ### Security results
 
-From either security review at close:
+From each security review at close:
 
 - A `major` or `critical` finding blocks "complete" and becomes a fix task, reviewed under the "Final-review fixes" rule in `routing.md`. One without an exploit path (input, path, consequence) goes back to its reviewer for the path or a downgrade.
 - `scan: red` blocks. `scan: unknown`: ask the user, as for `ci: unknown`. `scan: none` doesn't block; the report states "no scanner".
@@ -102,6 +102,6 @@ From either security review at close:
 
 ## Approvals and branch rules
 
-GitHub doesn't let an account approve its own PR, and the team acts as the user's account, so the reviewer's verdict lives in the logs and a PR comment, not in a GitHub approval. If the project uses a separate reviewer bot account, its `CLAUDE.md` says so.
+The reviewer's verdict lives in the logs and a PR comment, not in a GitHub approval. If the project uses a separate reviewer bot account, its `CLAUDE.md` says so.
 
 The expected rules for `main` and `milestone/*` are in the plugin README, "Protect your branches".
