@@ -231,7 +231,23 @@ function lastFencedJson(text, tag) {
 //   { _ambiguous: true, count }       review-json fences were there but none
 //                                     qualifies, or two or more are top-level;
 //                                     count is the top-level blocks found
+// HTML blocks (CommonMark start conditions 1-6) are raw text, not markdown, so a
+// fence inside one is never the reply's own: <pre|script|style|textarea>, <!-- -->,
+// <? ?>, <!X >, <![CDATA[ ]]> run to their end marker; block tags such as
+// <details> and <div> run to a blank line, and while a <details> or <div> is
+// still open (more opened than closed) every line is skipped, since a renderer
+// shows that content as part of the quote.
 // One pass over the text, one line at a time: no regex runs across the text.
+const HTML_BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+const HTML_STARTS = [
+  [/^<(pre|script|style|textarea)(\s|>|$)/i, /<\/(pre|script|style|textarea)>/i],
+  [/^<!--/, /-->/],
+  [/^<\?/, /\?>/],
+  [/^<![A-Za-z]/, />/],
+  [/^<!\[CDATA\[/, /\]\]>/],
+  [new RegExp('^</?(' + HTML_BLOCK_TAGS + ')(\\s|/?>|$)', 'i'), null],
+];
+const countMatches = (line, re) => (line.match(re) || []).length;
 function reviewJson(text) {
   if (typeof text !== 'string' || !text) return null;
   const mentioned = text.includes('```review-json') || text.includes('~~~review-json');
@@ -241,6 +257,8 @@ function reviewJson(text) {
   const blocks = [];        // closed top-level review blocks: { body, closeLine }
   let lineNo = 0;
   let lastContent = -1;     // the last line with anything but blanks on it
+  let html = null;          // the open HTML block: { end } (end null: runs to a blank line)
+  let depth = 0;            // <details>/<div> opened and not yet closed
   let pos = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
   while (pos < n) {
     let end = pos;
@@ -261,7 +279,16 @@ function reviewJson(text) {
       const ch = line[i];
       let run = 0;
       if (ch === '`' || ch === '~') { while (i + run < line.length && line[i + run] === ch) run++; }
-      if (fence) {
+      const rest = line.slice(i);
+      if (!fence && html && html.end) {
+        if (html.end.test(rest)) html = null;
+      } else if (!fence && !html && col <= 3 && ch === '<' && HTML_STARTS.some(([start]) => start.test(rest))) {
+        const [, end] = HTML_STARTS.find(([start]) => start.test(rest));
+        if (!end || !end.test(rest.slice(1))) html = { end };
+      }
+      if (!fence && (html || depth > 0)) {
+        // Raw HTML: not scanned for fences.
+      } else if (fence) {
         // CommonMark's closing rule: same character, at least as long, nothing else on the line.
         if (col <= 3 && run >= fence.len && ch === fence.ch && line.slice(i + run).trim() === '') {
           if (fence.review) blocks.push({ body: text.slice(fence.bodyStart, pos), closeLine: lineNo });
@@ -275,6 +302,10 @@ function reviewJson(text) {
         }
       }
     }
+    if (i < line.length && !fence && (html || depth > 0 || /^<\/?(details|div)/i.test(line.slice(i)))) {
+      depth = Math.max(0, depth + countMatches(line, /<(details|div)(\s[^>]*)?>/gi) - countMatches(line, /<\/(details|div)\s*>/gi));
+    }
+    if (i >= line.length && html && !html.end) html = null;
     pos = next;
     lineNo++;
   }

@@ -364,7 +364,11 @@ function onSubagentStop(input) {
       ['handback', t.handback],
       ['text', t.lastText],
     ].filter(([, v]) => v);
-    const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
+    // A handback that carries a review block wins: text said before the handback
+    // (last_assistant_message, the last text) may only quote one.
+    const hasReview = (v) => /(```|~~~)review-json/.test(v);
+    const [reportSource, report] = sources.find(([k, v]) => k === 'handback' && hasReview(v)) ||
+      sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
     return { t, reportSource, report };
   };
   let { t, reportSource, report } = choose();
