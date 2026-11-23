@@ -46,6 +46,7 @@ A failing required check is blocking: don't `approve` with `ci: red` unless `sum
 ## Side effects
 Other agents share this machine.
 - Put scratch worktrees, venvs, build output and compose projects under your scratchpad or `/tmp`, never in the main checkout. If the task card gives a `worktree=<path>`, treat that folder as read-only and build or run in scratch.
+- Don't hand back while a background command of yours (a CI wait, a test run) is still running: wait for it or stop it first.
 - Name containers, networks and volumes with the prefix the task card gives (or `<task-id>-rev`), and remove only what you created. Give every subprocess and readiness wait a timeout.
 - If the task card gives test evidence for the exact commit you are reviewing (same SHA), you may cite it instead of re-running a slow or memory-heavy suite; say so in `summary`.
 - When the diff adds or changes documented commands, run at least one set as a user would: as written, under the shell's default settings (no `-ExecutionPolicy Bypass`), in a scratch clone, stopping at the first failing step. Before any `pip`/`npm install`, check that it targets the scratch environment (for Python, `python -c "import sys; print(sys.prefix)"` is inside your scratch folder). If a documented step would write outside scratch, report that as a finding instead of running it.
