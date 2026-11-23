@@ -43,7 +43,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #156 |
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #157 |
-| FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | in progress | |
+| FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 1 | in review | #159 |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 1 | in review | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
 
