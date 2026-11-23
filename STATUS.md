@@ -38,7 +38,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #149 |
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | changes requested | #154 |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 2 (fold-in) | merged | #153 |
-| FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (subagent; session unavailable) | medium (sonnet) / high | 2 (fold-in) | in review | #155 |
+| FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (subagent; session unavailable) | medium (sonnet) / high | 2 (fold-in) | merged | #155 |
 | FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #152 |
 | FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #156 |
@@ -79,6 +79,14 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - The manual Director review row (`log-event.js review`) doesn't get the bridge-style `agent`, `tier` and `effort` fields.
   - Codex and background completions mark an ambiguous review only on the completion line, with no re-ask message, because Codex has no hook output channel.
   - FU-8 also changed `scripts/handback-check.js`, which wasn't on its card. The change is small and correct, and the PR says so.
+  - From the security review:
+    - The bridge row's protected-field list doesn't cover `reviewer_tier` (filled from the block when the card has no tier), `agent_id`, `turn_id`, `stale_of`, `kind` or `tool_use_id`.
+    - JS `trim()` strips Unicode whitespace, so a fence line ending in NBSP opens or closes a fence where CommonMark wouldn't. Probes fail closed; trim only spaces and tabs.
+    - The subagent path's Director nudge reuses the bridge wording.
+  - From the fold-in review:
+    - The Codex reviewer-name regex in `lib.isReviewDelegation` must track the roles in `codex-agents.js`.
+    - An uncarded review sent to a non-reviewer agent now writes no row.
+  - The Coach and README text for `_ambiguous` and the bridge row fields goes to FU-13 and FU-14.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Accept or reject: scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
