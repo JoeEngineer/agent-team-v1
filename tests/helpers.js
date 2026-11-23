@@ -78,3 +78,7 @@ module.exports = {
   ROOT, SCRIPTS, NO_MODELS_FILE, counts,
   bareProject, tmpProject, run, FAKE_GH, fakeGh, fakeGlab, readLog, test, assert, eq,
 };
+
+// A test file run on its own (`node tests/x.test.js`) has no runner to turn the
+// failure count into an exit code, so do it here. run.js exits the same way.
+process.on("exit", () => { if (counts.failed && !process.exitCode) process.exitCode = 1; });
