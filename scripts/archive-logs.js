@@ -70,6 +70,8 @@ function unresolvedCount(logDir) {
 
 // The Director's transcript: <projects root>/<project folder>/<session id>.jsonl.
 // The session id comes from a log line, so only a plain id is looked up.
+// The search covers every project folder, not only this project's: a worktree
+// run is stored under its own folder, whose name this script cannot derive.
 function findSessionTranscript(root, sessionId) {
   if (!/^[\w-]+$/.test(sessionId)) return null;
   let dirs;
@@ -156,7 +158,7 @@ function recordSessionUsage({ logDir, milestone, root, dryRun, version }) {
         ts: new Date().toISOString(), guidance_version: version, kind: 'session_usage', tool: 'claude',
         session_id: sessionId, milestone, model, calls: u.calls, tokens_by_class: { ...u.classes }, first: u.first, last: u.last,
       };
-      try { fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8'); } catch (err) {
+      try { require('./reconcile-logs').appendLogLine(file, JSON.stringify(record) + '\n'); } catch (err) {
         out.written--;
         out.errors.push(`could not append to sessions.jsonl: ${err && err.message || err}`);
       }

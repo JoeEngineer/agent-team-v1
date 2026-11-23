@@ -49,7 +49,21 @@ function projectsRoot() {
   return process.env.AGENT_TEAM_PROJECTS_ROOT || path.join(os.homedir(), '.claude', 'projects');
 }
 
+// Append to a log only when it is absent or a regular file: a symlinked log
+// would send the write to wherever the link points. Throws, naming the path.
+function appendLogLine(file, text) {
+  let st = null;
+  try { st = fs.lstatSync(file); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  if (st && (st.isSymbolicLink() || !st.isFile())) throw new Error(`refusing to write ${file}: not a regular file (symlink?)`);
+  fs.appendFileSync(file, text, 'utf8');
+}
+
+const PLAIN_ID = /^[\w-]+$/;
+
 function findTranscript(root, sessionId, agentId) {
+  // Both ids come from log lines: only plain ids are joined into a path.
+  if (!PLAIN_ID.test(String(agentId))) return null;
+  if (sessionId && !PLAIN_ID.test(String(sessionId))) return null;
   let dirs;
   try { dirs = fs.readdirSync(root); } catch { return null; }
   const file = `agent-${agentId}.jsonl`;
@@ -59,6 +73,8 @@ function findTranscript(root, sessionId, agentId) {
     else { try { sessions = fs.readdirSync(path.join(root, d)); } catch { continue; } }
     for (const s of sessions) {
       const p = path.join(root, d, s, 'subagents', file);
+      const rel = path.relative(path.resolve(root), path.resolve(p));
+      if (rel.startsWith('..') || path.isAbsolute(rel)) continue;
       if (fs.existsSync(p)) return p;
     }
   }
@@ -393,7 +409,7 @@ function supersedeShortTurns({ logDir, root, dryRun = false, scans = transcriptC
       out.superseded++;
       if (dryRun) continue;
       const record = { ...line, ts: new Date().toISOString(), tokens_with_cache: t.tokens, tokens_by_class: { ...t.classes }, reconciled_by: version };
-      try { fs.appendFileSync(file, JSON.stringify(record) + '\n', 'utf8'); } catch (err) {
+      try { appendLogLine(file, JSON.stringify(record) + '\n'); } catch (err) {
         out.superseded--;
         out.errors.push(`could not append to completions.jsonl: ${err && err.message || err}`);
       }
@@ -563,7 +579,7 @@ function main(argv) {
   return s.errors.length ? 1 : 0;
 }
 
-module.exports = { reconcile, supersedeShortTurns, transcriptCache, scanTranscript, findTranscript, projectsRoot, main, hooks };
+module.exports = { reconcile, supersedeShortTurns, transcriptCache, scanTranscript, findTranscript, appendLogLine, projectsRoot, main, hooks };
 
 if (require.main === module) {
   let code = 0;
