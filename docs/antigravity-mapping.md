@@ -97,7 +97,7 @@ How each piece of the `agent-team` plugin maps to the Antigravity CLI (`agy`), a
 |---|---|---|---|---|
 | small | `haiku` | `gpt-6-luna` | `flash_lite` → `gemini-3.5-flash-lite` | `gemini-3.8-flash-low` and up |
 | medium | `sonnet` | `gpt-6.1-terra` | `flash` → `gemini-4-hydrogen-tiered-high` | any id from `agy models` |
-| large | `opus` | `gpt-6.1-sol` | `pro` → `gemini-4-hydrogen-tiered-xhigh` | e.g. `gemini-4-argon-high` |
+| large | `opus` | `gpt-6.2-sol` | `pro` → `gemini-4-hydrogen-tiered-xhigh` | e.g. `gemini-4-argon-high` |
 
 - The aliases resolve on Google's side and may change. Log the `modelName` the hooks report, not the alias.
 - `agy models` also lists Neon, Argon, Hydrogen at several efforts, and Claude and GPT-OSS models. The local bridge notes that Argon has its own weekly quota. The tier map for sessions is a choice for the milestone, not a finding.

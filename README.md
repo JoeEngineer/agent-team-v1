@@ -61,8 +61,8 @@ Agents and the routing table name tiers, not models. Each tier maps to a model p
 |---|---|---|---|
 | small | haiku | gpt-6-luna | yes |
 | medium | sonnet | gpt-6.1-terra | yes |
-| large | opus | gpt-6.1-sol | yes |
-| xlarge | fable (billed as usage credits on some plans) | gpt-6-astra (not available everywhere) | **no** |
+| large | opus | gpt-6.2-sol | yes |
+| xlarge | fable (billed as usage credits on some plans) | gpt-6.2-astra (not available everywhere) | **no** |
 
 - The model names are the shipped defaults. The Director never assumes a model is available: if a mapped model is missing, it falls back as described below. An account without one of the tools can drop that column with an override.
 - Routing and the escalation ladder never pick xlarge or any entry with `enabled: false` or `billing: "credits"`. The Director may offer xlarge, and uses it only after you say yes for that task.
