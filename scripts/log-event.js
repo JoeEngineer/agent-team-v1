@@ -238,9 +238,18 @@ function main(argv) {
       // id comes in through its input (base takes it from there); logReview does
       // not write session_source, so a review line has no source field.
       const { agent_id, resolved_model, model, effort, tier, ...review } = rest;
-      records.logReview({ session_id: session.session_id }, {
+      const written = records.logReview({ session_id: session.session_id }, {
         agent_id, task, resolved_model, model, effort, tier,
-      }, { ...review, source: 'director' }, tool);
+      }, review, tool, { source: 'director' });
+      if (!written) {
+        if (records.isAmbiguous(review)) {
+          console.error('not logged: ambiguous review-json');
+          return 1;
+        }
+        const id = records.reviewIdentity({ session_id: session.session_id }, { agent_id, task, resolved_model, model, effort, tier }, review, tool);
+        console.log(`not logged: duplicate of ${id || 'an earlier review'}`);
+        return 0;
+      }
     }
     console.log(`logged ${kind} to .agent-team/logs/${kind}s.jsonl`);
     return 0;

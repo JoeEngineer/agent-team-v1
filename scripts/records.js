@@ -172,7 +172,17 @@ const milestoneField = (m) => (m ? { milestone: m } : {});
 // kept under `review_shadowed` instead. The block may fill a field the hook has
 // no value for (a Director-written line passes `pr` or `milestone` this way),
 // but never the row's identity (`review_id`, `ts`, `tool`, `guidance_version`).
-const HOOK_ONLY = ['review_id', 'ts', 'tool', 'guidance_version', 'reconciled_by', 'review_shadowed'];
+// Everything the logger owns is in HOOK_ONLY: identity, provenance, attribution
+// and timestamps. A block value for one is never copied onto the row (a
+// different one is kept under `review_shadowed`), even when the hook has no
+// value for it. `session_id` is the one exception: where no session is known,
+// a block (a Director-written line) may still give it.
+const HOOK_ONLY = [
+  'review_id', 'ts', 'tool', 'guidance_version', 'reconciled_by', 'review_shadowed',
+  'source', 'session_source', 'stale_of', 'kind', 'tool_use_id', 'agent_id', 'turn_id', 'verdict_conflict',
+  'model', 'effort', 'tier', 'agent', 'reviewer_model', 'reviewer_effort', 'requested_model', 'requested_effort', 'reviewer_tier',
+  'timestamp', 'created_at', 'started_at', 'completed_at', 'duration_ms',
+];
 function withReview(known, review, hookOnly = HOOK_ONLY) {
   const row = { ...known };
   const shadowed = {};
@@ -194,11 +204,13 @@ function verdictConflict(review) {
   return false;
 }
 
+// One text for the reviewer and the security-reviewer: a security review's
+// evidence is an exploit path, a code review's is what breaks and where.
 const VERDICT_CONFLICT_NUDGE = 'agent-team: your review-json has a verdict that contradicts its severity: ' +
-  'give a `major` with its exploit path, or an `approve`.';
+  'give a `major` with the evidence that makes it blocking (the exploit path, for a security review), or an `approve`.';
 // The bridge path has no stop hook: the text goes to the Director, not the reviewer.
 const VERDICT_CONFLICT_DIRECTOR_NUDGE = "agent-team: the bridge review's verdict contradicts its severity: " +
-  'ask it for a `major` with its exploit path, or an `approve`.';
+  'ask it for a `major` with the evidence that makes it blocking (the exploit path, for a security review), or an `approve`.';
 
 // A reply whose review-json is not exactly one top-level block at its end (see
 // lib.reviewJson) is read as no review: no reviews.jsonl row, and the line it is
@@ -213,7 +225,7 @@ const ambiguousDirectorNudge = (review) => `agent-team: the bridge review's revi
 
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
-function logReview(input, record, review, tool = 'claude') {
+function logReview(input, record, review, tool = 'claude', extra = {}) {
   // Never a row for a review that could not be read unambiguously.
   if (isAmbiguous(review)) return false;
   const task = record.task || {};
@@ -243,9 +255,10 @@ function logReview(input, record, review, tool = 'claude') {
     requested_model: record.model ?? null,
     requested_effort: record.effort ?? null,
     reviewer_tier: record.tier != null ? record.tier : (bridge ? task.tier ?? null : null),
+    // The caller's own fields (a Director line's `source`), set by code, not by the block.
+    ...extra,
   };
-  // The review block can't set a bridge row's attribution either.
-  const row = withReview(known, review, bridge ? [...HOOK_ONLY, 'agent', 'tier', 'effort'] : HOOK_ONLY);
+    const row = withReview(known, review);
   if (verdictConflict(review)) row.verdict_conflict = true;
   if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
   lib.appendJsonl(input, 'reviews.jsonl', row);
@@ -836,7 +849,7 @@ function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
 }
 
 module.exports = {
-  base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
+  base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, reviewIdentity,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
   ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, isAmbiguous, ambiguousNudge, ambiguousDirectorNudge, cardSettings, UNCARDED_MESSAGE, closeOpenPause,

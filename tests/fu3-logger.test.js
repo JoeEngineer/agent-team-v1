@@ -155,7 +155,7 @@ test('verdict conflict: one nudge at SubagentStop, none under stop_hook_active o
   const p = tmpProject();
   const r = stopWith(p, 'vn1', block('changes_requested', 'minor'));
   eq(readLog(p, 'reviews.jsonl')[0].verdict_conflict, true, 'precondition: conflict detected');
-  assert(/give a `major` with its exploit path, or an `approve`/.test(context(r)), r.stdout);
+  assert(/give a `major` with the evidence that makes it blocking \(the exploit path, for a security review\), or an `approve`/.test(context(r)), r.stdout);
   const again = stopWith(p, 'vn2', block('changes_requested', 'minor'), { stop_hook_active: true });
   eq(readLog(p, 'reviews.jsonl').length, 2, 'precondition: the repeated stop was logged');
   eq(again.stdout, '', 'stop_hook_active: quiet');
@@ -169,7 +169,7 @@ test('verdict conflict: on the bridge path the Director gets the message and the
     tool_input: { prompt: 'TASK id=B-1 type=review milestone=m attempt=1 pr=9' }, tool_response: text }, p, env);
   const r = bridge(block('reject', 'none'), 1);
   eq(readLog(p, 'reviews.jsonl')[0].verdict_conflict, true, 'precondition: conflict on the row');
-  assert(/ask it for a `major` with its exploit path, or an `approve`/.test(context(r)), r.stdout);
+  assert(/ask it for a `major` with the evidence that makes it blocking \(the exploit path, for a security review\), or an `approve`/.test(context(r)), r.stdout);
   assert(/the bridge review's verdict contradicts its severity/.test(context(r)), 'Director-facing wording: ' + context(r));
   assert(!/your review-json/.test(context(r)), 'not the reviewer wording: ' + context(r));
   const ok = bridge(block('approve', 'none'), 2);
