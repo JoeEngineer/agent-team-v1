@@ -263,8 +263,8 @@ test('FU-22 tracked log: refused whatever it holds, under a name of any case, fr
   setStatus(wt, 'm1', EVERY_WORDS, 'xlarge/high');
   eq(grant(wt, 'm1').code, 24, 'grant from the worktree');
   eq(intake(wt, line('m1', [])).status, 1, 'intake from the worktree');
-  // The logs folder as a submodule: git will not say whether the file is tracked (it is, in the
-  // submodule), and its checkout restores the file all the same. Refused, with its own message.
+  // The logs folder as a submodule: asked about the file, git says "not tracked" (it is tracked in
+  // the submodule), and the submodule's checkout restores it all the same. Refused, with its own message.
   const logsRepo = repo();
   fs.writeFileSync(path.join(logsRepo, 'milestones.jsonl'), `${JSON.stringify(line('m1', EVERY, 'xlarge'))}\n`);
   g(logsRepo, 'add', 'milestones.jsonl');
@@ -282,6 +282,18 @@ test('FU-22 tracked log: refused whatever it holds, under a name of any case, fr
   const sr = intake(sup, line('m1', []));
   eq(sr.status, 1, `${sr.out}${sr.err}`);
   eq(rows(sup).length, 1, 'nothing was written');
+  // A committed link at .agent-team is an index entry above the file too. The entry is made
+  // without a real link, which Windows may not allow: the check reads the index.
+  const ln = repo();
+  const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: ln, input: 'elsewhere', encoding: 'utf8', env: GIT_ENV }).stdout.trim();
+  g(ln, 'update-index', '--add', '--cacheinfo', `120000,${blob},.Agent-Team`);
+  g(ln, 'commit', '-q', '-m', 'a link named .Agent-Team');
+  fs.mkdirSync(path.dirname(logFile(ln)), { recursive: true });
+  fs.writeFileSync(logFile(ln), `${JSON.stringify(line('m1', EVERY, 'xlarge'))}\n`);
+  setStatus(ln, 'm1', EVERY_WORDS, 'xlarge/high');
+  const lg = grant(ln, 'm1');
+  eq(lg.code, 24, `a link entry above the log: ${lg.out}`);
+  assert(/a folder above it \(\.agent-team\) is an entry in git's index/.test(lg.json.reason), lg.json.reason);
   // Controls: an untracked log in a repository whose logs folder holds a tracked .gitkeep (as
   // team-init leaves it), and GIT_* in the caller's environment, change nothing.
   const u = repo();
