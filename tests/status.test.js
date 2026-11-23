@@ -126,16 +126,153 @@ test('set refuses, with a distinct code and an untouched file: header, no table,
   eq(r.code, 10, 'unreadable file');
 });
 
+// Run status.main in-process with a stubbed fs function; always restore it. Returns { code, out }.
+function withStub(name, make, args) {
+  const real = fs[name];
+  fs[name] = make(real);
+  const lines = [];
+  let code;
+  try { code = status.main(args, { out: (l) => lines.push(l) }); } finally { fs[name] = real; }
+  return { code, out: lines.join('\n'), json: JSON.parse(lines[lines.length - 1]) };
+}
+const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+const noTemp = (label) => assert(!fs.readdirSync(DIR).some((x) => x.includes('.tmp-')), `${label}: temp file left behind`);
+
 test('set reads the file back: a corrupted write is detected and the original restored', () => {
   const f = fixture(FIXTURE);
   const real = fs.writeFileSync;
   let hits = 0;
   fs.writeFileSync = (p, data, ...rest) => real(p, hits++ === 0 ? `X${data}` : data, ...rest);
-  let code;
-  try { code = status.main(['set', 'T-1', '--state', 'merged', '--file', f], { out: () => {} }); } finally { fs.writeFileSync = real; }
+  let r;
+  try { r = withStub('renameSync', (rn) => rn, ['set', 'T-1', '--state', 'merged', '--file', f]); } finally { fs.writeFileSync = real; }
   eq(hits, 2, 'a write was made, then the restore');
-  eq(code, 11, 'exit');
+  eq(r.code, 11, 'exit');
+  assert(r.json.reason.includes('the original was restored'), r.out);
   eq(fs.readFileSync(f, 'utf8'), FIXTURE, 'original restored');
+  noTemp('read-back');
+});
+
+test('set reports the original as NOT restored when the restore itself fails', () => {
+  const f = fixture(FIXTURE);
+  const real = fs.writeFileSync;
+  let writes = 0;
+  let renames = 0;
+  fs.writeFileSync = (p, data, ...rest) => real(p, writes++ === 0 ? `X${data}` : data, ...rest);
+  let r;
+  try {
+    r = withStub('renameSync', (rn) => (a, b) => { if (++renames === 2) { assert(fs.existsSync(a), 'the restore temp file exists when the rename fails'); throw eperm(); } return rn(a, b); }, ['set', 'T-1', '--state', 'merged', '--file', f]);
+  } finally { fs.writeFileSync = real; }
+  eq(writes, 2, 'precondition: the first write and the restore were both made');
+  eq(renames, 2, 'precondition: the restore rename was reached');
+  eq(r.code, 11, 'exit');
+  assert(r.json.reason.includes('could NOT be restored') && !r.json.reason.includes('was restored'), r.out);
+  assert(fs.readFileSync(f, 'utf8').startsWith('X'), 'the corrupted file is what is left, and the reason says so');
+  noTemp('failed restore');
+});
+
+test('a failing rename (a read-only or locked file) exits 11, leaves the file byte-identical and no temp file', () => {
+  const f = fixture(FIXTURE);
+  const before = fs.readFileSync(f);
+  let renameCalls = 0;
+  const r = withStub('renameSync', () => (a) => {
+    renameCalls++;
+    assert(path.basename(a).includes('.tmp-') && fs.readFileSync(a, 'utf8') !== FIXTURE, 'precondition: the temp file holds the new text when the rename fails');
+    throw eperm();
+  }, ['set', 'T-1', '--state', 'merged', '--file', f]);
+  eq(renameCalls, 1, 'precondition: the rename was reached');
+  eq(r.code, 11, 'exit');
+  assert(r.json.ok === false && r.json.reason.includes('EPERM'), r.out);
+  assert(Buffer.compare(before, fs.readFileSync(f)) === 0, 'file changed');
+  noTemp('rename');
+  // Recovery control: once the failure clears, the same command works.
+  eq(cli(['set', 'T-1', '--state', 'merged', '--file', f]).code, 0, 'recovery exit');
+  assert(fs.readFileSync(f, 'utf8').includes('| 1 | merged | |'), 'recovery wrote the row');
+});
+
+test('a failing temp-file write exits 11, leaves the file byte-identical and removes the partial temp file', () => {
+  const f = fixture(FIXTURE);
+  const before = fs.readFileSync(f);
+  let partial = false;
+  const r = withStub('writeFileSync', (w) => (p, data, ...rest) => {
+    w(p, data.slice(0, 10), ...rest);
+    partial = path.basename(p).includes('.tmp-') && fs.existsSync(p);
+    throw eperm();
+  }, ['set', 'T-1', '--state', 'merged', '--file', f]);
+  assert(partial, 'precondition: a partial temp file existed when the write failed');
+  eq(r.code, 11, 'exit');
+  assert(r.json.ok === false && r.json.reason.includes('EPERM'), r.out);
+  assert(Buffer.compare(before, fs.readFileSync(f)) === 0, 'file changed');
+  noTemp('write');
+  eq(cli(['set', 'T-1', '--state', 'merged', '--file', f]).code, 0, 'recovery exit');
+});
+
+test('set keeps the file mode: the temp file gets the original mode before the rename', () => {
+  const f = fixture(FIXTURE);
+  fs.chmodSync(f, 0o640);
+  const mode = fs.statSync(f).mode & 0o7777;
+  const calls = [];
+  const realRename = fs.renameSync;
+  const r = withStub('chmodSync', (c) => (p, m) => {
+    calls.push({ p, m });
+    fs.renameSync = (a, b) => { calls.push({ renamed: a }); return realRename(a, b); };
+    return c(p, m);
+  }, ['set', 'T-1', '--state', 'merged', '--file', f]);
+  fs.renameSync = realRename;
+  eq(r.code, 0, 'exit');
+  eq(calls.length, 2, 'precondition: one chmod, then the rename');
+  assert(path.basename(calls[0].p).includes('.tmp-') && calls[0].m === mode, `chmod of the temp file to ${mode}: ${JSON.stringify(calls[0])}`);
+  eq(calls[1].renamed, calls[0].p, 'the chmod came before the rename of the same temp file');
+  if (process.platform !== 'win32') eq(fs.statSync(f).mode & 0o7777, 0o640, 'mode after set');
+});
+
+test('set refuses a symlink with a reason and its own exit code; --check still reads one', () => {
+  const f = fixture(FIXTURE);
+  const before = fs.readFileSync(f);
+  // A stubbed lstat works everywhere; creating a real symlink may need privileges on Windows.
+  let asked = 0;
+  const r = withStub('lstatSync', (ls) => (p, ...rest) => {
+    const st = ls(p, ...rest);
+    if (path.resolve(String(p)) !== path.resolve(f)) return st;
+    asked++;
+    return Object.create(st, { isSymbolicLink: { value: () => true } });
+  }, ['set', 'T-1', '--state', 'merged', '--file', f]);
+  assert(asked >= 1, 'precondition: the file was lstat-ed');
+  eq(r.code, 13, 'exit');
+  assert(r.json.ok === false && r.json.reason.includes('symlink') && r.json.reason.includes('--file'), r.out);
+  assert(Buffer.compare(before, fs.readFileSync(f)) === 0, 'file changed');
+  noTemp('symlink');
+  // Recovery control: the same command on a regular file works.
+  eq(cli(['set', 'T-1', '--state', 'merged', '--file', f]).code, 0, 'regular file');
+  // A real symlink, where the platform lets this process make one.
+  const link = path.join(DIR, `link${n++}.md`);
+  let made = true;
+  try { fs.symlinkSync(f, link, 'file'); } catch (e) { if (e.code !== 'EPERM' && e.code !== 'EACCES') throw e; made = false; }
+  if (made) {
+    const target = fs.readFileSync(f);
+    eq(cli(['set', 'T-2', '--state', 'merged', '--file', link]).code, 13, 'real symlink');
+    assert(fs.lstatSync(link).isSymbolicLink() && Buffer.compare(target, fs.readFileSync(f)) === 0, 'link and target untouched');
+    eq(cli(['--check', '--file', link]).code, 0, '--check through a link');
+  }
+});
+
+test('set refuses a malformed row anywhere in the table (exit 12) instead of skipping it', () => {
+  const cases = [
+    ['too many cells, last row', FIXTURE.replace('| T-3 | Third |', '| T-3 | Th | ird |'), 'T-1', 9],
+    ['too few cells, first row', FIXTURE.replace('| 1 | in progress | |', '| 1 | in progress |'), 'T-3', 7],
+    ['no closing pipe', FIXTURE.replace('| 2 | planned | |', '| 2 | planned'), 'T-1', 9],
+    ['the target row itself', FIXTURE.replace('| T-3 | Third |', '| T-3 | Th | ird |'), 'T-3', 9],
+    ['a malformed duplicate of the target', FIXTURE.replace('| T-3 | Third |', '| T-1 | Th | ird |'), 'T-1', 9],
+  ];
+  for (const [label, text, id, line] of cases) {
+    const f = fixture(text);
+    const before = fs.readFileSync(f);
+    const r = cli(['set', id, '--state', 'merged', '--file', f]);
+    eq(r.code, 12, `${label}: exit`);
+    assert(r.json.ok === false && /row malformed/.test(r.json.reason) && r.json.reason.includes('run --check') && r.json.reason.includes(`line ${line}`), `${label}: ${r.out}`);
+    assert(Buffer.compare(before, fs.readFileSync(f)) === 0, `${label}: file changed`);
+    eq(cli(['--check', '--file', f]).code, 9, `${label}: --check agrees`);
+  }
+  noTemp('malformed');
 });
 
 test('set with the same value is a no-op: nothing differs', () => {

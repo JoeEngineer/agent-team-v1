@@ -8,20 +8,25 @@
 // `set` changes only the named cells of the one row under "## Tasks" whose ID
 // cell equals <ID> (string comparison; no pattern is built from an argument).
 // `--state` writes the bare state; `--note` appends ": <note>" to it.
-// It writes through a temp file and a rename, keeps the file's line endings,
-// reads the file back and confirms that at most the one row line differs.
+// It writes through a temp file and a rename, keeps the file's line endings
+// and the file's mode, refuses a symlink (a rename would replace the link; pass
+// the real path), reads the file back and confirms that at most the one row
+// line differs. A failed write or rename leaves the file as it was and no temp
+// file behind.
 // `--file` defaults to STATUS.md in the cwd. One JSON line is printed.
 //
 // Exit codes: 0 ok   2 bad arguments   3 line 1 is not "# Status"
 //   4 no Tasks table (or a column is missing)   5 row missing   6 ID appears twice
 //   7 state not in the file's States: legend   8 a value has "|" or a newline
 //   9 --check found problems   10 file unreadable   11 write or read-back failed
+//   12 a row under "## Tasks" is malformed (wrong cell count; run --check)
+//   13 the file is a symlink (set only)
 'use strict';
 
 const fs = require('fs');
 const path = require('path');
 
-const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11 };
+const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13 };
 
 class Refusal extends Error {
   constructor(code, msg) { super(msg); this.code = code; }
@@ -129,7 +134,10 @@ function applySet(text, id, vals) {
   for (const k of Object.keys(vals)) {
     if (k !== 'note' && want[k] < 0) throw new Refusal(EXIT.table, `the table has no column for --${k}`);
   }
-  const hits = t.rows.filter((r) => r.cells && r.cells.length === t.names.length && r.cells[iId].trim() === id);
+  // A row with the wrong cell count cannot be matched by ID, so it could hide the row or a duplicate.
+  const bad = t.rows.find((r) => !r.cells || r.cells.length !== t.names.length);
+  if (bad) throw new Refusal(EXIT.malformed, `row malformed: line ${bad.line + 1} has ${bad.cells ? bad.cells.length : 'unreadable'} cells, header has ${t.names.length}; run --check`);
+  const hits = t.rows.filter((r) => r.cells[iId].trim() === id);
   if (hits.length === 0) throw new Refusal(EXIT.missing, `no row with ID ${id}`);
   if (hits.length > 1) throw new Refusal(EXIT.duplicate, `ID ${id} appears ${hits.length} times`);
   if (vals.state !== undefined) {
@@ -148,10 +156,13 @@ function applySet(text, id, vals) {
   return { text: joinLines(lines), line: row.line };
 }
 
+// Replace the file's content through a temp file in the same directory. The original mode is kept.
 function writeAtomic(file, text) {
+  const mode = fs.statSync(file).mode & 0o7777;
   const tmp = `${file}.tmp-${process.pid}`;
   try {
     fs.writeFileSync(tmp, text);
+    fs.chmodSync(tmp, mode);
     fs.renameSync(tmp, file);
   } catch (e) {
     try { fs.unlinkSync(tmp); } catch { /* nothing to remove */ }
@@ -192,6 +203,11 @@ function main(argv, deps = {}) {
   try {
     const o = parseArgs(argv);
     const file = path.resolve(cwd, o.file || 'STATUS.md');
+    if (!o.check) {
+      let st = null;
+      try { st = fs.lstatSync(file); } catch { /* the read below reports it */ }
+      if (st && st.isSymbolicLink()) throw new Refusal(EXIT.link, `${file} is a symlink; set would replace the link with a regular file. Pass the real path with --file`);
+    }
     let text;
     try { text = fs.readFileSync(file, 'utf8'); } catch (e) { throw new Refusal(EXIT.io, `cannot read ${file}: ${e.code || e.message}`); }
     if (o.check) {
@@ -211,8 +227,9 @@ function main(argv, deps = {}) {
     const differ = a.length === b.length ? b.filter((l, i) => l !== a[i]).length : -1;
     const wantDiffer = res.text === text ? 0 : 1;
     if (back !== res.text || differ !== wantDiffer) {
-      try { writeAtomic(file, text); } catch { /* best effort */ }
-      throw new Refusal(EXIT.verify, `read-back check failed (${differ} lines differ); the original was restored`);
+      let restored = true;
+      try { writeAtomic(file, text); } catch { restored = false; }
+      throw new Refusal(EXIT.verify, `read-back check failed (${differ} lines differ); ` + (restored ? 'the original was restored' : `the original could NOT be restored, check ${file}`));
     }
     out(JSON.stringify({ ok: true, code: 0, file, id: o.id, line: res.line + 1, changed: wantDiffer === 1, row: b[res.line].replace(/\r$/, '') }));
     return 0;
