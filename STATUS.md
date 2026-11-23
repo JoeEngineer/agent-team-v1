@@ -34,7 +34,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium | 1 | in review | #147 |
 | FU-2 | Scan-state table design, decision 0024 (#132) | architect | xlarge (fable) / medium, granted | 1 | merged | #145 |
 | FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium | 1 | in review | #148 |
-| FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | in review | #146 |
+| FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | merged | #146 |
 | FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | in progress | |
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | planned | |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | planned | |
