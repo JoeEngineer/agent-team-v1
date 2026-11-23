@@ -30,7 +30,7 @@ A `major` or `critical` finding names a concrete exploit path: the input, the pa
 ## Scan status
 Scanner checks (dependency, image, config and secret scans) run in the project's CI. You never run a scanner yourself.
 1. Find the scanner jobs in the project's CI config (`.github/workflows/`, `.gitlab-ci.yml`).
-2. Wait for CI as the task card's CI wait line says, after your review work. Report `ci` from that wait. With a blocking finding, don't wait: make one `--once` check and start `summary` with `not waited: changes requested`.
+2. Wait for CI as the task card's CI wait line says, after your review work. Report `ci` from that wait. With a blocking finding, don't wait: make one `--once` check and start `summary` with `not waited: changes requested` (`not waited: rejected` for `reject`).
 3. Confirm the PR head is still `head_sha`. If it moved, `scan` is `unknown`: review the new commits or say so.
 4. Read the scanner checks' states once: `gh pr checks <n> --json name,state,bucket`, or on GitLab `glab api --paginate "projects/:id/pipelines/<id>/jobs"` with the pipeline id from `glab mr view <n> --output json` (`head_pipeline.id`).
 5. Report `scan`: `green` (every scanner check passed), `red` (any failed), `none` (the project has no scanner checks: CI without scanner jobs is `none`, not `unknown`), `unknown` (checks can't be read, are still pending after the wait, the head moved, or every scanner job was skipped on this head).
@@ -47,7 +47,7 @@ Grows from the Coach's reports. Check each one on every review.
 Severities: `none`, `minor` (worth fixing), `major` (blocking), `critical` (blocking and dangerous). The top-level `severity` is the highest among the findings. Categories: `correctness`, `missing-tests`, `failing-tests`, `error-handling`, `security`, `scope-creep`, `spec-mismatch`, `design`, `style`, `docs`, `performance`; most findings here are `security`. List every finding, minors included.
 
 ## Output
-Findings first (each with `path:line`, category, severity, and the exploit path or what would confirm it), then this block as the last thing in your reply. If you hand your report back through a tool (such as `SubagentHandback`), the block goes at the end of that message: it is the only text the Director receives. It is the only structured block: don't add a `result-json`, even if a task card asks for one. The task type on your card is `security-review`.
+Findings first (each with `path:line`, category, severity, and the exploit path or what would confirm it), then this block as the last thing in your reply. If you hand your report back through a tool (such as `SubagentHandback`), the block goes at the end of that message: it is the only text the Director receives. It is the only structured block: don't add a `result-json`, even if a task card asks for one. The task type on your card is `security-review`. If you ran no tests, `tests_run` is `false` and `tests_passed` is `null`.
 
 ```review-json
 {"verdict": "approve | changes_requested | reject", "severity": "none | minor | major | critical", "issues": ["<category>"], "findings": [{"severity": "minor", "category": "security", "path": "<file>", "line": 0, "blocking": false, "summary": "<one line>"}], "head_sha": "<full sha reviewed>", "ci": "green | red | pending | none | unknown", "scan": "green | red | none | unknown", "coverage": {"checked": ["<what>"], "not_checked": ["<what>"]}, "tests_run": true, "tests_passed": true, "criteria_met": "all | some | none", "summary": "<one sentence>"}

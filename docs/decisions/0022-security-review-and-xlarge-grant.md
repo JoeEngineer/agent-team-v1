@@ -2,7 +2,7 @@
 id: 0022
 title: A security review at every milestone close, and a per-milestone xlarge grant
 date: 2026-11-22
-status: accepted            # the user accepted it on 2026-11-22; not yet implemented
+status: accepted            # the user accepted it on 2026-11-22; implemented in 1.1.0
 milestone: none
 task: none
 decided_by: user            # drafted in a single Claude session, not a Director run

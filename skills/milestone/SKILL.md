@@ -22,7 +22,7 @@ Ask these at the start of intake, before any delegation (the breakdown included)
 
    Offer xlarge/high only when the map's Codex xlarge entry is not disabled.
 
-Write the answers into the project's `STATUS.md` under `## xlarge grant` (the granted roles, or none; the second review: none, large or xlarge), and log them (PowerShell form: the director skill's `references/codex.md`, "Logging from PowerShell"):
+Write the answers into the project's `STATUS.md` under `## xlarge grant` (the granted roles, or none; the second review as the STATUS template words it: no / large/high / xlarge/high / not offered), and log them (PowerShell form: the director skill's `references/codex.md`, "Logging from PowerShell"):
 
 ```
 node "<plugin root>/scripts/log-event.js" milestone - <<'EOF'
