@@ -175,7 +175,8 @@ function parseTaskCard(prompt) {
     }
     if (card.attempt && /^\d+$/.test(card.attempt)) card.attempt = Number(card.attempt);
     if (card.flags !== undefined) {
-      const flags = card.flags.split(',').map((f) => f.trim()).filter(Boolean);
+      // Empty items drop (`flags=`, `a,`), and a repeated flag counts once, in first-seen order.
+      const flags = [...new Set(card.flags.split(',').map((f) => f.trim()).filter(Boolean))];
       if (flags.length) card.flags = flags; else delete card.flags;
     }
   }

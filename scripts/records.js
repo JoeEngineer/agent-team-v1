@@ -181,6 +181,9 @@ function verdictConflict(review) {
 
 const VERDICT_CONFLICT_NUDGE = 'agent-team: your review-json has a verdict that contradicts its severity: ' +
   'give a `major` with its exploit path, or an `approve`.';
+// The bridge path has no stop hook: the text goes to the Director, not the reviewer.
+const VERDICT_CONFLICT_DIRECTOR_NUDGE = "agent-team: the bridge review's verdict contradicts its severity: " +
+  'ask it for a `major` with its exploit path, or an `approve`.';
 
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
@@ -804,5 +807,5 @@ module.exports = {
   base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
   readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
-  ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
+  ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

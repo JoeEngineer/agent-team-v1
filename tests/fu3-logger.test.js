@@ -91,6 +91,24 @@ test('G20: flags= is logged as an array on spawn, resume and Codex lines; no key
   eq(context(s), '', 'known flags: no warning');
 });
 
+test('G20: flags= with an empty value logs no field, a trailing comma drops the empty item, duplicates count once in first-seen order', () => {
+  const p = tmpProject();
+  const flagsOf = (n) => readLog(p, 'delegations.jsonl')[n].task;
+  spawnAgent(p, impl + ' flags=', 1);
+  spawnAgent(p, impl.replace('F-1', 'F-2') + ' flags=above-table,', 2);
+  spawnAgent(p, impl.replace('F-1', 'F-3') + ' flags=security-sensitive,above-table,security-sensitive,above-table', 3);
+  const r = spawnAgent(p, impl.replace('F-1', 'F-4') + ' flags=bogus,bogus,above-table', 4);
+  eq(readLog(p, 'delegations.jsonl').length, 4, 'precondition: all four cards were logged');
+  eq(flagsOf(0).id, 'F-1', 'precondition: the empty-value card reached the line');
+  assert(!('flags' in flagsOf(0)), 'flags= : no field');
+  eq(JSON.stringify(flagsOf(1).flags), '["above-table"]', 'trailing comma');
+  eq(JSON.stringify(flagsOf(2).flags), '["security-sensitive","above-table"]', 'duplicates, first-seen order');
+  eq(JSON.stringify(flagsOf(3).flags), '["bogus","above-table"]', 'duplicate unknown flag');
+  const msg = context(r).split('\n').filter((l) => /unknown flags/.test(l));
+  eq(msg.length, 1, 'one warning');
+  assert(/unknown flags=bogus(?![,\w])/.test(msg[0]), 'the repeated unknown flag is named once: ' + msg[0]);
+});
+
 test('G20: an unknown flag is kept and draws one warning', () => {
   const p = tmpProject();
   const r = spawnAgent(p, impl + ' flags=security-sensitive,bogus');
@@ -151,7 +169,38 @@ test('verdict conflict: on the bridge path the Director gets the message and the
     tool_input: { prompt: 'TASK id=B-1 type=review milestone=m attempt=1 pr=9' }, tool_response: text }, p, env);
   const r = bridge(block('reject', 'none'), 1);
   eq(readLog(p, 'reviews.jsonl')[0].verdict_conflict, true, 'precondition: conflict on the row');
-  assert(/give a `major` with its exploit path, or an `approve`/.test(context(r)), r.stdout);
+  assert(/ask it for a `major` with its exploit path, or an `approve`/.test(context(r)), r.stdout);
+  assert(/the bridge review's verdict contradicts its severity/.test(context(r)), 'Director-facing wording: ' + context(r));
+  assert(!/your review-json/.test(context(r)), 'not the reviewer wording: ' + context(r));
   const ok = bridge(block('approve', 'none'), 2);
   eq(context(ok), '', 'consistent: quiet');
+});
+
+test('bridge path: an unknown flag on the card draws the warning in the emitted context; known flags are quiet', () => {
+  const p = tmpProject();
+  const bridge = (card, n) => run('log-delegation.js', { hook_event_name: 'PostToolUse', session_id: 's', tool_name: 'mcp__codex-bridge__codex', tool_use_id: `tf${n}`,
+    tool_input: { prompt: card }, tool_response: 'done' }, p, env);
+  const r = bridge('TASK id=B-2 type=implement difficulty=medium milestone=m attempt=1 flags=security-sensitive,bogus', 1);
+  eq(JSON.stringify(readLog(p, 'delegations.jsonl')[0].task.flags), '["security-sensitive","bogus"]', 'precondition: flags reached the line');
+  assert(/unknown flags=bogus/.test(context(r)) && !/unknown flags=security/.test(context(r)), r.stdout);
+  const ok = bridge('TASK id=B-3 type=implement difficulty=medium milestone=m attempt=1 flags=security-sensitive', 2);
+  eq(readLog(p, 'delegations.jsonl').length, 2, 'precondition: the second card was logged');
+  eq(context(ok), '', 'known flag: quiet');
+});
+
+test('SubagentStop: a fenceless report gets only the missing-block nudge; a conflicting block only the conflict nudge, once per turn', () => {
+  const p = tmpProject();
+  const none = stopWith(p, 'pn1', 'finished, no block here');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'precondition: no review block, so no review row');
+  assert(/ended without its `review-json` block/.test(context(none)) && !/contradicts/.test(context(none)), none.stdout);
+  // The block has no head_sha and a conflicting verdict: it is a block, so the conflict nudge alone is sent.
+  const bare = JSON.stringify({ verdict: 'changes_requested', severity: 'none', issues: [], summary: 's' });
+  const conflict = stopWith(p, 'pn2', '```review-json\n' + bare + '\n```');
+  eq(readLog(p, 'reviews.jsonl')[0].verdict_conflict, true, 'precondition: the conflict was detected');
+  assert(!('head_sha' in readLog(p, 'reviews.jsonl')[0]), 'precondition: the block has no head_sha');
+  const ctx = context(conflict);
+  assert(/contradicts its severity/.test(ctx) && !/ended without/.test(ctx), ctx);
+  eq(ctx.split('agent-team:').length - 1, 1, 'exactly one nudge in the turn');
+  const again = stopWith(p, 'pn2', '```review-json\n' + bare + '\n```', { stop_hook_active: true });
+  eq(again.stdout, '', 'stop_hook_active: no second nudge');
 });

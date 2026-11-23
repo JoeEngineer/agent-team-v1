@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -207,7 +207,7 @@ function onPostBridge(input) {
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
   // No stop hook runs on the bridge path, so the Director gets the nudge.
-  const messages = [...flagMessages(task), ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_NUDGE] : [])];
+  const messages = [...flagMessages(task), ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_DIRECTOR_NUDGE] : [])];
   return messages.length ? messages.join('\n') : undefined;
 }
 
@@ -401,6 +401,9 @@ function onSubagentStop(input) {
     return `agent-team: your reply ended without its \`${block}\` block. End your reply with your \`${block}\` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.`;
   }
   // A review whose verdict contradicts its severity gets one nudge per turn.
+  // The missing-block nudge above returns first, and the two can't both apply:
+  // a parsed review means the fence was there. So a turn draws at most one nudge,
+  // whatever else its review-json lacks (tests/fu3-logger.test.js pins this).
   if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && verdictConflict(record.review)) {
     return VERDICT_CONFLICT_NUDGE;
   }
