@@ -73,7 +73,7 @@ If the names are already recorded, skip `--names`. Detail: the team-init skill, 
 When a reviewer approves with minor findings, decide before merging. An `approve` still means "may merge as is": folding in is a cost choice, not a new gate.
 
 - **Fold in** a finding that has exact replacement text, or that touches only this PR's own files and needs no design choice. Missing tests for this PR's own code, in its own test files, count too. Send it to the same implementer (`SendMessage`, warm context) with a TASK line for the same `id`, `attempt` incremented, `reason=fold-in`. Then send the reviewer the incremental diff only (`git diff <reviewed-sha>..HEAD`) and act on that review.
-- **Batch** docs-wording findings into the milestone's next docs task, if there is one.
+- **Batch** docs-wording findings into the milestone's next docs task, if there is one. Wording only: never a test, an anchor or a role-file rule. One fold-in round per PR; a minor found later becomes a `STATUS.md` follow-up.
 - **Follow-up task** only for findings that need real work: a behaviour change, or another area of the code.
 
 ## Closing the milestone
@@ -84,9 +84,11 @@ In this order:
 2. Open the milestone → `main` PR. Its body ends with one `Closes #N` line per issue: the milestone issue and every task issue, follow-up tasks included, but not work that was dropped or moved to a later milestone. (A task PR's own `Closes` does nothing: issues close only on a merge into the default branch.) List them with `gh issue list --label agent-team --state open` and check against `STATUS.md`.
 3. The final `reviewer` pass runs on that PR (milestone branch vs. `main`) and waits for its CI.
 4. The security review runs on the same PR, in every milestone: a separate `security-reviewer` pass, not part of step 3, routed by `routing.md`. If the user asked for the second review at intake, start it in parallel (`routing.md`, "Local-only routes").
-5. Archive the logs: `node "<plugin root>/scripts/archive-logs.js" <slug>` (the milestone slug: letters, digits, `.`, `_`, `-`). Tell the user the destination it prints. Exit 1 means there were no logs: say so and carry on. Add `--clear` only if the user says so.
+5. Archive the logs: `node "<plugin root>/scripts/archive-logs.js" <slug>` (the milestone slug: letters, digits, `.`, `_`, `-`). Tell the user the destination. Exit 1 means there were no logs: say so and carry on. Add `--clear` only if the user says so.
 6. Check CI once: `node "<plugin root>/scripts/ci-wait.js" <milestone PR> --once`. It may share the archive call.
 7. Report "complete" only on green, with no blocking security result ("Security results" below). With no CI (exit 3) and a final review of `ci: none` with `tests_passed: true`, rerun with `--sha <head_sha> --allow-none` and report complete with "no CI" stated. Otherwise report "PR open, CI <red, pending or unknown> at <sha>". On pending, Claude waits in the background (`ci-wait.js <milestone PR> --timeout 1800`) and reports again; Codex reports it as pending.
+
+Report a head both close reviewers approved, or one where `node "<plugin root>/scripts/status.js" --check --since <that sha>` exits 0 (only `STATUS.md` changed since). CI on it is still required. Minors from the close reviews go to `STATUS.md` follow-ups unless the user asks otherwise.
 
 Then hand the PR to the user. You don't merge it.
 
