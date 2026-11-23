@@ -1,10 +1,10 @@
 # Routing table
 
-**Guidance version:** `version` in the plugin's `.claude-plugin/plugin.json`. Bump it whenever this file changes, so the logs can tell before from after. Change this file only through a PR against the plugin repo; that is how the Coach proposes changes.
+**Guidance version:** `version` in the plugin's `.claude-plugin/plugin.json`. Bump it whenever this file changes. Change this file only through a PR against the plugin repo.
 
 ## Starting tier
 
-Plugin agents are addressed as `agent-team:<name>` (`subagent_type: "agent-team:implementer"`). **Pass `model` and `effort` from this table on every spawn**, even when they match the agent file's defaults: the card's `tier=` and `WHY` are not applied by themselves. Get the model with `node "<plugin root>/scripts/models.js" resolve <tier> --tool <t>`.
+Plugin agents are addressed as `agent-team:<name>` (`subagent_type: "agent-team:implementer"`). **Pass `model` and `effort` from this table on every spawn**, even when they match the agent file's defaults. Get the model with `node "<plugin root>/scripts/models.js" resolve <tier> --tool <t>`.
 
 | Task type | Difficulty | Agent | Tier | Effort | Vehicle |
 |---|---|---|---|---|---|
@@ -54,7 +54,7 @@ The table and ladder name tiers (small, medium, large, xlarge). Each tier maps t
 
 ## The xlarge grant
 
-The user grants xlarge to some roles, or none, at each milestone's intake (`<plugin root>/skills/milestone/SKILL.md`). The grant is what `node "<plugin root>/scripts/status.js" grant --milestone <slug>` prints. Take `<slug>` from your own milestone (its branch, `milestone/<slug>`), not from `STATUS.md`. Run it after a compaction and before a granted spawn. A non-zero exit: use the `grant` it prints (none if none), and ask the user.
+The user grants xlarge to some roles, or none, at each milestone's intake. The grant is what `node "<plugin root>/scripts/status.js" grant --milestone <slug>` prints. Take `<slug>` from your own milestone (its branch, `milestone/<slug>`), not from `STATUS.md`. Run it after a compaction and before a granted spawn. A non-zero exit: use the `grant` it prints (none if none), and ask the user.
 
 | Role | Default | With the grant |
 |---|---|---|
@@ -65,6 +65,7 @@ The user grants xlarge to some roles, or none, at each milestone's intake (`<plu
 | hard-fix escalation, after a second failure at large/high | ask the user | xlarge / high |
 
 - The grant covers the granted roles in this milestone only.
+- **Security rows.** `grant` prints `security-review-close` for the close row ("close security review") and adds `security-review-task` for the flagged task PR row ("all security reviews").
 - **Runway.** Check runway before each granted xlarge spawn. If it is short, ask the user whether to wait or to run the default row; never fall back silently. When they pick the default row, log `tier_fallback` with `"reason":"runway"`. If runway can't be checked, say so on the `WHY` line and go ahead.
 
 ## Local-only routes (optional)

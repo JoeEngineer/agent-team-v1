@@ -138,36 +138,18 @@ function withStub(name, make, args) {
 const eperm = () => Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
 const noTemp = (label) => assert(!fs.readdirSync(DIR).some((x) => x.includes('.tmp-')), `${label}: temp file left behind`);
 
-test('set reads the file back: a corrupted write is detected and the original restored', () => {
+test('set reads the file back: a corrupted write is detected, exits 11 and is not rolled back', () => {
   const f = fixture(FIXTURE);
   const real = fs.writeFileSync;
   let hits = 0;
   fs.writeFileSync = (p, data, ...rest) => real(p, hits++ === 0 ? `X${data}` : data, ...rest);
   let r;
   try { r = withStub('renameSync', (rn) => rn, ['set', 'T-1', '--state', 'merged', '--file', f]); } finally { fs.writeFileSync = real; }
-  eq(hits, 2, 'a write was made, then the restore');
+  eq(hits, 1, 'one write; no restore write follows');
   eq(r.code, 11, 'exit');
-  assert(r.json.reason.includes('the original was restored'), r.out);
-  eq(fs.readFileSync(f, 'utf8'), FIXTURE, 'original restored');
+  assert(r.json.reason.includes('NOT restored') && r.json.reason.includes(f), r.out);
+  assert(fs.readFileSync(f, 'utf8').startsWith('X'), 'the file is left as found, and the reason names it');
   noTemp('read-back');
-});
-
-test('set reports the original as NOT restored when the restore itself fails', () => {
-  const f = fixture(FIXTURE);
-  const real = fs.writeFileSync;
-  let writes = 0;
-  let renames = 0;
-  fs.writeFileSync = (p, data, ...rest) => real(p, writes++ === 0 ? `X${data}` : data, ...rest);
-  let r;
-  try {
-    r = withStub('renameSync', (rn) => (a, b) => { if (++renames === 2) { assert(fs.existsSync(a), 'the restore temp file exists when the rename fails'); throw eperm(); } return rn(a, b); }, ['set', 'T-1', '--state', 'merged', '--file', f]);
-  } finally { fs.writeFileSync = real; }
-  eq(writes, 2, 'precondition: the first write and the restore were both made');
-  eq(renames, 2, 'precondition: the restore rename was reached');
-  eq(r.code, 11, 'exit');
-  assert(r.json.reason.includes('could NOT be restored') && !r.json.reason.includes('was restored'), r.out);
-  assert(fs.readFileSync(f, 'utf8').startsWith('X'), 'the corrupted file is what is left, and the reason says so');
-  noTemp('failed restore');
 });
 
 test('a failing rename (a read-only or locked file) exits 11, leaves the file byte-identical and no temp file', () => {
@@ -362,25 +344,26 @@ test('set creates the temp file exclusively: a file or symlink already at that p
   } finally { crypto.randomBytes = realRandom; }
 });
 
-test('set does not roll back over an edit made by someone else after the read-back', () => {
+// Decision 0029: the file is restored never, because a read-back that differs may be another
+// writer's edit. Before, an edit that landed between the rename and the read-back was read back,
+// found unchanged on the second read, and overwritten with the original.
+test('set does not roll back over an edit made by someone else between the rename and the read-back', () => {
   const f = fixture(FIXTURE);
   const real = fs.writeFileSync;
   const realRead = fs.readFileSync;
   let reads = 0;
   let tampered = false;
-  // The first write is corrupted so the read-back fails; right after that read-back, another writer edits the file.
-  fs.writeFileSync = (p, data, ...rest) => real(p, `X${data}`, ...rest);
   fs.readFileSync = (p, ...rest) => {
-    const out = realRead(p, ...rest);
+    // Read 1 is the original; read 2 is the read-back. The other writer gets in just before it.
     if (path.resolve(String(p)) === path.resolve(f) && ++reads === 2) { real(f, 'SOMEONE ELSE EDITED\n'); tampered = true; }
-    return out;
+    return realRead(p, ...rest);
   };
   let r;
-  try { status.main(['set', 'T-1', '--state', 'merged', '--file', f], { out: (l) => { r = l; } }); } finally { fs.writeFileSync = real; fs.readFileSync = realRead; }
-  assert(tampered, 'precondition: the other writer edited after the read-back');
+  try { status.main(['set', 'T-1', '--state', 'merged', '--file', f], { out: (l) => { r = l; } }); } finally { fs.readFileSync = realRead; }
+  assert(tampered, 'precondition: the other writer edited before the read-back');
   const j = JSON.parse(r);
   eq(j.code, 11, r);
-  assert(j.reason.includes('changed by someone else') && j.reason.includes('NOT restored'), r);
+  assert(j.reason.includes('edit by someone else') && j.reason.includes('NOT restored'), r);
   eq(fs.readFileSync(f, 'utf8'), 'SOMEONE ELSE EDITED\n', 'the other edit is left in place');
   noTemp('rollback');
 });
@@ -678,7 +661,10 @@ const NOTHING = { roles: [], second_review: 'none' };
 // This repo's STATUS.md, read by the test itself and not through status.js, so the expectations
 // follow the file from milestone to milestone and a parse regression in status.js still shows.
 const SAMPLE_ROLES = 'security reviews, architect, hard-fix escalation (a note that repeats security reviews and coach at close; the close review stays xlarge/high)';
-const SAMPLE_ROLE_NAMES = ['architect', 'hard-fix', 'security-review'];
+const BOTH_SEC = ['security-review-close', 'security-review-task'];
+const SAMPLE_ROLE_NAMES = ['architect', 'hard-fix', ...BOTH_SEC];
+const WIDE = ['architect', 'coach', 'hard-fix', ...BOTH_SEC];
+const WIDE_WORDS = 'all security reviews, architect, coach (run for this milestone), hard-fix escalation';
 const LIVE_STATUS = path.join(ROOT, 'STATUS.md');
 const LIVE_TEXT = fs.existsSync(LIVE_STATUS) ? fs.readFileSync(LIVE_STATUS, 'utf8') : null;
 function liveGrant(text) {
@@ -707,11 +693,11 @@ function liveGrant(text) {
     return s.replace(/\s+/g, ' ').trim().replace(/\.$/, '').trim().toLowerCase();
   };
   const unset = (v) => v === null || /^<[^>]*>$/.test(v);
-  const ROLE = { 'security reviews': 'security-review', 'architect': 'architect', 'coach at close': 'coach', 'coach': 'coach', 'hard-fix escalation': 'hard-fix' };
+  const ROLE = { 'close security review': ['security-review-close'], 'all security reviews': BOTH_SEC, 'security reviews': BOTH_SEC, 'architect': ['architect'], 'coach at close': ['coach'], 'coach': ['coach'], 'hard-fix escalation': ['hard-fix'] };
   const SECOND = { 'no': 'none', 'not offered': 'none', 'large/high': 'large', 'xlarge/high': 'xlarge' };
   out.rolesRaw = field('granted roles');
   if (!unset(out.rolesRaw) && !['none', ''].includes(words(out.rolesRaw))) {
-    out.roles = words(out.rolesRaw).split(',').map((t) => ROLE[t.trim()] || `UNKNOWN ${t.trim()}`).sort();
+    out.roles = [...new Set(words(out.rolesRaw).split(',').flatMap((t) => ROLE[t.trim()] || [`UNKNOWN ${t.trim()}`]))].sort();
   }
   const second = field('second security review');
   if (!unset(second)) out.second = SECOND[words(second)] || `UNKNOWN ${words(second)}`;
@@ -746,7 +732,7 @@ test('grant: a role word only inside a parenthetical note is not granted', () =>
   // Control: the same word outside parentheses is a role the log lacks, so it is a mismatch.
   const w = grantIn(project(STATUS_DOC('m1', 'architect, security reviews', 'no'), log));
   eq(w.code, 16, `the role word outside the note is read: ${w.out}`);
-  deq(w.json.block.roles, ['architect', 'security-review'], 'block with the word outside the note');
+  deq(w.json.block.roles, ['architect', ...BOTH_SEC], 'block with the word outside the note');
   // A note must be parenthesised: a dash or semicolon note is read as role words and fails closed.
   for (const roles of ['architect - a note', 'architect — a note', 'architect; a note']) {
     eq(grantIn(project(STATUS_DOC('m1', roles, 'no'), log)).code, 17, `unparenthesised note "${roles}"`);
@@ -763,15 +749,24 @@ test('grant: every role label in the template and the milestone intake question 
   const fromTpl = labels(tplLine[1]);
   const fromQ = labels(qLine[1]);
   assert(fromTpl.length >= 4 && fromQ.length >= 4, `precondition: four or more labels each: ${fromTpl} | ${fromQ}`);
-  const all = [...new Set([...fromTpl, ...fromQ, 'coach at close'])];
+  assert(fromTpl.length >= 5 && fromQ.length >= 5, `precondition: five or more labels each: ${fromTpl} | ${fromQ}`);
+  // Both security words are offered in both places, and the older single word in neither.
+  const bare = (label) => label.replace(/\s*\(.*\)$/, '');
+  for (const [where, list] of [['template', fromTpl], ['intake question', fromQ]]) {
+    for (const word of ['close security review', 'all security reviews']) assert(list.map(bare).includes(word), `the ${where} offers "${word}": ${list}`);
+    assert(!list.map(bare).includes('security reviews'), `the ${where} no longer offers the older "security reviews": ${list}`);
+  }
+  const all = [...new Set([...fromTpl, ...fromQ, 'coach at close', 'security reviews'])];
   const names = new Set();
+  const want = { 'close security review': ['security-review-close'], 'all security reviews': BOTH_SEC, 'security reviews': BOTH_SEC };
   for (const label of all) {
     const r = grantIn(project(STATUS_DOC('m1', label, 'no'), `${intake('m1', [])}\n`));
     assert(r.code !== 17, `label "${label}" is not a known role: ${r.out}`);
-    assert(r.json.block.roles.length === 1, `label "${label}" gives one role: ${r.out}`);
-    names.add(r.json.block.roles[0]);
+    deq(r.json.block.roles.length, (want[bare(label)] || [0]).length, `label "${label}" gives one role, or the security rows it names: ${r.out}`);
+    if (want[bare(label)]) deq(r.json.block.roles, want[bare(label)], `label "${label}"`);
+    for (const role of r.json.block.roles) names.add(role);
   }
-  deq([...names].sort(), ['architect', 'coach', 'hard-fix', 'security-review'], 'every role is reachable from the labels');
+  deq([...names].sort(), ['architect', 'coach', 'hard-fix', ...BOTH_SEC], 'every role is reachable from the labels');
   // The 1.2.0 coach label is a full grant when the log agrees; an unknown word still fails closed.
   const ok = grantIn(project(STATUS_DOC('m1', 'architect, coach (run for this milestone)', 'no'), `${intake('m1', ['architect', 'coach'])}\n`));
   eq(ok.code, 0, ok.out);
@@ -828,9 +823,9 @@ test('grant: a role added to the block is not granted; exit 16 prints both and s
   const dir = project(STATUS_DOC('m1', 'security reviews, architect, coach at close', 'no'), `${intake('m1', ['security-review', 'architect'])}\n`);
   const r = grantIn(dir);
   eq(r.code, 16, r.out);
-  deq(r.json.block.roles, ['architect', 'coach', 'security-review'], 'block shown');
-  deq(r.json.log.roles, ['architect', 'security-review'], 'log shown');
-  deq(r.json.grant.roles, ['architect', 'security-review'], 'narrower');
+  deq(r.json.block.roles, ['architect', 'coach', ...BOTH_SEC], 'block shown');
+  deq(r.json.log.roles, ['architect', ...BOTH_SEC], 'log shown: the older log name reads as both security rows');
+  deq(r.json.grant.roles, ['architect', ...BOTH_SEC], 'narrower');
   assert(/use the narrower; ask the user/.test(r.json.reason), r.out);
 });
 
@@ -873,15 +868,42 @@ test('grant: an unknown role token or tier word in the block exits 17', () => {
   eq(grantIn(project(twice, log)).code, 17, 'roles line twice');
 });
 
-test('grant: a torn first log line that could be the intake line exits 19; one for another milestone is skipped', () => {
+test('grant: a line before the slug\'s first line that is not a JSON object exits 19, whatever it mentions', () => {
+  const doc = STATUS_DOC('m1', 'architect', 'no');
   const torn = '{"ts":"t","milestone":"m1","xlarge_grant":["archi';
-  let r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${torn}\n${intake('m1', ['architect'])}\n`));
+  let r = grantIn(project(doc, `${torn}\n${intake('m1', ['architect'])}\n`));
   eq(r.code, 19, `torn line mentioning the slug, a later line says the same: ${r.out}`);
-  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `{"ts":"t","milestone":"zz","xl\n${intake('m1', ['architect'])}\n`));
-  eq(r.code, 0, `torn line for another slug: ${r.out}`);
-  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['bogus'])}\n`));
+  // Residual b of decision 0026: torn before the slug ends, so the raw text does not name it.
+  // The later line is the forgery: it grants more than the line that was torn.
+  const wide = STATUS_DOC('cur', WIDE_WORDS, 'xlarge/high');
+  r = grantIn(project(wide, `{"milestone":"cu\n${intake('cur', WIDE, 'xlarge')}\n`), [], 'cur');
+  eq(r.code, 19, `torn before the slug ends: ${r.out}`);
+  eq(r.json.grant, undefined, 'no grant is printed');
+  assert(/line 1 of .*is not a JSON object/.test(r.json.reason), r.out);
+  const others = {
+    'torn in another slug (it could have gone on to repeat the key)': '{"ts":"t","milestone":"zz","xl',
+    'torn before any key': '{',
+    'a JSON value that is not an object': '123',
+    'an array': '[{"milestone":"m1"}]',
+    'not JSON at all': 'hello',
+  };
+  for (const [label, line] of Object.entries(others)) {
+    r = grantIn(project(doc, `${line}\n${intake('m1', ['architect'])}\n`));
+    eq(r.code, 19, `${label}: ${r.out}`);
+  }
+  // A bad line after the slug's first line is refused too (decision 0029, amended): every line
+  // for the slug counts now, so a line that could have been one is never skipped.
+  r = grantIn(project(doc, `\n${intake('zz', ['coach'])}\n\n${intake('m1', ['architect'])}\n{"milestone":"m\n`));
+  eq(r.code, 19, `a torn line after the first line for the slug: ${r.out}`);
+  assert(/line 5 of .*is not a JSON object/.test(r.json.reason), r.out);
+  eq(r.json.grant, undefined, 'no grant is printed');
+  // Control: blank lines are not lines.
+  r = grantIn(project(doc, `\n${intake('zz', ['coach'])}\n\n${intake('m1', ['architect'])}\n\n`));
+  eq(r.code, 0, `blank lines around the lines: ${r.out}`);
+  deq(r.json.grant.roles, ['architect'], 'the line for the slug');
+  r = grantIn(project(doc, `${intake('m1', ['bogus'])}\n`));
   eq(r.code, 19, `bad role in the log: ${r.out}`);
-  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'], 'huge')}\n`));
+  r = grantIn(project(doc, `${intake('m1', ['architect'], 'huge')}\n`));
   eq(r.code, 19, `bad tier in the log: ${r.out}`);
 });
 
@@ -924,8 +946,6 @@ test('grant: two milestones in one log; --milestone picks the line', () => {
 
 // The reviewer's attack: STATUS.md is pointed at an earlier milestone whose first line granted more,
 // and that grant is copied into the block. The Director's own slug is "cur".
-const WIDE = ['architect', 'coach', 'hard-fix', 'security-review'];
-const WIDE_WORDS = 'security reviews, architect, coach (run for this milestone), hard-fix escalation';
 const SWAP_LOG = `${intake('old', WIDE, 'xlarge')}\n${intake('cur', [])}\n`;
 
 test('grant: a STATUS.md slug other than --milestone exits 20, prints both and grants nothing', () => {
@@ -982,13 +1002,23 @@ test('grant: two Current milestone headings or two bold slug lines exit 17, whic
   eq(one.code, 0, `one slug (a bold label inside a bullet is not a slug line): ${one.out}`);
 });
 
-test('grant: a later line for the same slug is ignored, whether it widens or narrows', () => {
+// Decision 0026 item 1 as amended by decision 0029: the first line wins among lines that agree.
+// A later line that grants something else used to be ignored; it now stops the grant, because the
+// line that came first cannot be told from the user's answer (tests/fu22-intake-line.test.js).
+test('grant: a later line for the same slug that grants something else exits 23, whether it widens or narrows', () => {
   const dir = project(STATUS_DOC('m1', 'architect, coach at close', 'xlarge/high'), `${intake('m1', ['architect'])}\n${intake('m1', ['architect', 'coach'], 'xlarge')}\n`);
   let r = grantIn(dir);
-  eq(r.code, 16, `the first line (architect, none) is the answer: ${r.out}`);
-  deq(r.json.grant, { roles: ['architect'], second_review: 'none' }, 'first line wins');
+  eq(r.code, 23, `a later widening line: ${r.out}`);
+  deq(r.json.grant, NOTHING, 'nothing is granted, not the first line and not the narrower');
+  eq(r.json.log, null, 'neither line is the log\'s answer');
+  deq(r.json.log_lines, [{ line: 1, roles: ['architect'], second_review: 'none' }, { line: 2, roles: ['architect', 'coach'], second_review: 'xlarge' }], 'both are listed');
   r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'])}\n${intake('m1', [])}\n`));
-  eq(r.code, 0, `a later narrowing line is ignored too: ${r.out}`);
+  eq(r.code, 23, `a later narrowing line: ${r.out}`);
+  deq(r.json.grant, NOTHING, 'nothing is granted');
+  // A later line that says the same is a repeat: the first line still holds.
+  r = grantIn(project(STATUS_DOC('m1', 'architect', 'no'), `${intake('m1', ['architect'])}\n${intake('m2', ['coach'])}\n${intake('m1', ['architect'])}\n`));
+  eq(r.code, 0, `a repeat of the first line: ${r.out}`);
+  deq(r.json.grant, { roles: ['architect'], second_review: 'none' }, 'the grant both lines state');
 });
 
 test('grant: CRLF in the log and the file, and a slug with regex metacharacters', () => {
@@ -1018,6 +1048,119 @@ test('grant: in a linked worktree it reads the main checkout logs', () => {
   const r = run(['grant', '--milestone', 'm1'], wt, { CLAUDE_PROJECT_DIR: wt });
   eq(r.code, 0, r.out);
   deq(r.json.grant.roles, ['architect'], 'read from the main checkout');
+});
+
+// ---- the two security words (decisions 0028 and 0029) ----
+
+test('grant: "close security review" and "all security reviews" print distinct roles', () => {
+  const CLOSE = ['security-review-close'];
+  const one = (words, logRoles) => grantIn(project(STATUS_DOC('m1', words, 'no'), `${intake('m1', logRoles)}\n`));
+  let r = one('close security review', CLOSE);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant.roles, CLOSE, 'the close word grants the close row only');
+  r = one('all security reviews', BOTH_SEC);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant.roles, BOTH_SEC, 'the all word grants both rows');
+  // A note cannot widen the close word: this is the note the coach-followups milestone relied on, turned round.
+  r = one('close security review (and flagged task PRs, all security reviews)', CLOSE);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant.roles, CLOSE, 'a note beside the close word grants nothing more');
+  // Both options ticked is the wider one.
+  r = one('close security review, all security reviews, architect', ['architect', ...BOTH_SEC]);
+  eq(r.code, 0, r.out);
+  deq(r.json.grant.roles, ['architect', ...BOTH_SEC], 'both words');
+});
+
+test('grant: the block cannot widen close-only to all, and the narrower of the two holds either way; exit 16', () => {
+  const CLOSE = ['security-review-close'];
+  // The attack the two words exist for: the user granted the close review, the block says all.
+  let r = grantIn(project(STATUS_DOC('m1', 'all security reviews', 'no'), `${intake('m1', CLOSE)}\n`));
+  eq(r.code, 16, r.out);
+  deq(r.json.block.roles, BOTH_SEC, 'block shown');
+  deq(r.json.log.roles, CLOSE, 'log shown');
+  deq(r.json.grant.roles, CLOSE, 'flagged task PRs are not granted');
+  r = grantIn(project(STATUS_DOC('m1', 'close security review', 'no'), `${intake('m1', BOTH_SEC)}\n`));
+  eq(r.code, 16, r.out);
+  deq(r.json.grant.roles, CLOSE, 'a narrowed block narrows');
+});
+
+test('grant: the older word "security reviews" and the older log name "security-review" still mean both rows', () => {
+  let r = grantIn(project(STATUS_DOC('m1', 'security reviews', 'no'), `${intake('m1', ['security-review'])}\n`));
+  eq(r.code, 0, `an untouched 1.1.0 project: ${r.out}`);
+  deq(r.json.grant.roles, BOTH_SEC, 'both rows, under the new names');
+  assert(!JSON.stringify(r.json).includes('"security-review"'), `the older name is never printed: ${r.out}`);
+  r = grantIn(project(STATUS_DOC('m1', 'security reviews', 'no'), `${intake('m1', BOTH_SEC)}\n`));
+  eq(r.code, 0, `older block, new log: ${r.out}`);
+  r = grantIn(project(STATUS_DOC('m1', 'close security review', 'no'), `${intake('m1', ['security-review'])}\n`));
+  eq(r.code, 16, `new close-only block, older log: ${r.out}`);
+  deq(r.json.grant.roles, ['security-review-close'], 'narrower');
+  // No intake answer grants task PRs without the close review; such a line is not an intake line.
+  r = grantIn(project(STATUS_DOC('m1', 'all security reviews', 'no'), `${intake('m1', ['security-review-task'])}\n`));
+  eq(r.code, 19, `task without close in the log: ${r.out}`);
+});
+
+// ---- where the log is read from (decision 0029, residual d) ----
+
+// Two repositories: "mine" grants architect, "other" grants everything. The block in mine is forged wide.
+function twoProjects() {
+  const mk = (name, logRoles) => {
+    const dir = path.join(DIR, `${name}${projN++}`);
+    fs.mkdirSync(dir);
+    g(dir, 'init', '-q', '-b', 'main');
+    fs.writeFileSync(path.join(dir, 'STATUS.md'), STATUS_DOC('m1', WIDE_WORDS, 'no'));
+    g(dir, 'add', 'STATUS.md');
+    g(dir, 'commit', '-q', '-m', 'x');
+    fs.mkdirSync(path.join(dir, '.agent-team', 'logs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.agent-team', 'logs', 'milestones.jsonl'), `${intake('m1', logRoles)}\n`);
+    return dir;
+  };
+  return { mine: mk('mine', ['architect']), other: mk('other', WIDE) };
+}
+
+test('grant: GIT_DIR and GIT_WORK_TREE in the caller env do not move the log it reads', () => {
+  const { mine, other } = twoProjects();
+  const env = { GIT_DIR: path.join(other, '.git'), GIT_WORK_TREE: other };
+  const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: mine, encoding: 'utf8', env: { ...GIT_ENV, ...env } }).stdout.trim();
+  eq(fs.realpathSync.native(top), fs.realpathSync.native(other), 'precondition: plain git in mine follows GIT_DIR to other');
+  const pre = run(['grant', '--milestone', 'm1'], other);
+  eq(pre.code, 0, `precondition: other's own log backs the wide block: ${pre.out}`);
+  const r = run(['grant', '--milestone', 'm1'], mine, env);
+  eq(r.code, 16, `mine's log is read, and it grants less than the block: ${r.out}`);
+  deq(r.json.log.roles, ['architect'], 'the log of the cwd project');
+  deq(r.json.grant.roles, ['architect'], 'narrower');
+});
+
+test('grant: CLAUDE_PROJECT_DIR may agree with the cwd but cannot move the log; another project exits 22', () => {
+  const { mine, other } = twoProjects();
+  const r = run(['grant', '--milestone', 'm1'], mine, { CLAUDE_PROJECT_DIR: other });
+  eq(r.code, 22, r.out);
+  deq(r.json.grant, NOTHING, 'nothing granted');
+  assert(r.json.reason.includes('CLAUDE_PROJECT_DIR') && r.json.reason.includes('ask the user'), r.out);
+  // Agreeing values: the project itself, a folder inside it, and unset.
+  fs.mkdirSync(path.join(mine, 'sub'));
+  for (const [label, env, cwd] of [['same folder', { CLAUDE_PROJECT_DIR: mine }, mine], ['a subfolder of the project', { CLAUDE_PROJECT_DIR: path.join(mine, 'sub') }, mine], ['cwd in a subfolder', { CLAUDE_PROJECT_DIR: mine }, path.join(mine, 'sub')], ['unset', {}, mine]]) {
+    const ok = run(['grant', '--milestone', 'm1', '--file', path.join(mine, 'STATUS.md')], cwd, env);
+    eq(ok.code, 16, `${label}: mine's log is read: ${ok.out}`);
+    deq(ok.json.grant.roles, ['architect'], label);
+  }
+});
+
+test('--since: core.worktree naming another repository does not move the check', () => {
+  const a = repo();
+  const b = repo();
+  fs.appendFileSync(path.join(a.dir, 'a.txt'), 'x\n');
+  const code = commit(a.dir);
+  fs.appendFileSync(path.join(a.dir, 'STATUS.md'), 'y\n');
+  const stat = commit(a.dir);
+  g(a.dir, 'config', 'core.worktree', b.dir);
+  const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: b.dir, encoding: 'utf8', env: { ...GIT_ENV, GIT_DIR: path.join(a.dir, '.git') } }).stdout.trim();
+  eq(fs.realpathSync.native(top), fs.realpathSync.native(b.dir), 'precondition: a\'s top level is now b');
+  // Before, the check hopped to that top level and ran in b, where a's commits do not exist (exit 15).
+  let r = run(['--check', '--since', a.base, '--head', code], a.dir);
+  eq(r.code, 14, `a code change in a is still seen: ${r.out}`);
+  assert(/a\.txt/.test(r.json.reason), r.out);
+  r = run(['--check', '--since', code, '--head', stat], a.dir);
+  eq(r.code, 0, `a status-only change in a still passes: ${r.out}`);
 });
 
 test('grant and --since keep the usage rules', () => {

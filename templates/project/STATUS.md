@@ -21,7 +21,7 @@ Tasks flagged by the breakdown carry `security-sensitive` in the Title.
 
 Fill when the milestone starts (decision 0022).
 
-- Granted roles: <security reviews / architect / coach (run for this milestone) / hard-fix escalation, or none>
+- Granted roles: <close security review / all security reviews / architect / coach (run for this milestone) / hard-fix escalation, or none>
 - xlarge model and note per tool: <Claude: model, note · Codex: model, note>
 - Map source: <default / user / env>
 - Second security review: <no / large/high / xlarge/high / not offered>

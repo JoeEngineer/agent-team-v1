@@ -28,6 +28,7 @@ const SCOUT = 'agents/scout.md';
 const COACH = 'agents/coach.md';
 const SECREV = 'agents/security-reviewer.md';
 const MERGE_TASK = 'scripts/merge-task.js';
+const LOG_EVENT = 'scripts/log-event.js';
 const MILESTONE = 'skills/milestone/SKILL.md';
 const COACH_SKILL = 'skills/coach/SKILL.md';
 
@@ -155,6 +156,12 @@ module.exports = [
   ['S-09', MERGE_TASK, /only the user merges into it/, 'A protected base is refused', 'merge-task'],
   ['S-10', MERGE_TASK, /milestone\/\* only/, 'A base outside milestone/* is refused', 'merge-task'],
 
+  // ---- Just-in-time: printed by log-event.js milestone when a slug's intake lines disagree ---
+  ['S-11', LOG_EVENT, /\(exit 23\) until the user removes \$\{list\} from that file by hand/, 'Intake lines that disagree: status.js grant grants nothing for the slug (exit 23) until the user removes the foreign line, named by its line number, by hand'],
+  ['S-12', LOG_EVENT, /<- foreign line: not the answer you logged/, 'Each line that is not the answer just logged is marked as a foreign line, by number and with what it grants'],
+  ['S-13', LOG_EVENT, /Use no grant for this milestone until then/, 'While the lines disagree the milestone uses no grant'],
+  ['S-14', LOG_EVENT, /do not remove a line yourself\. Then log your line again/, 'The user removes the line, never the Director; logging the line again with exit 0 is the all-clear'],
+
   // ---- Routing --------------------------------------------------------------
   ['R-01', ROUTING, /Pass `model` and `effort` from this table on every spawn/, 'model and effort are passed on every spawn', 'logger'],
   ['R-02', ROUTING, /\| review \| any \| reviewer \| medium \| high \| subagent \|/, 'The routing table (review row as the witness)'],
@@ -189,6 +196,7 @@ module.exports = [
   ['R-36', ROUTING, /coach \(run for this milestone\) \| large \/ high \| xlarge \/ medium/, 'Grant row: the Coach run for this milestone is large/high by default, xlarge/medium when granted'],
   ['R-37', ROUTING, /after a second failure at large\/high \| ask the user \| xlarge/, 'Grant row: after a second failure at large/high the default is to ask the user; xlarge/high when granted'],
   ['R-38', REVIEWER, /\*\*Security checklist\.\*\*/, 'Four-line security checklist before the CI wait: input validated at use, no secrets, CI pinned and least-privilege, dependencies needed and pinned; a security-sensitive diff the card did not flag is said in summary'],
+  ['R-47', ROUTING, /adds `security-review-task` for the flagged task PR row/, 'grant prints the two security rows as separate roles: the close word covers the close row only, the all word adds the flagged task PR row'],
   ['R-20', ROUTING, /in this milestone only/, 'The grant covers the granted roles in this milestone only (any other xlarge use: D-03)'],
   ['R-21', ROUTING, /grant --milestone <slug>` prints/, 'The grant is what status.js grant --milestone <slug> prints (a missing block, or a block the intake log does not back, is handled by the script)'],
   ['R-43', ROUTING, /from your own milestone \(its branch, `milestone\/<slug>`\), not from `STATUS\.md`/, 'The grant check takes the slug from the Director\'s own milestone branch, not from STATUS.md'],
@@ -261,7 +269,7 @@ module.exports = [
   ['X-22', CODEX, /`security-reviewer-<tier>`/, 'The Codex security reviewer is spawned as security-reviewer-<tier>'],
 
   // ---- Milestone and Coach skills (intake questions) ------------------------
-  ['MS-01', MILESTONE, /Use xlarge in this milestone for: security reviews/, 'The xlarge grant question, asked at intake'],
+  ['MS-01', MILESTONE, /for: close security review, all security reviews \(close and flagged task PRs\)/, 'The xlarge grant question, asked at intake, offers the close security review alone or all security reviews'],
   ['MS-02', MILESTONE, /before any delegation \(the breakdown included\)/, 'The intake questions come before any delegation'],
   ['MS-03', MILESTONE, /xlarge model for the current tool that is not disabled/, 'The grant question is asked when the current tool has an xlarge model that is not disabled'],
   ['MS-04', MILESTONE, /Choosing nothing is a valid answer/, 'Granting nothing is valid; every role then runs its default row'],
@@ -271,7 +279,16 @@ module.exports = [
   ['MS-08', MILESTONE, /under `## xlarge grant`/, 'The answers go into STATUS.md under ## xlarge grant'],
   ['MS-09', MILESTONE, /log-event\.js" milestone/, 'The answers are logged with log-event.js milestone'],
   ['MS-10', MILESTONE, /can start after the intake questions/, 'Research and breakdown delegations start after the intake questions'],
-  ['MS-11', MILESTONE, /`security-review` \("security reviews", which covers both security rows/, 'The log name security-review is the option "security reviews" and covers both security rows of the grant table'],
+  ['MS-11', MILESTONE, /`security-review-close` \("close security review": the milestone-close row/, 'The option "close security review" is logged as security-review-close and covers only the close row of the grant table'],
+  ['MS-14', MILESTONE, /and `security-review-task` together \("all security reviews": the close row and/, 'The option "all security reviews" is logged as both security-review-close and security-review-task and covers both security rows'],
+  ['MS-15', MILESTONE, /If yours is refused \(exit 1\), record no grant and read the message/, 'A refused intake milestone line: no grant is recorded and the message is read'],
+  ['MS-16', MILESTONE, /until the user removes the foreign line by hand/, 'Intake lines that disagree (a line was there before the Director\'s, from an agent or committed in the repository): the Director\'s line is written next to it and status.js grant grants nothing for the slug (exit 23) until the user removes the foreign line by hand'],
+  ['MS-19', MILESTONE, /The milestone must not use any grant until then/, 'While a slug\'s intake lines disagree, the milestone uses no grant'],
+  ['MS-20', MILESTONE, /never remove a line yourself\. Then log your line again: exit 0 is the only all-clear/, 'The user removes the foreign line, never the Director; the Director then logs its line again, and only exit 0 clears it'],
+  ['MS-21', MILESTONE, /Log the line for every milestone, also when nothing was asked or granted/, 'The intake line is logged for every milestone, also when nothing was asked or granted'],
+  ['MS-22', MILESTONE, /means the line was there before you logged it: tell the user/, 'An intake line already there at a first intake is reported to the user, even though it says the same'],
+  ['MS-17', MILESTONE, /fix your line and log it again\./, 'A rejected intake line (an unknown role or key) is fixed and logged again'],
+  ['MS-18', MILESTONE, /A damaged log, a log git tracks, or a foreign `CLAUDE_PROJECT_DIR`:\*\* ask the user/, 'A damaged log, a log that git tracks, or a foreign CLAUDE_PROJECT_DIR at intake goes to the user'],
   ['MS-12', MILESTONE, /`coach` \("coach \(run for this milestone\)"\) and `hard-fix` \("hard-fix escalation"\)/, 'The grant\'s log names (security-review, architect, coach, hard-fix) stand for the question\'s four options; the log name coach is unchanged by the label'],
   ['MS-13', MILESTONE, /architect, coach \(run for this milestone\), hard-fix escalation\?/, 'The intake question labels the coach option "coach (run for this milestone)", as the grant table and the STATUS template do'],
   ['CS-01', COACH_SKILL, /Run the Coach at xlarge\/medium this time\?/, 'A standalone Coach run asks about xlarge/medium when it is mapped and not disabled'],

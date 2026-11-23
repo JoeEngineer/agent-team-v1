@@ -12,7 +12,7 @@ Ask these at the start of intake, before any delegation (the breakdown included)
 
 1. **The xlarge grant.** Ask whenever the effective map has an xlarge model for the current tool that is not disabled. One multi-select question, showing each tool's xlarge model, its `note` and the map source, so the user can see whether the mapping is current:
 
-   > Use xlarge in this milestone for: security reviews (at close and on flagged task PRs), architect, coach (run for this milestone), hard-fix escalation?
+   > Use xlarge in this milestone for: close security review, all security reviews (close and flagged task PRs), architect, coach (run for this milestone), hard-fix escalation?
 
    Choosing nothing is a valid answer: every role then runs its default row. A user who never wants this question sets `enabled: false` on xlarge in `~/.agent-team/models.json`.
 
@@ -26,11 +26,19 @@ Write the answers into the project's `STATUS.md` under `## xlarge grant` (the gr
 
 ```
 node "<plugin root>/scripts/log-event.js" milestone - <<'EOF'
-{"milestone":"<slug>","xlarge_grant":["security-review","architect","coach","hard-fix"],"second_review":"none","map_source":"default"}
+{"milestone":"<slug>","xlarge_grant":["security-review-close","security-review-task","architect","coach","hard-fix"],"second_review":"none","map_source":"default"}
 EOF
 ```
 
-`xlarge_grant` lists only the granted roles (`[]` for none) by their log names, one per option of the question: `security-review` ("security reviews", which covers both security rows of the grant table: milestone close and flagged task PRs), `architect`, `coach` ("coach (run for this milestone)") and `hard-fix` ("hard-fix escalation"). The guidance uses these names too, as in "with `hard-fix` in the grant". `second_review` is `none`, `large` or `xlarge`; `map_source` is the `source` from `models.js show`. How the grant is used: the director skill's `references/routing.md`, "The xlarge grant".
+`xlarge_grant` lists only the granted roles (`[]` for none) by their log names: `security-review-close` ("close security review": the milestone-close row of the grant table only), `security-review-close` and `security-review-task` together ("all security reviews": the close row and the flagged task PR row), `architect`, `coach` ("coach (run for this milestone)") and `hard-fix` ("hard-fix escalation"). The guidance uses these names too, as in "with `hard-fix` in the grant". `second_review` is `none`, `large` or `xlarge`; `map_source` is the `source` from `models.js show`. Log the line for every milestone, also when nothing was asked or granted (`[]`, `none`): it is what `status.js grant` checks the block against.
+
+The logger keeps one answer per slug. If yours is refused (exit 1), record no grant and read the message:
+
+- **Lines that disagree.** The slug already had a line that grants something else, logged by an agent or committed in the repository. Your line is written next to it, and `status.js grant` grants nothing for the slug (exit 23) until the user removes the foreign line by hand. The milestone must not use any grant until then. Show the user the lines the message lists and ask them to remove the foreign one from `.agent-team/logs/milestones.jsonl`; never remove a line yourself. Then log your line again: exit 0 is the only all-clear.
+- **A rejected line** (an unknown role or key): fix your line and log it again.
+- **A damaged log, a log git tracks, or a foreign `CLAUDE_PROJECT_DIR`:** ask the user. The message says what they must repair, untrack or change.
+
+Exit 0 with "already has this intake line" at a first intake means the line was there before you logged it: tell the user. How the grant is used: the director skill's `references/routing.md`, "The xlarge grant".
 
 ## Then
 

@@ -173,7 +173,7 @@ test('labels: the coach row of the grant is "coach (run for this milestone)" in 
     assert(body.includes(label), `${name} lacks "${label}"`);
     assert(!/coach \(at milestone close\)|coach at close/.test(body), `${name} still has the old coach label`);
   }
-  assert(milestone.includes('"xlarge_grant":["security-review","architect","coach","hard-fix"]'), 'the logged role name is still coach');
+  assert(milestone.includes('"xlarge_grant":["security-review-close","security-review-task","architect","coach","hard-fix"]'), 'the logged role name is still coach');
 });
 
 test('task card: the reason row lists exactly the reasons the logger accepts, and the flags row the flags it knows', () => {

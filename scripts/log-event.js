@@ -24,6 +24,15 @@
 // note, escalation and merge lines get `milestone` from the linked task's delegation card when the JSON has none
 // (the task is the `task` or `task_id` field); a merge also takes it from a `base` of milestone/<name>.
 // merge: `command` is stored without leading `cd …` segments or absolute local paths.
+// milestone: the intake line of the xlarge grant (decisions 0026 and 0029). One answer per slug:
+//   a line `status.js grant` would not accept, or one with a key besides milestone, xlarge_grant,
+//   second_review and map_source, is refused and nothing is written. The same grant again writes
+//   nothing and exits 0. A grant that differs from a line the slug already has IS written, next
+//   to that line, and the exit is 1: the lines now disagree, so `status.js grant` grants nothing
+//   for the slug (exit 23) until the user removes the foreign line by hand. The message gives
+//   the line numbers. It goes to the project of the cwd; CLAUDE_PROJECT_DIR naming another
+//   project is refused, and so is a milestones.jsonl that git tracks (a checkout would put its
+//   committed lines back). Every refusal exits 1.
 // decision: a duplicate `id` is rejected; `model`/`effort` given as a family name, "unknown" or nothing
 //   are filled from the session's resolved settings (the text given is kept as model_given).
 // delegation: `kind` is subagent (default), resume or followup (scope added without a review verdict;
@@ -155,6 +164,84 @@ function duplicateDecision(data) {
     `${next ? ` The next free id is ${next}.` : ''} Nothing was written.`;
 }
 
+// The intake line of the xlarge grant, in the log `status.js grant` reads, found and read the way
+// grant does it. Exit 0 only when the log holds this answer for the slug and no other.
+// Returns the exit code.
+function logMilestone(data, session) {
+  const status = require('./status');
+  const bad = status.intakeProblem(data);
+  if (bad) {
+    console.error(`invalid milestone line: ${bad}. Nothing was written.`);
+    return 1;
+  }
+  const cwd = process.cwd();
+  const foreign = lib.foreignProjectDir(cwd);
+  if (foreign) {
+    console.error(`CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${foreign.root}); the intake line would land where \`status.js grant\` does not read. Nothing was written. Run from the project folder.`);
+    return 1;
+  }
+  const root = lib.grantLogRoot(cwd);
+  const tracked = status.trackedProblem(root);
+  if (tracked) {
+    console.error(`${tracked}. Nothing was written. Write no grant; ask the user.`);
+    return 1;
+  }
+  const file = path.join(root, status.LOG_REL);
+  const slug = data.milestone;
+  const read = () => {
+    try { return status.readLog(file, slug); } catch (err) {
+      if (!(err instanceof status.Refusal)) throw err;
+      console.error(`cannot tell whether "${slug}" already has an intake line: ${err.message}. Nothing more was written. Write no grant; ask the user.`);
+      return undefined;
+    }
+  };
+  const want = { roles: new Set(data.xlarge_grant), second: data.second_review };
+  const mine = (l) => status.sameGrant(l, want);
+  lib.checkLogFile(file);
+  let log = read();
+  if (log === undefined) return 1;
+  // The log must hold this answer: append it unless a line for the slug already says the same.
+  // A line that says something else does not stop the append. It used to, and then the other
+  // line stayed the only one, and `grant` read it as the answer from then on.
+  let written = null;
+  if (!log || !log.all.some(mine)) {
+    // A session id read from the marker file (no CLAUDE_CODE_SESSION_ID) is whatever that file
+    // holds; only a string goes into the line (see status.intakeProblem on nested values).
+    const sid = typeof session.session_id === 'string' ? session.session_id : null;
+    written = JSON.stringify({ ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data, ...session, session_id: sid });
+    // A hand edit can leave the last line without its newline; this one must not join it.
+    let tail = '\n';
+    try { tail = fs.readFileSync(file, 'utf8').slice(-1) || '\n'; } catch { /* no file yet */ }
+    lib.safeAppend(file, `${tail === '\n' ? '' : '\n'}${written}\n`);
+    // No lock: two writers can both find no line and both append. Each append is atomic and both
+    // lines stay, so the second read shows whether they agree.
+    log = read();
+    if (log === undefined) return 1;
+    if (!log || !log.all.some((l) => l.line === written)) {
+      console.error(`the intake line for "${slug}" was appended, but ${file} does not hold it now: the file was changed while this ran. Write no grant; ask the user.`);
+      return 1;
+    }
+  }
+  // Exit 0 says: every line for the slug grants what this call was given.
+  if (log.agree && mine(log)) {
+    console.log(written ? 'logged milestone to .agent-team/logs/milestones.jsonl' : `milestone "${slug}" already has this intake line (line ${log.n} of .agent-team/logs/milestones.jsonl); nothing written`);
+    return 0;
+  }
+  // Lines for the slug that disagree. Only line numbers and the fields readLog checked are
+  // printed, never text from the file.
+  const shown = (l) => `roles ${[...l.roles].sort().join(', ') || 'none'}; second review ${l.second}`;
+  const own = log.all.find((l) => (written ? l.line === written : mine(l)));
+  const others = log.all.filter((l) => !mine(l)).map((l) => l.n);
+  const list = others.length > 1 ? `lines ${others.slice(0, -1).join(', ')} and ${others[others.length - 1]}` : `line ${others[0]}`;
+  console.error([
+    `milestone "${slug}": the intake lines in ${file} disagree.`,
+    ...log.all.map((l) => `  line ${l.n}: ${shown(l)}${l === own ? ` <- yours (${written ? 'just written' : 'already there'})` : mine(l) ? '' : ' <- foreign line: not the answer you logged'}`),
+    `\`status.js grant\` grants nothing for "${slug}" (exit 23) until the user removes ${list} from that file by hand. Use no grant for this milestone until then.`,
+    'Show the user these lines and ask them to remove every one that is not their intake answer; do not remove a line yourself. Then log your line again: exit 0 means the log is settled.',
+  ].join('\n'));
+  return 1;
+}
+
 function main(argv) {
   const [kind, ...args] = argv;
   if (!KINDS.has(kind)) {
@@ -186,6 +273,7 @@ function main(argv) {
   }
 
   const session = sessionFields();
+  if (kind === 'milestone') return logMilestone(data, session);
   if (kind === 'delegation' || kind === 'review') {
     const { card, why, ...rest } = data;
     const task = { ...(rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };

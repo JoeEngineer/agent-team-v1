@@ -12,15 +12,16 @@
 // `--state` writes the bare state; `--note` appends ": <note>" to it.
 // It writes through a temp file and a rename, keeps the file's line endings
 // and the file's mode, refuses a symlink (a rename would replace the link; pass
-// the real path), reads the file back and confirms that at most the one row
-// line differs. A failed write or rename leaves the file as it was and no temp
-// file behind.
+// the real path), checks before it writes that at most the one row line differs,
+// and reads the file back. A failed write or rename leaves the file as it was and
+// no temp file behind. A read-back that is not what this run wrote exits 11 and is
+// NOT rolled back: the difference may be someone else's edit (decision 0029).
 // `--file` defaults to STATUS.md in the cwd. One JSON line is printed.
 //
 // Exit codes: 0 ok   2 bad arguments   3 line 1 is not "# Status"
 //   4 no Tasks table (or a column is missing)   5 row missing   6 ID appears twice
 //   7 state not in the file's States: legend   8 a value has "|" or a newline
-//   9 --check found problems   10 file unreadable   11 write or read-back failed
+//   9 --check found problems   10 file unreadable   11 write or read-back failed (no rollback)
 //   12 a row under "## Tasks" is malformed (wrong cell count; run --check)
 //   13 the file is a symlink (set only)
 //   14 --since: the head differs from <sha> in more than an unchanged-mode edit of STATUS.md,
@@ -30,10 +31,16 @@
 //   17 grant: STATUS.md is unreadable for the grant (unknown role or tier word, a repeated line,
 //      two "## xlarge grant" or "## Current milestone" headings, two bold slug lines)
 //   18 grant: the block grants something and the log has no line for the milestone
-//   19 grant: the log is unreadable, or its first line for the milestone is torn, has bad fields,
-//      or names the slug in its raw text but parses to another milestone (a repeated key)
+//   19 grant: the log is unreadable: a line anywhere in it is not a JSON object (it could have
+//      been an intake line for the milestone), or a line for the milestone has bad fields, or a
+//      line names the slug in its raw text but parses to another milestone (a repeated key)
 //   20 grant: the slug under "## Current milestone" is not the --milestone slug
 //   21 set: the temp file path already exists (a file or a symlink); nothing was written or followed
+//   22 grant: CLAUDE_PROJECT_DIR names a different project from the cwd's; nothing is granted
+//   23 grant: the log holds lines for the milestone that grant different things; nothing is
+//      granted until the user removes the ones that are not their intake answer
+//   24 grant: git tracks the log, so a checkout can put its committed lines back; nothing is
+//      granted until the user untracks it
 //
 // `--check --since <sha>` decides whether the head (default HEAD) differs from the
 // reviewed commit <sha> only in STATUS.md: `git diff --no-renames --ignore-submodules=none
@@ -49,15 +56,24 @@
 // block of STATUS.md and the FIRST line for the milestone in .agent-team/logs/milestones.jsonl
 // (the main checkout's logs when run in a git worktree), and the lower of the two
 // second-review tiers. First line wins because the intake answer is fixed for the
-// milestone (decision 0026). --milestone is required and is the Director's own slug; the
+// milestone (decision 0026), as long as every line for the milestone says the same. Lines
+// that grant different things exit 23 and grant nothing: a line that was in the log before
+// the Director's own cannot be told from the intake answer, so the user removes the foreign
+// one by hand (decision 0029, amended). A log that git tracks exits 24 and grants nothing: a
+// checkout would put its committed lines back. --milestone is required and is the Director's own slug; the
 // file under check never picks it. A different slug under "## Current milestone" exits 20
-// (the template's "<slug>" counts as none). An agent that can rewrite milestones.jsonl is
-// not stopped.
+// (the template's "<slug>" counts as none). An agent that can rewrite milestones.jsonl, or
+// the repository's .git, is not stopped (decisions 0026 and 0029).
+// The security rows are two roles: "close security review" grants security-review-close;
+// "all security reviews" (and the older "security reviews") grants that and
+// security-review-task. An older log line's "security-review" reads as both.
 // A free-text note after the roles must be in parentheses: "architect (a note)" is read,
 // "architect - a note" (or with an em dash) and "architect; a note" exit 17 (unknown role),
 // which fails closed.
 // `grant --file <other>` reads the block from <other> but still reads the log from the
-// logRoot of the cwd (CLAUDE_PROJECT_DIR when set), not from the project that holds <other>.
+// project of the cwd, not from the project that holds <other>. The project is found from
+// the cwd with no GIT_* variable in git's environment. CLAUDE_PROJECT_DIR cannot move it:
+// when it is set and names another project, grant exits 22.
 'use strict';
 
 const fs = require('fs');
@@ -66,7 +82,7 @@ const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 const lib = require('./lib');
 
-const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13, notStatusOnly: 14, git: 15, differ: 16, block: 17, noLog: 18, badLog: 19, slug: 20, tmpExists: 21 };
+const EXIT = { ok: 0, usage: 2, header: 3, table: 4, missing: 5, duplicate: 6, state: 7, value: 8, check: 9, io: 10, verify: 11, malformed: 12, link: 13, notStatusOnly: 14, git: 15, differ: 16, block: 17, noLog: 18, badLog: 19, slug: 20, tmpExists: 21, env: 22, conflict: 23, tracked: 24 };
 
 class Refusal extends Error {
   constructor(code, msg) { super(msg); this.code = code; }
@@ -233,11 +249,11 @@ function git(cwd, args) {
 const gitMsg = (e) => String((e.stderr && e.stderr.toString().trim()) || e.message).split('\n')[0];
 
 // Returns { status_only, reason?, code }. `since` and `head` are full SHAs already validated.
-function statusOnly(callerCwd, since, head) {
+function statusOnly(cwd, since, head) {
   const fail = (reason, code = EXIT.notStatusOnly) => ({ status_only: false, reason, code });
-  // Run at the top level: a diff from a subdirectory (with diff.relative set) lists only that subtree.
-  let cwd;
-  try { cwd = git(callerCwd, ['rev-parse', '--show-toplevel']).trim(); } catch (e) { return fail(`git cannot find the repository: ${gitMsg(e)}`, EXIT.git); }
+  // git runs at the caller's cwd. --no-relative below is what stops a subdirectory cwd (with
+  // diff.relative set) from hiding the rest of the tree. There is no hop to
+  // `rev-parse --show-toplevel`: that follows core.worktree, which can name another repository.
   try {
     for (const sha of [since, head]) git(cwd, ['cat-file', '-e', `${sha}^{commit}`]);
   } catch (e) { return fail(`git cannot find the commit: ${gitMsg(e)}`, EXIT.git); }
@@ -277,15 +293,27 @@ function statusOnly(callerCwd, since, head) {
 // ---- grant ----
 
 // The one place the question's words meet the log's names.
+// A word grants one or more log roles. The two security rows of the grant table in routing.md
+// are separate roles, so a grant can cover the close review alone (decisions 0028 and 0029).
+// Notes in parentheses are stripped before the lookup, so no word here relies on them.
+const SEC_CLOSE = 'security-review-close';
+const SEC_TASK = 'security-review-task';
 const ROLE_NAMES = {
-  'security reviews': 'security-review',
-  'architect': 'architect',
-  'coach at close': 'coach',
-  // 1.2.0 wording "coach (run for this milestone)"; the note stripper leaves the bare word.
-  'coach': 'coach',
-  'hard-fix escalation': 'hard-fix',
+  'close security review': [SEC_CLOSE],
+  'all security reviews': [SEC_CLOSE, SEC_TASK],
+  // The word before 1.2.0. It keeps its old meaning: both security rows.
+  'security reviews': [SEC_CLOSE, SEC_TASK],
+  'architect': ['architect'],
+  'coach at close': ['coach'],
+  // Deliberately the bare word: the 1.2.0 label is "coach (run for this milestone)", and the
+  // note stripper removes the parenthesis before the lookup. Do not "fix" this to the full label.
+  'coach': ['coach'],
+  'hard-fix escalation': ['hard-fix'],
 };
-const LOG_ROLES = new Set(Object.values(ROLE_NAMES));
+const LOG_ROLES = new Set(Object.values(ROLE_NAMES).flat());
+// A log line written before 1.2.0 names one role for both security rows.
+const OLD_LOG_ROLES = { 'security-review': [SEC_CLOSE, SEC_TASK] };
+const has = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 // Second security review: the template's words to the log's values, ordered narrow to wide.
 const SECOND_WORDS = { 'no': 'none', 'not offered': 'none', 'large/high': 'large', 'xlarge/high': 'xlarge' };
 const SECOND_ORDER = ['none', 'large', 'xlarge'];
@@ -327,8 +355,8 @@ function readBlock(text) {
     if (/[()]/.test(v)) throw new Refusal(EXIT.block, `unbalanced parenthesis in the roles line: ${rolesRaw}`);
     if (v !== 'none' && v !== '') {
       for (const tok of v.split(',').map((x) => x.trim())) {
-        if (!Object.prototype.hasOwnProperty.call(ROLE_NAMES, tok)) throw new Refusal(EXIT.block, `unknown role "${tok}" in the roles line (known: ${Object.keys(ROLE_NAMES).join(', ')}, none)`);
-        roles.add(ROLE_NAMES[tok]);
+        if (!has(ROLE_NAMES, tok)) throw new Refusal(EXIT.block, `unknown role "${tok}" in the roles line (known: ${Object.keys(ROLE_NAMES).join(', ')}, none)`);
+        for (const r of ROLE_NAMES[tok]) roles.add(r);
       }
     }
   }
@@ -371,33 +399,100 @@ function namesSlug(line, slug) {
   return false;
 }
 
-// The first line whose `milestone` equals the slug (string comparison), as { roles, second }, or null.
-// A line that does not parse but mentions the slug might have been that line: refuse then. So is a
-// line that parses to another milestone (or a non-string one) while its raw text names the slug,
-// as with a repeated "milestone" key, where JSON.parse keeps the last value.
+// Two readings of a grant say the same: the same roles and the same second review.
+const sameGrant = (x, y) => x.second === y.second && x.roles.size === y.roles.size && [...x.roles].every((r) => y.roles.has(r));
+
+// Every line whose `milestone` equals the slug (string comparison). Returns null when there is
+// none; else the first one as { roles, second, line, n }, with `all` (each of them, in file order)
+// and `agree` (they all grant the same roles and the same second review). The first line is the
+// intake answer only while `agree` holds; `grant` refuses the slug otherwise (decision 0029,
+// amended), because a line that got into the log ahead of the Director's cannot be told from the
+// user's answer. So the whole file is read and no line is skipped:
+// - a line that is not a JSON object might have been a line for the slug, whatever it mentions: a
+//   line torn before the slug ends ('{"milestone":"cu') names nothing, and any torn line could
+//   have gone on to name the slug (residual b). It is refused wherever it stands, since a line
+//   for the slug now counts wherever it stands;
+// - so is a line that parses to another milestone (or a non-string one) while its raw text names
+//   the slug, as with a repeated "milestone" key, where JSON.parse keeps the last value;
+// - so is a line for the slug whose fields `grant` cannot read.
+// The messages give line numbers and never text from the file: a line can be written to be read
+// by the Director.
 function readLog(file, slug) {
   let raw;
   try { raw = fs.readFileSync(file, 'utf8'); } catch (e) {
     if (e.code === 'ENOENT') return null;
     throw new Refusal(EXIT.badLog, `cannot read ${file}: ${e.code || e.message}`);
   }
-  for (const line of raw.split(/\r?\n/)) {
+  // A byte order mark is not part of line 1: an editor can add one when the user saves the file.
+  const lines = (raw.charCodeAt(0) === 0xFEFF ? raw.slice(1) : raw).split(/\r?\n/);
+  const all = [];
+  for (let n = 0; n < lines.length; n++) {
+    const line = lines[n];
     if (!line.trim()) continue;
     let o = null;
     try { o = JSON.parse(line); } catch { /* checked below */ }
     if (o === null || typeof o !== 'object' || Array.isArray(o)) {
-      if (line.includes(slug)) throw new Refusal(EXIT.badLog, `a line of ${file} that mentions "${slug}" is not valid JSON (torn?); cannot tell whether it is the intake line`);
-      continue;
+      throw new Refusal(EXIT.badLog, `line ${n + 1} of ${file} is not a JSON object (torn?); cannot tell whether it is an intake line for "${slug}". Ask the user to repair or remove that line`);
     }
     if (o.milestone !== slug) {
       const odd = o.milestone !== undefined && typeof o.milestone !== 'string' && line.includes(slug);
-      if (odd || namesSlug(line, slug)) throw new Refusal(EXIT.badLog, `a line of ${file} names "${slug}" as its milestone but parses to ${JSON.stringify(o.milestone)} (a repeated or non-string milestone key); cannot tell whether it is the intake line`);
+      if (odd || namesSlug(line, slug)) throw new Refusal(EXIT.badLog, `line ${n + 1} of ${file} names "${slug}" as its milestone but parses to another one (a repeated or non-string milestone key, or the key inside a nested value); cannot tell whether it is an intake line for "${slug}". Ask the user to repair or remove that line`);
       continue;
     }
-    if (!Array.isArray(o.xlarge_grant) || o.xlarge_grant.some((r) => typeof r !== 'string' || !LOG_ROLES.has(r))) throw new Refusal(EXIT.badLog, `the first line for "${slug}" has no valid xlarge_grant array of ${[...LOG_ROLES].join(', ')}`);
-    if (typeof o.second_review !== 'string' || !SECOND_ORDER.includes(o.second_review)) throw new Refusal(EXIT.badLog, `the first line for "${slug}" has no valid second_review (none, large, xlarge)`);
-    return { roles: new Set(o.xlarge_grant), second: o.second_review };
+    const where = `line ${n + 1} of ${file}, a line for "${slug}",`;
+    if (!Array.isArray(o.xlarge_grant) || o.xlarge_grant.some((r) => typeof r !== 'string' || !(LOG_ROLES.has(r) || has(OLD_LOG_ROLES, r)))) throw new Refusal(EXIT.badLog, `${where} has no valid xlarge_grant array of ${[...LOG_ROLES].join(', ')}`);
+    if (typeof o.second_review !== 'string' || !SECOND_ORDER.includes(o.second_review)) throw new Refusal(EXIT.badLog, `${where} has no valid second_review (none, large, xlarge)`);
+    const roles = new Set(o.xlarge_grant.flatMap((r) => (has(OLD_LOG_ROLES, r) ? OLD_LOG_ROLES[r] : [r])));
+    // No intake answer grants flagged task PRs without the close review.
+    if (roles.has(SEC_TASK) && !roles.has(SEC_CLOSE)) throw new Refusal(EXIT.badLog, `${where} grants ${SEC_TASK} without ${SEC_CLOSE}; no intake answer does`);
+    all.push({ roles, second: o.second_review, line, n: n + 1 });
   }
+  if (!all.length) return null;
+  return { ...all[0], all, agree: all.every((l) => sameGrant(l, all[0])) };
+}
+
+// The grant's log, relative to the project (lib.grantLogRoot).
+const LOG_REL = path.join('.agent-team', 'logs', 'milestones.jsonl');
+
+// A log that git tracks cannot hold the intake answer. A cloned repository can commit one with a
+// line for a slug it expects; the Director's own line, appended beside it, is then an uncommitted
+// change, and so is the user's removal of the foreign line. A checkout, a stash or a reset undoes
+// both and leaves the committed line as the only one. Returns the message, or null when the log is
+// not tracked. The same goes for a folder above it that is an index entry (a submodule: its own
+// checkout restores the file), and for a question git cannot answer. `grant` and
+// `log-event.js milestone` both refuse on it (decision 0029, amended). The entry's name comes
+// from the repository and is not printed.
+function trackedProblem(root) {
+  const rel = LOG_REL.split(path.sep).join('/');
+  const file = path.join(root, LOG_REL);
+  const t = lib.gitTracks(root, rel);
+  if (t.state === 'no') return null;
+  const why = 'a checkout, stash or reset puts a tracked file\'s committed lines back, so neither the intake line nor a hand edit lasts in it';
+  if (t.state === 'unknown') return `git could not say whether ${file} is tracked (git ls-files failed in ${root}): ${why}. No grant until git answers that it is not tracked`;
+  if (t.entry.length === rel.length) return `${file} is tracked by git: ${why}. No grant until the user untracks it (git rm --cached ${rel}, and keep .agent-team/logs/ in .gitignore) and has checked the lines it holds`;
+  return `${file} is tracked by git: a folder above it (${rel.slice(0, t.entry.length)}) is an entry in git's index, a submodule or a link, so another checkout holds the file; ${why}. No grant until the user makes that folder a plain, untracked folder and has checked the lines the log holds`;
+}
+
+// The keys an intake line may be given. The logger adds ts, guidance_version and the session fields.
+const INTAKE_KEYS = ['milestone', 'xlarge_grant', 'second_review', 'map_source'];
+
+// What `log-event.js milestone` checks before it writes an intake line: the fields `grant` will
+// read, by the same tables, and no key besides INTAKE_KEYS. Returns a message, or null when `grant`
+// would accept the line. Any other key is refused because readLog looks for the slug in the raw
+// text of every line: a nested {"milestone":"<another slug>"} in this line would make `grant`
+// refuse that other slug (exit 19), and refuse its intake line, until the user removed this one.
+function intakeProblem(o) {
+  const extra = Object.keys(o).find((k) => !INTAKE_KEYS.includes(k));
+  if (extra !== undefined) return `unknown key ${JSON.stringify(extra.slice(0, 40))}: a milestone line holds only ${INTAKE_KEYS.join(', ')}`;
+  if (has(o, 'map_source') && typeof o.map_source !== 'string') return '"map_source" must be a string (the `source` that models.js show prints)';
+  if (typeof o.milestone !== 'string' || o.milestone.trim() === '') return '"milestone" must be the slug, a non-empty string';
+  if (!Array.isArray(o.xlarge_grant)) return `"xlarge_grant" must be an array of ${[...LOG_ROLES].join(', ')} ([] for none)`;
+  for (const r of o.xlarge_grant) {
+    if (typeof r === 'string' && has(OLD_LOG_ROLES, r)) return `"${r}" is the name from before 1.2.0; write ${OLD_LOG_ROLES[r].join(' and ')} for all security reviews, or ${SEC_CLOSE} alone for the close review only`;
+    if (typeof r !== 'string' || !LOG_ROLES.has(r)) return `unknown role ${JSON.stringify(r)} in "xlarge_grant" (known: ${[...LOG_ROLES].join(', ')})`;
+  }
+  if (o.xlarge_grant.includes(SEC_TASK) && !o.xlarge_grant.includes(SEC_CLOSE)) return `${SEC_TASK} needs ${SEC_CLOSE}: no intake answer grants flagged task PRs without the close review`;
+  if (typeof o.second_review !== 'string' || !SECOND_ORDER.includes(o.second_review)) return '"second_review" must be none, large or xlarge';
   return null;
 }
 
@@ -410,9 +505,27 @@ function grant(text, slug, cwd) {
   if (statusSlug !== null && statusSlug !== slug) {
     return { ok: false, code: EXIT.slug, milestone: slug, status_milestone: statusSlug, grant: none, reason: `STATUS.md names milestone "${statusSlug}" under "## Current milestone" but --milestone is "${slug}"; no grant. Check which milestone is current; ask the user` };
   }
-  const logFile = path.join(lib.logRoot({ cwd }), '.agent-team', 'logs', 'milestones.jsonl');
-  const log = readLog(logFile, slug);
+  // The project is found from the cwd, with no GIT_* variable in git's environment
+  // (lib.grantLogRoot; decision 0029, residual d). CLAUDE_PROJECT_DIR may agree with the cwd;
+  // it may not move the check to another project's log.
+  const root = lib.grantLogRoot(cwd);
+  const foreign = lib.foreignProjectDir(cwd);
+  if (foreign) {
+    return { ok: false, code: EXIT.env, milestone: slug, grant: none, reason: `CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${root}); the log cannot be chosen by the environment. No grant. Run from the project folder; ask the user` };
+  }
   const view = (g) => (g ? { roles: [...g.roles].sort(), second_review: g.second } : null);
+  const logFile = path.join(root, LOG_REL);
+  // A log that git tracks is not read at all: its committed lines come back on a checkout.
+  const tracked = trackedProblem(root);
+  if (tracked) return { ok: false, code: EXIT.tracked, milestone: slug, block: view(block.found ? block : null), grant: none, reason: `${tracked}. Use no grant; ask the user` };
+  const log = readLog(logFile, slug);
+  // Lines for the slug that grant different things: at least one was not written from the user's
+  // answer, and nothing in the file says which. No grant, whatever the block says, until the user
+  // has removed the foreign ones. First-line-wins holds only among lines that agree.
+  if (log && !log.agree) {
+    const logLines = log.all.map((l) => ({ line: l.n, ...view(l) }));
+    return { ok: false, code: EXIT.conflict, milestone: slug, block: view(block.found ? block : null), log: null, log_lines: logLines, grant: none, reason: `lines ${logLines.map((l) => l.line).join(', ')} of ${logFile} are intake lines for "${slug}" that grant different things (see log_lines), so the intake answer cannot be read from the log. No grant for this milestone until the user removes from that file, by hand, each of those lines that is not their intake answer. Use no grant; show the user log_lines and ask; do not remove a line yourself` };
+  }
   const base = { milestone: slug, block: view(block.found ? block : null), log: view(log) };
   const wantsSomething = block.roles.size > 0 || block.second !== 'none';
   if (!log && wantsSomething) {
@@ -508,6 +621,12 @@ function main(argv, deps = {}) {
       return problems.length ? EXIT.check : 0;
     }
     const res = applySet(text, o.id, o.vals);
+    // Checked before anything is written, so a wrong edit never reaches the file.
+    const a = text.split('\n');
+    const b = res.text.split('\n');
+    const differ = a.length === b.length ? b.filter((l, i) => l !== a[i]).length : -1;
+    const wantDiffer = res.text === text ? 0 : 1;
+    if (differ !== wantDiffer) throw new Refusal(EXIT.verify, `the edit would change ${differ} lines, not ${wantDiffer}; nothing was written`);
     let back;
     try {
       if (res.text !== text) writeAtomic(file, res.text);
@@ -516,19 +635,9 @@ function main(argv, deps = {}) {
       if (e instanceof Refusal) throw e;
       throw new Refusal(EXIT.verify, `write failed: ${e.code || e.message}`);
     }
-    const a = text.split('\n');
-    const b = back.split('\n');
-    const differ = a.length === b.length ? b.filter((l, i) => l !== a[i]).length : -1;
-    const wantDiffer = res.text === text ? 0 : 1;
-    if (back !== res.text || differ !== wantDiffer) {
-      // Restore only while the file still holds what this run left; a later edit by someone else stays.
-      let now = null;
-      try { now = fs.readFileSync(file, 'utf8'); } catch { /* treated as changed */ }
-      if (now !== back) throw new Refusal(EXIT.verify, `read-back check failed (${differ} lines differ) and ${file} has been changed by someone else since; the original was NOT restored, check ${file}`);
-      let restored = true;
-      try { writeAtomic(file, text); } catch { restored = false; }
-      throw new Refusal(EXIT.verify, `read-back check failed (${differ} lines differ); ` + (restored ? 'the original was restored' : `the original could NOT be restored, check ${file}`));
-    }
+    // No rollback. A file that is not what this run wrote was changed by a write fault or by
+    // someone else, and the two cannot be told apart: restoring would overwrite the other edit.
+    if (back !== res.text) throw new Refusal(EXIT.verify, `read-back check failed: ${file} does not hold what this run wrote (a write fault, or an edit by someone else since). It was NOT restored; check ${file}`);
     out(JSON.stringify({ ok: true, code: 0, file, id: o.id, line: res.line + 1, changed: wantDiffer === 1, row: b[res.line].replace(/\r$/, '') }));
     return 0;
   } catch (e) {
@@ -540,4 +649,4 @@ function main(argv, deps = {}) {
 
 if (require.main === module) process.exit(main(process.argv.slice(2)));
 
-module.exports = { main, parse, check, applySet, splitCells, startsWithState, EXIT };
+module.exports = { main, parse, check, applySet, splitCells, startsWithState, EXIT, Refusal, readLog, sameGrant, intakeProblem, trackedProblem, LOG_REL };

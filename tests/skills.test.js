@@ -58,7 +58,7 @@ test('no $ARGUMENTS or commands/ references in shipped files', () => {
 
 test('milestone skill: the intake questions and how the answers are logged (decision 0022)', () => {
   const text = fs.readFileSync(path.join(skillsDir, 'milestone', 'SKILL.md'), 'utf8');
-  assert(text.includes('Use xlarge in this milestone for: security reviews (at close and on flagged task PRs), architect, coach (run for this milestone), hard-fix escalation?'), 'the xlarge grant question');
+  assert(text.includes('Use xlarge in this milestone for: close security review, all security reviews (close and flagged task PRs), architect, coach (run for this milestone), hard-fix escalation?'), 'the xlarge grant question');
   assert(text.includes('Run a second, independent security review at milestone close through the Codex bridge? No / large/high / xlarge/high'), 'the second-review question');
   assert(text.includes('log-event.js" milestone'), 'the answers are logged with log-event.js milestone');
   assert(text.includes('## xlarge grant'), 'the STATUS.md block the answers go into');
