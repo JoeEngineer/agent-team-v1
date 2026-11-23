@@ -45,6 +45,10 @@
 // second-review tiers. First line wins because the intake answer is fixed for the
 // milestone (decision 0026). Without --milestone the slug is the bold slug under
 // "## Current milestone". An agent that can rewrite milestones.jsonl is not stopped.
+// A free-text note after the roles must be in parentheses: "architect (a note)" is read,
+// "architect - a note" and "architect; a note" exit 17 (unknown role), which fails closed.
+// `grant --file <other>` reads the block from <other> but still reads the log from the
+// logRoot of the cwd (CLAUDE_PROJECT_DIR when set), not from the project that holds <other>.
 'use strict';
 
 const fs = require('fs');

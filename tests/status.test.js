@@ -348,6 +348,9 @@ function repo() {
   const dir = path.join(DIR, `repo${repoN++}`);
   fs.mkdirSync(dir);
   g(dir, 'init', '-q', '-b', 'main');
+  // Linux defaults to core.fileMode=true and Windows to false; pin true so both take the same path
+  // (commit -a then re-stages the on-disk mode, which is why the mode case commits without -a).
+  g(dir, 'config', 'core.fileMode', 'true');
   fs.writeFileSync(path.join(dir, 'STATUS.md'), FIXTURE);
   fs.writeFileSync(path.join(dir, 'a.txt'), 'a\n');
   g(dir, 'add', 'STATUS.md', 'a.txt');
@@ -408,7 +411,8 @@ test('--since: STATUS.md deleted, renamed, or changed in mode or type fails', ()
 
   r = repo();
   g(r.dir, 'update-index', '--chmod=+x', 'STATUS.md');
-  commit(r.dir);
+  // No -a: with core.fileMode true, -a would re-stage the on-disk 644 file and wipe the mode change.
+  g(r.dir, 'commit', '-q', '-m', 'mode');
   eq(g(r.dir, 'diff', '--name-status', r.base, 'HEAD'), 'M\tSTATUS.md', 'precondition: name-status alone shows only M for a mode change');
   assert(/mode/.test(since(r.dir, r.base, [], false, 14, 'mode only').json.reason), 'reason says mode');
 
@@ -485,14 +489,43 @@ function project(statusText, logLines) {
   return dir;
 }
 const grantIn = (dir, extra = []) => run(['grant', ...extra], dir, { CLAUDE_PROJECT_DIR: dir });
-const REPO_ROLES = 'security reviews, architect, hard-fix escalation (the user narrowed security reviews of flagged task PRs to large/high on 2026-11-23; the close review stays xlarge/high)';
+// The "Granted roles" line of this repo's STATUS.md, read live so the test cannot drift from it.
+// A checkout whose STATUS.md has no such line falls back to a sample with the same shape.
+const SAMPLE_ROLES = 'security reviews, architect, hard-fix escalation (a note that repeats security reviews and coach at close; the close review stays xlarge/high)';
+const LIVE_STATUS = path.join(ROOT, 'STATUS.md');
+const LIVE_ROLES_LINE = (fs.existsSync(LIVE_STATUS) ? (fs.readFileSync(LIVE_STATUS, 'utf8').match(/^[-*]\s+Granted roles:[ \t]*(.+)$/m) || [])[1] : undefined);
+const REPO_ROLES = LIVE_ROLES_LINE ? LIVE_ROLES_LINE.trim() : SAMPLE_ROLES;
 
 test('grant: block and log agree, the free text after the roles is not read as roles, exit 0', () => {
-  const dir = project(STATUS_DOC('m1', REPO_ROLES, 'large/high'), `${intake('m1', ['security-review', 'architect', 'hard-fix'], 'large')}\n`);
+  // The log roles are what the script reads from the block itself (no log: exit 18 shows the block).
+  const probe = grantIn(project(STATUS_DOC('m1', REPO_ROLES, 'large/high'), null));
+  eq(probe.code, 18, `precondition: the block grants roles and the log is missing: ${probe.out}`);
+  assert(probe.json.block.roles.length > 0, 'precondition: the block names roles');
+  const dir = project(STATUS_DOC('m1', REPO_ROLES, 'large/high'), `${intake('m1', probe.json.block.roles, 'large')}\n`);
   const r = grantIn(dir);
   eq(r.code, 0, r.out);
-  deq(r.json.grant, { roles: ['architect', 'hard-fix', 'security-review'], second_review: 'large' }, 'effective grant');
+  deq(r.json.grant, { roles: probe.json.block.roles, second_review: 'large' }, 'effective grant');
   eq(r.json.milestone, 'm1', 'slug from the Current milestone heading');
+  // The fallback sample has the same shape: a note that repeats granted roles and names one that is not.
+  const s = grantIn(project(STATUS_DOC('m1', SAMPLE_ROLES, 'large/high'), `${intake('m1', ['security-review', 'architect', 'hard-fix'], 'large')}\n`));
+  eq(s.code, 0, `sample note: ${s.out}`);
+  deq(s.json.grant.roles, ['architect', 'hard-fix', 'security-review'], 'the note names coach but coach is not granted');
+});
+
+test('grant: a role word only inside a parenthetical note is not granted', () => {
+  const log = `${intake('m1', ['architect'])}\n`;
+  const r = grantIn(project(STATUS_DOC('m1', 'architect (security reviews declined)', 'no'), log));
+  eq(r.code, 0, `a note naming a role the log lacks must not widen the block: ${r.out}`);
+  deq(r.json.block.roles, ['architect'], 'block: the note is not read');
+  deq(r.json.grant.roles, ['architect'], 'grant');
+  // Control: the same word outside parentheses is a role the log lacks, so it is a mismatch.
+  const w = grantIn(project(STATUS_DOC('m1', 'architect, security reviews', 'no'), log));
+  eq(w.code, 16, `the role word outside the note is read: ${w.out}`);
+  deq(w.json.block.roles, ['architect', 'security-review'], 'block with the word outside the note');
+  // A note must be parenthesised: a dash or semicolon note is read as role words and fails closed.
+  for (const roles of ['architect - a note', 'architect — a note', 'architect; a note']) {
+    eq(grantIn(project(STATUS_DOC('m1', roles, 'no'), log)).code, 17, `unparenthesised note "${roles}"`);
+  }
 });
 
 test('grant: the shipped template and this repo STATUS.md both parse', () => {
@@ -502,7 +535,8 @@ test('grant: the shipped template and this repo STATUS.md both parse', () => {
   deq(r.json.grant, { roles: [], second_review: 'none' }, 'unfilled template is an empty grant');
   const live = fs.readFileSync(path.join(ROOT, 'STATUS.md'), 'utf8');
   r = grantIn(project(live, null));
-  assert(r.json && r.code !== 2 && r.code !== 17, `the repo block parses (not unreadable): ${r.out}`);
+  eq(r.code, 18, `the repo block grants roles and there is no log: ${r.out}`);
+  deq(r.json.block.roles, ['architect', 'hard-fix', 'security-review'], 'the repo block roles');
 });
 
 test('grant: no block and no line prints an empty grant and exits 0; a missing or empty log is the same', () => {

@@ -45,7 +45,8 @@ with an unchanged file mode.
 4. **No block and no line is an empty grant** and exits 0. So does the unfilled
    template.
 5. Free text in parentheses after the roles is a note and is not read as roles.
-   One table in `scripts/status.js` maps the question's words (security reviews,
+   A note must be in parentheses: `architect - note` and `architect; note` read
+   the note as a role word, exit 17 and grant nothing (fail closed). One table in `scripts/status.js` maps the question's words (security reviews,
    architect, coach at close, hard-fix escalation) to the log's names
    (`security-review`, `architect`, `coach`, `hard-fix`).
 6. In a linked git worktree the log is read from the main checkout, through the
