@@ -39,7 +39,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium | 1 | in progress | |
 | FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 1 | in progress | |
 | FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | in progress | |
-| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | in review | #152 |
+| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #152 |
 | FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | changes requested | #151 |
 | FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (session) | medium (sonnet) / high | 1 | planned | |
 | FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 1 | planned | |
@@ -74,6 +74,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
 - **Follow-ups from FU-2 (decision 0024), minor:** `noscan` and `unconfirmed` differ only in the matrix and evaluator (one rule in the section text); with several GitLab pipelines per SHA, whether a job absent from one counts as missing is unstated (safe reading: yes, `unknown`); one over-long line in "Cost of the read".
 - **Follow-ups from FU-5 (PR #149), minor:** a superseding completion line keeps the old `duration_ms`; `markStale` skips superseding copies too (archive-first on a 0.3.0-era mislabelled resume could keep a stale copy); `supersedeShortTurns` covers agents of earlier milestones in the live log; no test for a `readFileSync` failure in `readSessionUsage`; reconcile and archive word the `completions:` line differently. Carried into later cards: `session_usage` is cumulative per session and model (readers take the last line per session+model) → FU-13; README and Coach text for `sessions.jsonl` → FU-13, FU-14.
 - **Follow-up from FU-1 (PR #147), minor:** the real-symlink branch of the "refuses a symlink" test in `tests/status.test.js` is skipped silently where symlinks cannot be made; log the skip so CI shows it ran on ubuntu.
+- **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
