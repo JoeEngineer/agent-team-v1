@@ -10,6 +10,10 @@
 # workflow, with inline trivy:ignore comments, or by removing or moving the root
 # Dockerfile (trivy-image is then skipped, which does not block a merge). Review
 # PR changes to those.
+# Push runs are for main only. A push to a milestone/** branch would use that
+# branch's own Trivy config under the same job names as the PR run, so a pass
+# there could sit beside a failing PR run on the same SHA; PRs into and out of
+# milestone branches are scanned with the base config instead.
 # With no Dockerfile at the repo root, trivy-image shows as skipped, not passed.
 name: security-scan
 
@@ -18,7 +22,6 @@ on:
   push:
     branches:
       - main
-      - 'milestone/**'
 
 permissions:
   contents: read
@@ -54,10 +57,19 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha }}
           path: .scan-base
           persist-credentials: false
+      # The PR's own copies are kept in .scan-pr-config (the job fails if the
+      # PR already has that path) so the scan below still reads them for secrets,
+      # under the base config; they are never used as config.
       - name: Use base-branch scanner config
         if: github.event_name == 'pull_request'
         run: |
+          if [ -e .scan-pr-config ] || [ -L .scan-pr-config ]; then
+            echo "::error::.scan-pr-config exists in the PR tree; the scan keeps the PR's config copies at that path. Remove it from the PR."
+            exit 1
+          fi
+          mkdir .scan-pr-config
           for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
+            if [ -f "$f" ]; then cp "$f" ".scan-pr-config/$f"; fi
             rm -f "$f"
             if [ -f ".scan-base/$f" ]; then cp ".scan-base/$f" "$f"; fi
           done

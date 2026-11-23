@@ -100,7 +100,7 @@ Step 5 and everything after it is new. **Steps 3 and 4 also change**, which is
 more than the task card's "from step 5 on": gap 3 cannot be closed without them.
 Step 3 loses "`scan` is `unknown`" (the table says it), and step 4 reads by SHA.
 
-**Size: 1,849 bytes**, measured with `wc -c` on the text below with LF line
+**Size: 1,997 bytes**, measured with `wc -c` on the text below with LF line
 endings, including the one blank line that ends the section. The current section
 is 1,656 bytes measured the same way. The limit is 1,850: the Director raised it
 from 1,750 for the review fold-in, which added the definitions of passed,
@@ -120,7 +120,8 @@ Scanner checks (dependency, image, config and secret scans) run in the project's
 |---|---|
 | Any failed, even with a moved head or others skipped or unreadable | `red` |
 | The head moved | `unknown` |
-| The CI config has none | `none` |
+| The diff removes or disables a scanner job the base has (deletion, an `if:` that never runs, or a dropped trigger) | `unknown` |
+| Base and head both have no scanner jobs | `none` |
 | Checks unreadable, or any still pending after the wait | `unknown` |
 | Any unscanned without cause | `unknown` |
 | All unscanned with cause | `none` |
@@ -141,7 +142,7 @@ explains them):
 - **Passed without a scan you can confirm** covers both a job that is known not
   to have scanned and one whose scan step the reviewer cannot confirm ran (a
   conditional step and no readable log). Both are unscanned.
-- **The rest** is never empty at row 7, because row 6 comes first.
+- **The rest** is never empty at row 8, because row 7 comes first.
 - **GitLab, "each id"**: one commit can have a branch pipeline and a
   merge-request pipeline. The jobs of every pipeline for the SHA count, so a
   failure in any of them is `red`, and `green` needs all of them passed.
@@ -154,21 +155,22 @@ explains them):
 |---|---|---|---|
 | 1 | Any failed | `red` | any failed; head moved with an old-head failed check |
 | 2 | The head moved | `unknown` | head moved without a failed check |
-| 3 | The CI config has no scanner jobs | `none` | no scanner jobs |
-| 4 | Unreadable, or pending after the wait | `unknown` | unreadable; pending after the wait |
-| 5 | Any unscanned without cause | `unknown` | any skipped; passed but did not scan |
-| 6 | All unscanned with cause | `none` | all jobs nothing to scan |
-| 7 | All the rest passed | `green` | nothing to scan (some jobs), the others passed |
-| 8 | Anything else | `unknown` | cancelled, neutral, any state not named |
+| 3 | The diff removes or disables a scanner job the base has | `unknown` | a scanner job deleted, an `if:` that never runs, or a dropped trigger |
+| 4 | Base and head both have no scanner jobs | `none` | no scanner jobs at base or head |
+| 5 | Unreadable, or pending after the wait | `unknown` | unreadable; pending after the wait |
+| 6 | Any unscanned without cause | `unknown` | any skipped; passed but did not scan |
+| 7 | All unscanned with cause | `none` | all jobs nothing to scan |
+| 8 | All the rest passed | `green` | nothing to scan (some jobs), the others passed |
+| 9 | Anything else | `unknown` | cancelled, neutral, any state not named |
 
 ## The four open gaps
 
 | Gap | Row | Reason |
 |---|---|---|
-| 1. `green` clause against the nothing-to-scan exception | 7 | `green` is defined over "the rest", the jobs left after those unscanned with cause, so the two rules can no longer disagree. |
-| 2. All jobs nothing to scan | 6 | Nothing was scanned, so it is not `green`; it is `none`, and the report says "no scanner" instead of asking the user at every close. |
+| 1. `green` clause against the nothing-to-scan exception | 8 | `green` is defined over "the rest", the jobs left after those unscanned with cause, so the two rules can no longer disagree. |
+| 2. All jobs nothing to scan | 7 | Nothing was scanned, so it is not `green`; it is `none`, and the report says "no scanner" instead of asking the user at every close. |
 | 3. Head moved against an old-head failed check | 1, before 2 | A failure on the reviewed head stays `red` after a push. Step 4 reads `head_sha` itself, because `gh pr checks` shows only the current head. |
-| 4. The exception trusted the job's own notice | 5 and 6, "with cause" | The diff can write the notice. The reviewer checks the tree at `head_sha` instead. |
+| 4. The exception trusted the job's own notice | 6 and 7, "with cause" | The diff can write the notice. The reviewer checks the tree at `head_sha` instead. |
 
 Commands for gap 3 (both read by SHA, so they work whether or not the head
 moved):
@@ -198,62 +200,64 @@ FU-9 turns this into tests. Columns are fixed:
   exists.
 - `scan`: the expected value. `row`: the table row that decides it.
 
-| id | head | jobs | readable | states | scan | row |
-|---|---|---|---|---|---|---|
-| M01 | same | some | yes | pass,pass | green | 7 |
-| M02 | same | some | yes | pass,fail | red | 1 |
-| M03 | same | some | yes | fail,skip | red | 1 |
-| M04 | same | some | no | fail | red | 1 |
-| M05 | moved | some | yes | fail,pass | red | 1 |
-| M06 | moved | some | yes | pass,pass | unknown | 2 |
-| M07 | moved | none | yes | - | unknown | 2 |
-| M08 | same | none | yes | - | none | 3 |
-| M09 | same | some | no | - | unknown | 4 |
-| M10 | same | some | yes | pass,pending | unknown | 4 |
-| M11 | same | some | yes | fail,pending | red | 1 |
-| M12 | same | some | yes | pass,skip | unknown | 5 |
-| M13 | same | some | yes | pass,noscan | unknown | 5 |
-| M14 | same | some | yes | pass,missing | unknown | 5 |
-| M15 | same | some | yes | pass,noscan+cause | green | 7 |
-| M16 | same | some | yes | pass,skip+cause | green | 7 |
-| M17 | same | some | yes | skip+cause | none | 6 |
-| M18 | same | some | yes | noscan+cause,skip+cause | none | 6 |
-| M19 | same | some | yes | skip+cause,skip | unknown | 5 |
-| M20 | same | some | yes | pass,cancelled | unknown | 8 |
-| M21 | same | some | yes | cancelled,noscan+cause | unknown | 8 |
-| M22 | same | some | yes | pending,skip | unknown | 4 |
-| M23 | moved | some | no | - | unknown | 2 |
-| M24 | same | some | yes | fail,noscan+cause | red | 1 |
-| M25 | same | some | yes | pass,neutral | unknown | 8 |
-| M26 | same | some | yes | neutral,skip+cause | unknown | 8 |
-| M27 | same | some | yes | pass,unconfirmed | unknown | 5 |
-| M28 | same | some | yes | pass,unconfirmed+cause | green | 7 |
-| M29 | same | some | yes | unconfirmed | unknown | 5 |
-| M30 | same | some | yes | fail,neutral | red | 1 |
+| id | head | jobs | readable | removed | states | scan | row |
+|---|---|---|---|---|---|---|---|
+| M01 | same | some | yes | no | pass,pass | green | 8 |
+| M02 | same | some | yes | no | pass,fail | red | 1 |
+| M03 | same | some | yes | no | fail,skip | red | 1 |
+| M04 | same | some | no | no | fail | red | 1 |
+| M05 | moved | some | yes | no | fail,pass | red | 1 |
+| M06 | moved | some | yes | no | pass,pass | unknown | 2 |
+| M07 | moved | none | yes | no | - | unknown | 2 |
+| M08 | same | none | yes | no | - | none | 4 |
+| M09 | same | some | no | no | - | unknown | 5 |
+| M10 | same | some | yes | no | pass,pending | unknown | 5 |
+| M11 | same | some | yes | no | fail,pending | red | 1 |
+| M12 | same | some | yes | no | pass,skip | unknown | 6 |
+| M13 | same | some | yes | no | pass,noscan | unknown | 6 |
+| M14 | same | some | yes | no | pass,missing | unknown | 6 |
+| M15 | same | some | yes | no | pass,noscan+cause | green | 8 |
+| M16 | same | some | yes | no | pass,skip+cause | green | 8 |
+| M17 | same | some | yes | no | skip+cause | none | 7 |
+| M18 | same | some | yes | no | noscan+cause,skip+cause | none | 7 |
+| M19 | same | some | yes | no | skip+cause,skip | unknown | 6 |
+| M20 | same | some | yes | no | pass,cancelled | unknown | 9 |
+| M21 | same | some | yes | no | cancelled,noscan+cause | unknown | 9 |
+| M22 | same | some | yes | no | pending,skip | unknown | 5 |
+| M23 | moved | some | no | no | - | unknown | 2 |
+| M24 | same | some | yes | no | fail,noscan+cause | red | 1 |
+| M25 | same | some | yes | no | pass,neutral | unknown | 9 |
+| M26 | same | some | yes | no | neutral,skip+cause | unknown | 9 |
+| M27 | same | some | yes | no | pass,unconfirmed | unknown | 6 |
+| M28 | same | some | yes | no | pass,unconfirmed+cause | green | 8 |
+| M29 | same | some | yes | no | unconfirmed | unknown | 6 |
+| M30 | same | some | yes | no | fail,neutral | red | 1 |
+| M31 | same | none | yes | yes | - | unknown | 3 |
 
 M13 is the notice case: the job printed "nothing to scan" and the reviewer did
 not confirm it. M16 is FU-10's `trivy-image` with no `Dockerfile` in the tree.
 M25 and M26 show that `neutral` is not passed. M27 and M29 are a passed job
 whose scan step cannot be confirmed.
 
-Reference evaluator. The matrix above was run through it: 30 rows, 0
-mismatches, all 8 rows hit.
+Reference evaluator. The matrix above was run through it: 31 rows, 0
+mismatches, all 9 rows hit.
 
 ```js
 const UNSCANNED = ['skip', 'missing', 'noscan', 'unconfirmed'];
-function scanState({ head, jobs, readable, states }) {
+function scanState({ head, jobs, readable, removed, states }) {
   const s = states === '-' ? [] : states.split(',');
   const cause = (x) => x.endsWith('+cause');
   const unscanned = (x) => UNSCANNED.includes(x.replace('+cause', ''));
   if (s.includes('fail')) return ['red', 1];
   if (head === 'moved') return ['unknown', 2];
-  if (jobs === 'none') return ['none', 3];
-  if (readable === 'no' || s.includes('pending')) return ['unknown', 4];
-  if (s.some((x) => unscanned(x) && !cause(x))) return ['unknown', 5];
-  if (s.length > 0 && s.every((x) => unscanned(x) && cause(x))) return ['none', 6];
+  if (removed === 'yes') return ['unknown', 3];
+  if (jobs === 'none') return ['none', 4];
+  if (readable === 'no' || s.includes('pending')) return ['unknown', 5];
+  if (s.some((x) => unscanned(x) && !cause(x))) return ['unknown', 6];
+  if (s.length > 0 && s.every((x) => unscanned(x) && cause(x))) return ['none', 7];
   const rest = s.filter((x) => !(unscanned(x) && cause(x)));
-  if (rest.length > 0 && rest.every((x) => x === 'pass')) return ['green', 7];
-  return ['unknown', 8];
+  if (rest.length > 0 && rest.every((x) => x === 'pass')) return ['green', 8];
+  return ['unknown', 9];
 }
 ```
 
@@ -329,6 +333,21 @@ section; waiting belongs to step 2.
 - **For FU-10.** A job-level `if` on `trivy-image` is safe under this table: the
   skipped job is never `green` by itself. No notice step is needed for the
   reviewer's sake.
+
+## Amendment (FU-20, 2026-11-23)
+
+Amended by FU-20. The Director asked for the row after this record was
+accepted. A diff that removes or disables the scanner jobs (deletes the
+workflow or a job, gives a job an `if:` that never runs, or drops the trigger
+for this event) reads `unknown`, so the Director asks the user, not `none`.
+The row sits before the `none` row, so it matches first. `none` now means
+the base and the head CI configs both have no scanner jobs.
+
+Changes: the new row 3 (and rows 4 to 9, renumbered, with the gap and matrix
+references); the "The CI config has none" label is now "Base and head both have
+no scanner jobs"; the matrix has a `removed` column and case M31; the evaluator
+takes `removed`. The section grows from 1,849 to 1,997 bytes, so the limit for
+this section is now 2,000 bytes (agents/security-reviewer.md's budget is 8,090).
 
 ## Not doing
 

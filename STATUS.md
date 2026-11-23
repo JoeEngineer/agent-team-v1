@@ -46,6 +46,14 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #159 |
 | FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #158 |
 | FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
+| FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | merged | 171 |
+| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | in review: attempt 2 pushed fdc005a; incremental review | 172 |
+| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | in review: attempt 2 pushed 397bbc9; incremental review | 170 |
+| FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | 167 |
+| FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
+| FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
+| FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted | 1 | planned: after FU-16, FU-17, FU-20, FU-21 merge | |
+| FU-23 | Close fix: `review-json` fence residuals; security-sensitive (#174) | architect | large (opus) / high | 1 | planned: after FU-22 merges (shares `scripts/lib.js`) | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
@@ -102,8 +110,8 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - "(what was not checked)" became "(not checked)";
   - the unknown-merge cause became an ellipsis.
 - **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
-- **Accept or reject: scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
-- **Accept or reject: grant check residuals (FU-6, decision 0026).**
+- **Accepted by the user 2026-11-23 (decision 0028): scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
+- **Rejected by the user 2026-11-23 (decision 0028), fixed in FU-22: grant check residuals (FU-6, decision 0026).**
   - An agent that guesses the next milestone slug can append a wide `milestone` line through `log-event.js milestone` before intake. If it later edits the STATUS block to match, `status.js grant` exits 0 with that wide grant. The proposed fix: `log-event.js milestone` refuses a second line for a slug.
   - A hand-made first log line torn before the slug ends is skipped.
   - An agent that can rewrite `milestones.jsonl` or the shared `.git` object store is not stopped.
@@ -121,3 +129,4 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
 - 0025: guidance budget raises for 1.2.0 (approved by the user 2026-11-23)
 - 0026: the xlarge grant is cross-checked against the first intake log line; `--milestone` required (FU-6; first-line-wins chosen by the user 2026-11-23)
 - 0027: the scanner template uses the base branch's Trivy config on PRs (FU-10)
+- 0028: two security-review grant words; scanner residuals accepted, grant and fence residuals fixed (chosen by the user 2026-11-23)

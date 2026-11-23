@@ -60,8 +60,8 @@ test('inventory: every guidance file has rules, and the script-enforced ones nam
 // safe over-estimate of tokens for this kind of text). The other budgets stop
 // the files growing back a sentence at a time: to add a rule, find the room.
 const BUDGET = {
-  'skills/director/SKILL.md': 10000,
-  'skills/director/references/merging.md': 9500,
+  'skills/director/SKILL.md': 9400,
+  'skills/director/references/merging.md': 9430,
   'skills/director/references/routing.md': 7850,
   'skills/director/references/task-card.md': 6200,
   'skills/director/references/decisions.md': 1800,
@@ -69,10 +69,10 @@ const BUDGET = {
   'skills/director/references/gitlab.md': 4200,
   'agents/reviewer.md': 9500,
   'agents/implementer.md': 6000,
-  'agents/coach.md': 13000,
+  'agents/coach.md': 12970,
   'agents/architect.md': 3000,
   'agents/scout.md': 1500,
-  'agents/security-reviewer.md': 8050,
+  'agents/security-reviewer.md': 8040,
 };
 
 test('budgets: every guidance file has a budget and is inside it', () => {
