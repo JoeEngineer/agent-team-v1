@@ -53,7 +53,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
 | FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
 | FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted; attempt 3 xlarge (fable) / high | 4 (fold-in) | merged | 175 |
-| FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | changes requested: attempt 2 sendback: cardOf major; 0030 accepted by the user (head= on review cards) | |
+| FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | in review: approved at fdc480a; security review running | |
 | FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | in progress: attempt 2 fold-in of 9 review minors | |
 | FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | planned: after FU-23 and FU-24 | |
 
@@ -132,3 +132,5 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
 - 0026: the xlarge grant is cross-checked against the first intake log line; `--milestone` required (FU-6; first-line-wins chosen by the user 2026-11-23)
 - 0027: the scanner template uses the base branch's Trivy config on PRs (FU-10)
 - 0028: two security-review grant words; scanner residuals accepted, grant and fence residuals fixed (chosen by the user 2026-11-23)
+- 0030: review blocks bound to the card head (`head=`); verbatim-copy residual accepted (chosen by the user 2026-11-23; in PR #179)
+- 0031: remaining Codex close-review majors accepted as residuals; close after FU-23 to FU-25 (chosen by the user 2026-11-23)
