@@ -523,8 +523,9 @@ function reconcile({ dryRun = false } = {}) {
   // Codex snapshots already identify their transcript and frozen delegation.
   // Process them even on Codex-only installs with no ~/.claude/projects.
   const codex = drainPending(input, { dryRun, cap: Infinity });
+  const refused = codex.refused.map((m) => `pending Codex snapshot refused: ${m}`);
   codex.turns = backfillCodexTurns(input, { dryRun });
-  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, stale: 0, superseded: 0, reads: 0, rewritten: [], errors: [], codex };
+  const stats = { checked: 0, backfilled: 0, present: 0, notFound: 0, skipped: 0, reviews: 0, stale: 0, superseded: 0, reads: 0, rewritten: [], errors: [...refused], codex };
   const delegations = readJsonl(path.join(logDir, 'delegations.jsonl'));
   const completions = readJsonl(path.join(logDir, 'completions.jsonl'));
   if (!fs.existsSync(root)) return { ...stats, noRoot: root };
@@ -669,7 +670,8 @@ function main(argv) {
   if (s.noRoot) {
     console.log(`No Claude Code projects folder found (${s.noRoot}); nothing to reconcile for Claude Code.`);
     reconcileMerges({ dryRun });
-    return 0;
+    for (const e of s.errors) console.error(`reconcile-logs: ${e}`);
+    return s.errors.length ? 1 : 0;
   }
   console.log(`${dryRun ? '[dry run] ' : ''}checked ${s.checked} agents: ` +
     `${s.backfilled} ${dryRun ? 'would be backfilled' : 'completions backfilled'}, ` +

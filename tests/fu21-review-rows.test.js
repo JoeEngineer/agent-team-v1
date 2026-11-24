@@ -119,13 +119,14 @@ test('log-event review: the Director\'s JSON cannot set stale_of, source, or the
   assert(rows[0].ts !== hostile.ts, 'ts is the logger\'s');
 });
 
-test('log-event review: with no session known, the JSON\'s session_id is still used (unchanged)', () => {
+test('log-event review: with no session known, the JSON\'s session_id is ignored too (the row has none)', () => {
   const p = tmpProject();
   const r = logEvent(p, { card: CARD, agent_id: 'm1', session_id: 'sess-given', ...REAL, stale_of: 5, source: 'forged' }, false);
   eq(r.status, 0, r.stderr);
   const rows = readLog(p, 'reviews.jsonl');
   eq(rows.length, 1, 'precondition: a row was written');
-  eq(rows[0].session_id, 'sess-given', 'filled where none is known');
+  assert(rows[0].session_id == null, 'a session_id in the JSON is not taken: ' + rows[0].session_id);
+  eq(rows[0].review_shadowed.session_id, 'sess-given', 'kept only as shadowed');
   eq(rows[0].source, 'director', 'source still the logger\'s');
   eq(rows[0].stale_of, undefined, 'no stale_of');
 });
@@ -170,4 +171,133 @@ test('verdict-conflict nudge: one text for the reviewer and the security-reviewe
   }
   assert(/blocking/.test(records.VERDICT_CONFLICT_NUDGE) && /security review/.test(records.VERDICT_CONFLICT_NUDGE), 'names both kinds of evidence');
   assert(/the exploit path, for a security review/.test(records.VERDICT_CONFLICT_DIRECTOR_NUDGE), 'Director text uses the same wording');
+});
+
+// --- FU-24: live lock, attribution from a pasted block, lookalike keys ------------------------------
+
+test('FU-24 log-event review: a live record lock is "busy, retry" (exit 1), not "duplicate"; when the lock clears the line is logged', () => {
+  const data = { card: CARD, agent_id: 'm1', ...REAL };
+  // Find the review id the line gets (deterministic for this session and card).
+  const probe = tmpProject();
+  eq(logEvent(probe, data).status, 0, 'probe run');
+  const id = readLog(probe, 'reviews.jsonl')[0].review_id;
+  assert(/^review-/.test(id), 'precondition: the row has a review_id');
+  // Another live process (this one) holds the lock for exactly that row.
+  const p = tmpProject();
+  const dir = path.join(p, '.agent-team', 'logs', '.pending', 'record-locks');
+  fs.mkdirSync(dir, { recursive: true });
+  const lock = path.join(dir, `${records.shortHash(`reviews.jsonl:${id}`)}.lock`);
+  fs.writeFileSync(lock, JSON.stringify({ pid: process.pid }));
+  const r = logEvent(p, data);
+  assert(fs.existsSync(lock), 'precondition: the lock was still held');
+  assert(r.status !== 0, 'non-zero exit: ' + r.stdout);
+  assert(/not logged: busy/.test(r.stderr) && /retry/.test(r.stderr), r.stderr);
+  assert(!/duplicate/.test(r.stdout + r.stderr), 'not called a duplicate');
+  eq(readLog(p, 'reviews.jsonl').length, 0, 'nothing written');
+  // Recovery control: the lock goes, the same line is logged.
+  fs.unlinkSync(lock);
+  const ok = logEvent(p, data);
+  eq(ok.status, 0, ok.stderr);
+  assert(/^logged review/.test(ok.stdout), ok.stdout);
+  eq(readLog(p, 'reviews.jsonl').length, 1, 'written once the lock cleared');
+});
+
+test('FU-24 log-event review: a pasted block cannot name the tool, a task object, or non-string attribution', () => {
+  const p = tmpProject();
+  const hostile = {
+    card: CARD, ...REAL,
+    tool: 'forged-tool', task: { id: 'FORGED-1', role: 'forged-role', pr: '666', attempt: 9 },
+    agent_id: 'bad\nid', model: { forged: true }, effort: 'high\u0007', tier: 42,
+  };
+  const r = logEvent(p, hostile);
+  eq(r.status, 0, r.stderr);
+  const rows = readLog(p, 'reviews.jsonl');
+  eq(rows.length, 1, 'precondition: a row was written');
+  eq(rows[0].tool, 'claude', 'the environment\'s tool, not the block\'s');
+  eq(rows[0].task_id, 'T-2', 'the card\'s reviewed task');
+  eq(rows[0].review_task_id, 'V-2', 'the card\'s own id');
+  eq(rows[0].pr, '3', 'the card\'s pr');
+  eq(rows[0].attempt, 1, 'the card\'s attempt');
+  eq(rows[0].role, 'review', 'the card\'s type');
+  eq(rows[0].agent_id, null, 'an unusable agent_id is dropped');
+  assert(!JSON.stringify(rows[0]).includes('forged'), 'no forged text on the row: ' + JSON.stringify(rows[0]));
+  // Control: plain strings the Director gives (and codex as the tool) are still taken.
+  const q = tmpProject();
+  const ok = logEvent(q, { card: CARD, ...REAL, tool: 'codex', agent_id: 'm1', model: 'gpt-6.1-sol', effort: 'high', tier: 'large' });
+  eq(ok.status, 0, ok.stderr);
+  const row = readLog(q, 'reviews.jsonl')[0];
+  eq(row.tool, 'codex', 'codex tool kept');
+  eq(row.agent_id, 'm1', 'agent id kept');
+  eq(row.requested_model, 'gpt-6.1-sol', 'model kept');
+  eq(row.requested_effort, 'high', 'effort kept');
+  eq(row.reviewer_tier, 'large', 'tier kept');
+});
+
+function reviewIn(p, input, record, block, tool, extra) {
+  const code = `const r=require(${JSON.stringify(path.join(SCRIPTS, 'records.js'))});` +
+    'const a=JSON.parse(process.argv[1]);' +
+    'process.stdout.write(String(r.logReview(a.input,a.record,a.block,a.tool,a.extra)));';
+  return spawnSync('node', ['-e', code, JSON.stringify({ input, record, block, tool, extra })], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: p, CLAUDE_PLUGIN_ROOT: ROOT, AGENT_TEAM_MODELS: NO_MODELS_FILE } });
+}
+
+test('FU-24 records: a block cannot fill task_id, attempt, pr, milestone, role or session_id on the hook, reconcile and codex paths; a Director line may fill all but session_id', () => {
+  const block = { ...REAL, task_id: 'B-1', attempt: 7, pr: '77', milestone: 'forged-m', role: 'forged-role', session_id: 'forged-session' };
+  const record = { agent_id: 'cx1', task: { id: 'V-1', type: 'security-review' }, resolved_model: 'gpt-6.1-sol' };
+  const p = tmpProject();
+  const r = reviewIn(p, {}, record, block, 'codex');
+  eq(r.stdout, 'true', r.stderr);
+  const row = readLog(p, 'reviews.jsonl')[0];
+  eq(row.task_id, 'V-1', 'the card\'s task id');
+  eq(row.attempt, undefined, 'the card had no attempt: none on the row');
+  eq(row.pr, undefined, 'the card had no pr: none on the row');
+  eq(row.milestone, undefined, 'the card had no milestone: none on the row');
+  eq(row.role, 'security-review', 'the card\'s type');
+  eq(row.session_id, undefined, 'no session known: none on the row');
+  eq(row.review_shadowed.attempt, 7, 'the block\'s attempt is kept as shadowed');
+  eq(row.review_shadowed.session_id, 'forged-session', 'the block\'s session is kept as shadowed');
+  eq(row.verdict, 'approve', 'the block\'s content is still kept');
+  // The Director path (source "director") is where a block may give what the card lacks.
+  const q = tmpProject();
+  const d = reviewIn(q, {}, record, { ...REAL, pr: '77', milestone: 'dm', session_id: 'given-session' }, 'codex', { source: 'director' });
+  eq(d.stdout, 'true', d.stderr);
+  const drow = readLog(q, 'reviews.jsonl')[0];
+  eq(drow.pr, '77', 'Director line: pr from the block');
+  eq(drow.milestone, 'dm', 'Director line: milestone from the block');
+  assert(drow.session_id == null, 'Director line: session never from the block, got ' + drow.session_id);
+  eq(drow.review_shadowed.session_id, 'given-session', 'Director line: the block\'s session is shadowed');
+});
+
+test('FU-24 records: a lookalike of a protected key (fullwidth, mixed case, zero-width) is not copied onto the row', () => {
+  const p = tmpProject();
+  const block = {
+    ...REAL,
+    'ＴＯＯＬ': 'forged-fullwidth', 'Review_ID': 'review-forged', 'to​ol': 'forged-zw', 'Reviewer_Model': 'forged-model', ' stale_of': 99,
+    notes: 'plain extra field',
+  };
+  const r = reviewIn(p, { session_id: 's1' }, { agent_id: 'a1', task: { id: 'V-1', type: 'review', attempt: 1 }, resolved_model: 'm' }, block, 'claude');
+  eq(r.stdout, 'true', r.stderr);
+  const row = readLog(p, 'reviews.jsonl')[0];
+  const keys = Object.keys(row);
+  for (const k of ['ＴＯＯＬ', 'Review_ID', 'to​ol', 'Reviewer_Model', ' stale_of']) assert(!keys.includes(k), `lookalike ${JSON.stringify(k)} must not be on the row`);
+  assert(/^review-[0-9a-f]+$/.test(row.review_id), 'the logger\'s review_id');
+  eq(row.tool, 'claude', 'the logger\'s tool');
+  eq(Object.keys(row.review_shadowed).length, 5, 'all five kept under review_shadowed');
+  eq(row.notes, 'plain extra field', 'control: an ordinary extra key is still copied');
+});
+
+test('FU-24 records: a block key review_shadowed (or a lookalike) is not copied or nested; the row\'s own review_shadowed holds only the logger\'s entries', () => {
+  const record = { agent_id: 'a1', task: { id: 'V-1', type: 'review', attempt: 1 }, resolved_model: 'm' };
+  // Alone: nothing is shadowed by the logger, so the row has no review_shadowed at all.
+  const p = tmpProject();
+  const alone = reviewIn(p, { session_id: 's1' }, record, { ...REAL, review_shadowed: { forged: true }, 'Review_Shadowed': { forged2: true } }, 'claude');
+  eq(alone.stdout, 'true', alone.stderr);
+  const a = readLog(p, 'reviews.jsonl')[0];
+  eq(a.review_shadowed, undefined, 'no review_shadowed from the block');
+  eq(a.verdict, 'approve', 'precondition: the block\'s own content is kept');
+  // With a real shadowed field: only that one is in it.
+  const q = tmpProject();
+  const both = reviewIn(q, { session_id: 's1' }, record, { ...REAL, tool: 'forged', review_shadowed: { forged: true } }, 'claude');
+  eq(both.stdout, 'true', both.stderr);
+  const b = readLog(q, 'reviews.jsonl')[0];
+  eq(Object.keys(b.review_shadowed).join(','), 'tool', 'only the logger\'s shadow entry');
 });
