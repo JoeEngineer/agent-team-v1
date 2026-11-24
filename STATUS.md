@@ -54,8 +54,8 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
 | FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted; attempt 3 xlarge (fable) / high | 4 (fold-in) | merged | 175 |
 | FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | merged | |
-| FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | in review: approved at a4bb9dd; security review running | |
-| FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | planned: after FU-23 and FU-24 | |
+| FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | merged | |
+| FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | in review: PR 180 at b632b37; reviewer running | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
@@ -122,6 +122,11 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - `CARD_HEAD` in `lib.js` accepts a 7-hex `head=` prefix, which allows commit-hash grinding if a card carries a short head. Fix: require 40 or 64 hex.
   - Decision 0030's residual source list omits output of the diff's own code that a reviewer runs (same accepted class). The reviewer files don't yet say `head=` must match `head_sha`.
   - From the close re-check: `merging.md:58` writes bare `status.js set` instead of the plugin-root `node .../scripts/status.js` form.
+- **Follow-ups from FU-24 (PR #178), security minors (not fixed; for the next release):**
+  - `inCodexSessions` checks the resolved path, but callers re-open the original path; a junction swap between check and read reads an outside file (simulated). Fix: read the real path the check returns.
+  - A stale record lock whose pid was reused or can't be signalled (EPERM) gives "busy, retry" forever. Name the lock file in the message.
+  - `plainString` in `log-event.js` admits bidi and zero-width characters in attribution values (keys are folded, values are not).
+  - Pre-existing: `AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY` is joined without a plain-name check (needs env control). Give it the same check as the link hook, or move the test hooks out of production code.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
