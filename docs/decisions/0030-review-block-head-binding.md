@@ -2,10 +2,10 @@
 id: 0030
 title: Bind a PR review's block to a head; the fence residuals FU-23 closes and the one it can't
 date: 2026-11-23
-status: proposed            # the design is the architect's; the remaining case goes to the user (decision 0028 rejected the residuals)
+status: accepted            # the user chose "add head=, accept rest" on 2026-11-23, at the milestone close; the design below is the architect's
 milestone: coach-followups
 task: FU-23
-decided_by: architect
+decided_by: user
 model: claude-opus-5-5
 effort: high
 ---
@@ -14,6 +14,17 @@ effort: high
 
 Carries out the fence part of decision 0028 (the user rejected the FU-8 fence
 residuals).
+
+**The user's choice (2026-11-23, at the milestone close): "add head=, accept
+rest".**
+- Review cards now carry `head=<full SHA of the PR head>` (`task-card.md`).
+- The one case this can't close is an accepted residual. A block written after
+  that head existed and copied verbatim as the reviewer's last block is still
+  logged. "What remains" below spells it out.
+- The nonce (option 5) and signing (option 6) were declined for 1.2.0.
+- The user also approved raising the core Director budget to the new size plus
+  at most 10 bytes, capped at 33,860. The raise wasn't needed: cuts elsewhere
+  in `task-card.md` keep the core set at 33,780 bytes, under the 33,800 cap.
 
 ## Context
 
@@ -60,10 +71,10 @@ What makes the reviewer's own block different from a quoted one:
 5. **A card-time nonce** that the reviewer echoes in its block. This is the only
    mechanism short of signing that also fails a block written after the head
    existed. It needs guidance changes in four places (the card, both reviewer
-   files and the Codex agent files), and this task has no guidance budget.
+   files and the Codex agent files). Declined for 1.2.0.
 6. **Signing.** Every agent here runs as the same OS user on one machine, so a
    key the reviewer can read, the implementer can read too. Signing would need
-   a key held outside the agents.
+   a key held outside the agents. Declined for 1.2.0.
 
 ## Decision
 
@@ -78,11 +89,15 @@ SubagentStop, the bridge, Codex completions, reconcile, and `handback-check`.
     either case, with nothing trimmed.
   - When the card has `head=` (7 to 64 hex digits), `head_sha` must start with
     it. A `head=` value that isn't hex fails closed.
+- **The card rule** (`task-card.md`). A review card names the PR head's full
+  40-hex SHA in `head=`, next to the PR number in `pr=`.
 - **A block that fails.** It becomes
-  `{ _ambiguous: true, count: 1, reason: "head_sha" | "head_mismatch", card_head? }`.
-  No row is written. The reviewer is told why (SubagentStop, and the
-  `handback-check` denial), or the Director is (bridge, foreground PostToolUse).
-  The message names the head check, not the fence rules.
+  `{ _ambiguous: true, count: 1, reason: "head_sha", bound }` or
+  `{ ..., reason: "head_mismatch", card_head }`. `bound` is the card key that
+  made the check apply (`head`, `pr` or `branch`). No row is written. The
+  reviewer is told why (SubagentStop, and the `handback-check` denial), or the
+  Director is (bridge, foreground PostToolUse). The message names the head
+  check and the card key, not the fence rules.
 - **Reviews with no PR.** A design or document review has a card with no `pr=`,
   `branch=` or `head=`. Its block may leave out `head_sha` or set it to `null`.
   It is logged as before. Such a review gates no merge: `merge-task.js` needs
@@ -94,9 +109,16 @@ SubagentStop, the bridge, Codex completions, reconcile, and `handback-check`.
 - **A resumed reviewer.** A resume card that names a new `head=` replaces the
   delegation's head (`completionTask`).
 - **The hand-back check finds the card.**
-  1. It tries the TASK line of the latest turn in the agent's own transcript:
-     `agent_transcript_path`, or `<session transcript without .jsonl>/subagents/agent-<id>.jsonl`.
-     It reads the transcript only when the agent id is a plain name.
+  1. It tries the card of the entry that opened the latest turn in the agent's
+     own transcript: `agent_transcript_path`, or
+     `<session transcript without .jsonl>/subagents/agent-<id>.jsonl`.
+     - It reads the transcript only when the agent id is a plain name.
+     - Only an entry that starts a turn counts, as `startsTurn` in
+       `log-delegation.js` decides: a real prompt, or an `isMeta` resume
+       carrying a `TASK id=` card.
+     - A tool result or a system entry that quotes a TASK line is not the card.
+       Otherwise it could swap the head, or turn the check off with a card that
+       names no PR.
   2. If that fails, it uses the agent's delegation line.
   3. With no card, there is no head check at the hand-back. The stop hook still
      checks.
@@ -153,8 +175,9 @@ The rule: a block a reviewer quoted is not logged as a PR review's verdict.
    there. A card that leaves it out binds nothing, the same as before this
    decision.
 3. **A file can't name the commit that contains it.** This holds, but only
-   helps when the card names `head=`. Without `head=`, any real full SHA passes.
-   An example is the SHA of a parent commit written in a fixture.
+   helps when the card names `head=`. A card without `head=` (one written
+   before this rule, or by a Director that left it out) lets any real full SHA
+   pass, for example the SHA of a parent commit written in a fixture.
 4. **The hand-back hook can find the card.** The transcript layout comes from
    `reconcile-logs.js`. It has not been checked live for a PreToolUse call made
    inside a subagent. If the card isn't found, the hand-back check skips the
@@ -165,38 +188,32 @@ The rule: a block a reviewer quoted is not logged as a PR review's verdict.
    `<details>`. That case hides a block in the rendered page; it doesn't trick
    the parser. It is unchanged by this task.
 
-## What remains (for the user)
+## What remains (accepted by the user, 2026-11-23)
 
-Today's review cards don't carry `head=`. Adding it to `task-card.md` is a
-guidance edit, and this task has no guidance budget. The core Director set is
-at 33,797 of 33,800 bytes. So:
+With `head=` on review cards, only a block that names the card's head is
+logged. One case still is: a block written after that head existed, by someone
+who knew it, that the reviewer copies verbatim as the last content of its
+reply, at the top level, with no block of its own after it.
 
-- **Now**, on a PR review card: a top-level block that is the last content of
-  the reviewer's reply is logged if its `head_sha` is any full SHA. Examples:
-  an older review's block, a fixture with a real SHA, or a block forged in the
-  PR body or a hand-back.
-- **With `head=` on review cards** (proposed follow-up, below): only a block
-  naming the card's head is logged. What remains is a block written after that
-  head existed, by someone who knew it, that the reviewer reproduces verbatim,
-  at the top level, as the last content of its reply, with no block of its own
-  after it. The sources are the PR body or its comments, the implementer's
-  hand-back after its last push, and a CI log. Such a block can only approve
-  the head it names, and `merge-task.js` merges only that head. The risk is a
-  head merged without a real review, not a different head merged.
-- **Closing that last case** needs option 5 (a nonce: four guidance files, and
-  it still fails against an agent that reads the card or `delegations.jsonl`
-  after the card is issued) or option 6 (a key held outside the agents).
-- **Reviews with no PR** bind nothing, as before.
+- **Where such a block can come from:** the PR body or its comments, the
+  implementer's hand-back after its last push, or a CI log.
+- **Why the risk is bounded:** such a block can approve only the head it names,
+  and `merge-task.js` merges only that head. The risk is a head merged without
+  a real review. A different head can't be merged this way.
+- **Declined for 1.2.0:** closing this case needs option 5 (a nonce, which
+  needs four guidance files and still fails against an agent that reads the
+  card or `delegations.jsonl` after the card is issued) or option 6 (a key held
+  outside the agents).
 
-**Proposed follow-up for the Director:** in `task-card.md`, under "Review
-tasks", change "Put the PR number in `pr=`" to "Put the PR number in `pr=` and
-its head SHA in `head=`". That is about 30 bytes, so it needs a cut in the core
-set or a budget decision. No code change is needed: `parseTaskCard` already
-reads `head=`, and `reviewFor` checks it.
+Also still open, as before this decision:
+
+- A review card with no `pr=`, `branch=` or `head=` binds nothing.
+- A PR review card that leaves out `head=` binds only to "some full SHA".
 
 ## Not doing
 
-- No guidance edits, so the byte budgets are unchanged.
+- No other guidance edits. The `task-card.md` lines for `head=` are paid for by
+  cutting words in the same file, so no byte budget changes.
 - No change to `records.js`. FU-24 owns it. The head-check nudges live in
   `lib.headNudge`, and `log-delegation.js` picks them before the fence nudges in
   `records.js`. `codex-log.js` has no nudge channel. Its completion line carries

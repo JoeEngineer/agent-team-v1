@@ -237,6 +237,7 @@ module.exports = [
   ['T-22', CARD, /`flags=security-sensitive\[,above-table\]`/, 'The flags= field on a card, with its two known values'],
   ['T-23', CARD, /A review card carries the reason of the attempt it reviews/, 'A review card carries the reason of the attempt it reviews'],
   ['T-24', CARD, /`confirm` is for a close reviewer resumed on an incremental diff/, 'reason=confirm is for a close reviewer resumed on an incremental diff'],
+  ['T-25', CARD, /its head SHA in `head=`/, 'A review card names the PR head in head= (decision 0030); the logger drops a block whose head_sha does not match', 'logger'],
 
   // ---- Decision records -----------------------------------------------------
   ['K-01', DECISIONS, /overriding the routing table/, 'When a decision record is due'],

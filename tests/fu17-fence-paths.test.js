@@ -362,12 +362,14 @@ test('head check: a PR review\'s block needs a full head_sha; a quoted block wit
   for (const [name, sha] of [['missing', undefined], ['placeholder', '<full sha reviewed>'], ['short', 'c0ffee1'], ['39 digits', HEAD.slice(1)], ['trailing space', HEAD + ' '], ['not hex', 'g'.repeat(40)], ['a number', 12345]]) {
     const obj = sha === undefined ? APPROVE : { ...APPROVE, head_sha: sha };
     const r = lib.reviewFor(`Review.\n\n${fence(obj)}`, REV, c);
-    eq(JSON.stringify(r), '{"_ambiguous":true,"count":1,"reason":"head_sha"}', name);
+    eq(JSON.stringify(r), '{"_ambiguous":true,"count":1,"reason":"head_sha","bound":"pr"}', name);
   }
   eq(lib.reviewFor(`Review.\n\n${RH}`, REV, c).verdict, 'changes_requested', 'full 40-digit SHA');
   eq(lib.reviewFor(`Review.\n\n${fence(withHead(REJECT, 'AB'.repeat(32)))}`, REV, c).verdict, 'changes_requested', 'full 64-digit SHA, upper case');
-  for (const extra of ['branch=task/T-1', `head=${HEAD.slice(0, 12)}`]) {
-    eq(lib.reviewFor(`Review.\n\n${Q}`, REV, card(extra)).reason, 'head_sha', `${extra} binds too`);
+  for (const [extra, bound] of [['branch=task/T-1', 'branch'], [`head=${HEAD.slice(0, 12)}`, 'head'], [`pr=9 head=${HEAD.slice(0, 12)}`, 'head']]) {
+    const r = lib.reviewFor(`Review.\n\n${Q}`, REV, card(extra));
+    eq(r.reason, 'head_sha', `${extra} binds too`);
+    eq(r.bound, bound, `${extra}: the card key that made the check apply`);
   }
 });
 
@@ -416,6 +418,29 @@ test('head check: the nudge names the head check, not the fence rules', () => {
   const mismatch = lib.reviewFor(`Review.\n\n${QOLD}`, REV, card(`pr=9 head=${HEAD.slice(0, 8)}`));
   assert(lib.headNudge(mismatch, 'reviewer').includes(`head=${HEAD.slice(0, 8)}`), 'names the card head');
   eq(lib.headNudge({ _ambiguous: true, count: 2 }, 'reviewer'), null, 'the parser\'s own marker keeps the fence wording');
+  // The message names the card key that made the check apply.
+  assert(lib.headNudge(marker, 'reviewer').includes('the card names a PR (`pr=`)'), lib.headNudge(marker, 'reviewer'));
+  const byBranch = lib.reviewFor(`Review.\n\n${Q}`, REV, card('branch=task/T-1'));
+  assert(lib.headNudge(byBranch, 'director').includes('the card names a branch (`branch=`)') && !/a PR/.test(lib.headNudge(byBranch, 'director')), lib.headNudge(byBranch, 'director'));
+  const byHead = lib.reviewFor(`Review.\n\n${Q}`, REV, card(`head=${HEAD}`));
+  assert(lib.headNudge(byHead, 'reviewer').includes('the card names a head (`head=`)'), lib.headNudge(byHead, 'reviewer'));
+});
+
+test('hook: a review whose card names no PR, branch or head, and whose block has no head_sha, still writes a row', () => {
+  const p = tmpProject();
+  const file = path.join(p, 'agent-np1.jsonl');
+  fs.writeFileSync(file, JSON.stringify({ type: 'user', message: { role: 'user', content: 'TASK id=D-1 type=review milestone=m attempt=1\nWHY design review, no PR' } }) + '\n');
+  const r = run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'np1', agent_type: REV, agent_transcript_path: file, last_assistant_message: `Review.\n\n${Q}` }, p);
+  eq(r.status, 0, 'exit');
+  const rows = readLog(p, 'reviews.jsonl');
+  eq(rows.length, 1, 'one row');
+  eq(rows[0].verdict, 'approve', 'its verdict');
+  assert(!('head_sha' in rows[0]), 'no head_sha on the row');
+  eq(r.stdout, '', 'no nudge');
+  // The bridge path too.
+  run('log-delegation.js', { hook_event_name: 'PostToolUse', session_id: 's1', tool_name: 'mcp__codex-bridge__codex_exec', tool_use_id: 'np-b1',
+    tool_input: { prompt: 'TASK id=D-2 type=review milestone=m attempt=1', model: 'gpt-6.1-sol' }, tool_response: { content: [{ type: 'text', text: `Review.\n\n${Q}` }] } }, p);
+  eq(readLog(p, 'reviews.jsonl').length, 2, 'the bridge row');
 });
 
 // The head check on the logging paths.

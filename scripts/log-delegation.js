@@ -523,7 +523,7 @@ function main() {
   if (tool === 'SendMessage') return emit(event, onPostSendMessage(input));
 }
 
-module.exports = { readSubagentTranscript, readMeta, completionRecord, completionTask };
+module.exports = { readSubagentTranscript, readMeta, completionRecord, completionTask, startsTurn };
 
 // Only run as the hook; reconcile-logs.js requires this file for the helpers.
 if (require.main === module) {

@@ -14,13 +14,14 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const { claimOnce, findDelegation } = require('./records');
+const { startsTurn } = require('./log-delegation');
 
 const MAX_NUDGES = 2;
 
 // The agent's task card, for the review's head check (lib.reviewFor). A
 // foreground agent's delegation line is written only when it returns, so the
-// card comes first from the TASK line of the latest turn in the agent's own
-// transcript (<session transcript without .jsonl>/subagents/agent-<id>.jsonl),
+// card comes first from the TASK line that opened the latest turn in the
+// agent's own transcript (<session transcript without .jsonl>/subagents/agent-<id>.jsonl),
 // then from its delegation line. Null when neither is found: the check then
 // runs without a card, and log-delegation.js still applies it at SubagentStop.
 function cardOf(input) {
@@ -34,12 +35,15 @@ function cardOf(input) {
   try {
     if (file) {
       for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-        if (!line.includes('TASK')) continue;
+        if (!line.trim()) continue;
         let e;
         try { e = JSON.parse(line); } catch { continue; }
-        if (!e || e.type !== 'user' || !e.message) continue;
+        // Only an entry that starts a turn holds the card: a real prompt, or an
+        // isMeta resume carrying a TASK card (the same test log-delegation.js
+        // uses). A tool result or a system entry that quotes a TASK line is not.
+        if (!e || !e.message || !startsTurn(e, e.message.content)) continue;
         const task = lib.parseTaskCard(lib.responseText(e.message.content));
-        if (task.id) card = task; // the latest turn's card
+        card = task.id ? task : null; // the card of the latest turn
       }
     }
   } catch { /* no transcript to read */ }

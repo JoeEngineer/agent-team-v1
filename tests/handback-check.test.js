@@ -78,11 +78,20 @@ test('handback: backslashes in a result-json string: doubled ones pass, a Window
   const p = tmpProject();
   const BS = String.fromCharCode(92);
   const block = (summary) => '```result-json\n{"status": "done", "summary": "' + summary + '", "follow_up": ""}\n```';
-  for (const s of [`a${BS}${BS}b`, `a${BS.repeat(4)}b`, `C:${BS}${BS}Users${BS}${BS}x`]) {
-    eq(decision(run('handback-check.js', input('agent-team:implementer', `Done.\n\n${block(s)}`, `bs-ok-${s.length}`), p)), null, `passes: ${s}`);
+  // Decision 0030 lists 1, 2, 3, 4 and 8 backslashes before b, x and n: every
+  // count that makes valid JSON passes (2, 4 and 8 always; 1 and 3 before b or n).
+  const valid = [];
+  for (const n of [1, 2, 3, 4, 8]) for (const c of ['b', 'x', 'n']) if (n % 2 === 0 || c !== 'x') valid.push(`a${BS.repeat(n)}${c}`);
+  valid.push(`C:${BS}${BS}Users${BS}${BS}x`);
+  for (const [k, s] of valid.entries()) {
+    eq(decision(run('handback-check.js', input('agent-team:implementer', `Done.\n\n${block(s)}`, `bs-ok-${k}`), p)), null, `passes: ${s}`);
   }
   const d = decision(run('handback-check.js', input('agent-team:implementer', `Done.\n\n${block(`C:${BS}Users${BS}x`)}`, 'bs-bad'), p));
   assert(d && d.permissionDecision === 'deny', 'single backslashes denied');
+  for (const n of [1, 3]) {
+    const odd = decision(run('handback-check.js', input('agent-team:implementer', `Done.\n\n${block(`a${BS.repeat(n)}x`)}`, `bs-odd-${n}`), p));
+    assert(odd && /not valid JSON/.test(odd.permissionDecisionReason), `${n} backslashes before x: denied, as JSON.parse refuses it`);
+  }
   assert(/not valid JSON/.test(d.permissionDecisionReason) && d.permissionDecisionReason.includes(`each backslash as \`${BS}${BS}\``), d.permissionDecisionReason);
   // Invalid JSON with no backslash gets no hint.
   const plain = decision(run('handback-check.js', input('agent-team:implementer', 'Plan.\n```result-json\n{"status": }\n```', 'bs-none'), p));
@@ -109,6 +118,38 @@ test('handback: a reviewer whose card names a PR is refused a block without a fu
   const old = send(`Review.\n\n${reviewBlock({ head_sha: 'badbad' + '2'.repeat(34) })}`);
   assert(old && old.permissionDecisionReason.includes('not the head the card names (`head=c0ffee1111`)'), old && old.permissionDecisionReason);
   eq(send(`Review.\n\n${reviewBlock({ head_sha: HEAD })}`), null, 'the card head: passes');
+});
+
+// Only an entry that starts a turn holds the card (log-delegation.js startsTurn).
+const toolResultLine = (text) => JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: text }] } }) + '\n';
+const metaLine = (text) => JSON.stringify({ type: 'user', isMeta: true, message: { role: 'user', content: text } }) + '\n';
+for (const [name, line] of [['a tool_result', toolResultLine], ['an isMeta system entry', metaLine]]) {
+  test(`handback: a TASK line in ${name} after the real card is not the card`, () => {
+    const p = tmpProject();
+    const OTHER = 'badbad' + '2'.repeat(34);
+    const t = path.join(p, 'agent-tr.jsonl');
+    // isMeta: a TASK line not in the `TASK id=` form a resume card has, which parseTaskCard alone would still read.
+    const quoted = (extra) => name === 'a tool_result' ? `$ cat card.txt\nTASK id=V-7 type=review attempt=1 ${extra}` : `Reminder:\nTASK type=review id=V-7 attempt=1 ${extra}`;
+    // A quoted card naming another head would deny the reviewer's correct block.
+    fs.writeFileSync(t, userLine(CARD(`head=${HEAD}`)) + line(quoted(`pr=9 head=${OTHER}`)));
+    const send = (message, id) => decision(run('handback-check.js', { ...input('agent-team:reviewer', message, id), agent_transcript_path: t }, p));
+    eq(send(`R.\n\n${reviewBlock({ head_sha: HEAD })}`, 'tr1'), null, 'the real card holds: the correct block passes');
+    assert(send(`R.\n\n${reviewBlock({ head_sha: OTHER })}`, 'tr2'), 'the quoted head is not accepted');
+    // A quoted card with no PR would turn the check off.
+    fs.writeFileSync(t, userLine(CARD(`head=${HEAD}`)) + line(quoted('')));
+    const d = send(`R.\n\n${reviewBlock({})}`, 'tr3');
+    assert(d && /head_sha/.test(d.permissionDecisionReason), 'the check stays on: ' + JSON.stringify(d));
+  });
+}
+
+test('handback: an isMeta resume card (TASK id=) does replace the card (control)', () => {
+  const p = tmpProject();
+  const t = path.join(p, 'agent-rs.jsonl');
+  const NEW = 'facade' + '3'.repeat(34);
+  fs.writeFileSync(t, userLine(CARD(`head=${HEAD}`)) + metaLine(`TASK id=V-7 type=review milestone=m attempt=2 pr=9 head=${NEW}`));
+  const send = (message, id) => decision(run('handback-check.js', { ...input('agent-team:reviewer', message, id), agent_transcript_path: t }, p));
+  eq(send(`R.\n\n${reviewBlock({ head_sha: NEW })}`, 'rs1'), null, 'the resume head passes');
+  assert(send(`R.\n\n${reviewBlock({ head_sha: HEAD })}`, 'rs2'), 'the attempt-1 head is refused');
 });
 
 test('handback: the card also comes from agent_transcript_path, or else the delegation line; with none, no head check', () => {

@@ -1078,21 +1078,21 @@ function headProblem(review, task) {
   const t = task && typeof task === 'object' ? task : {};
   if (!named(t.head) && !named(t.pr) && !named(t.branch)) return null;
   const sha = review && typeof review === 'object' && typeof review.head_sha === 'string' ? review.head_sha : '';
-  if (!FULL_SHA.test(sha)) return { reason: 'head_sha' };
+  // `bound`: the card key that made the check apply, for the message.
+  if (!FULL_SHA.test(sha)) return { reason: 'head_sha', bound: named(t.head) ? 'head' : named(t.pr) ? 'pr' : 'branch' };
   if (named(t.head)) {
     const head = String(t.head);
     if (!CARD_HEAD.test(head) || !sha.toLowerCase().startsWith(head.toLowerCase())) return { reason: 'head_mismatch', card_head: head.slice(0, 64) };
   }
   return null;
 }
-const HEAD_WHY = {
-  head_sha: 'its `head_sha` is not the full SHA of the head reviewed, and the card names a PR',
-  head_mismatch: 'its `head_sha` is not the head the card names',
-};
+const BOUND_BY = { pr: 'a PR (`pr=`)', branch: 'a branch (`branch=`)', head: 'a head (`head=`)' };
 // Why a review marked ambiguous by reviewFor's head check was not read, or null for the parser's own marker.
 function headWhy(review) {
-  if (!review || !HEAD_WHY[review.reason]) return null;
-  return review.card_head ? `${HEAD_WHY[review.reason]} (\`head=${review.card_head}\`)` : HEAD_WHY[review.reason];
+  if (!review) return null;
+  if (review.reason === 'head_sha') return `its \`head_sha\` is not the full SHA of the head reviewed, and the card names ${BOUND_BY[review.bound] || BOUND_BY.pr}`;
+  if (review.reason === 'head_mismatch') return `its \`head_sha\` is not the head the card names (\`head=${review.card_head}\`)`;
+  return null;
 }
 // The re-ask for a head-check marker: to the reviewer (SubagentStop) or to the Director.
 function headNudge(review, to) {
