@@ -53,8 +53,8 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
 | FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
 | FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted; attempt 3 xlarge (fable) / high | 4 (fold-in) | merged | 175 |
-| FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | in review: approved at fdc480a; security review running | |
-| FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | in progress: attempt 2 fold-in of 9 review minors | |
+| FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | merged | |
+| FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | in review: approved at a4bb9dd; security review running | |
 | FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | planned: after FU-23 and FU-24 | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
@@ -101,7 +101,7 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - Ladder step 1 could say that its send-back at large/high is step 3's one send-back. Step 3 says so now.
   - The R-18 comment in `tests/guidance-rules.js` still reads for one failure.
   - `merging.md` "First CI run" step 1 says "require the check names". It should say "add them as required status checks", the forge setting's name.
-  - The core set is at 33,797 of 33,800 bytes: the next guidance addition needs a cut or a new budget decision.
+  - The core set is at 33,780 of 33,800 (after FU-23) bytes: the next guidance addition needs a cut or a new budget decision.
 - **Follow-ups from FU-6 (PR #154), minor:**
   - `lib.projectDir` runs `git rev-parse` with the caller's environment. `GIT_DIR`, `GIT_WORK_TREE` or `CLAUDE_PROJECT_DIR` can move where `grant` reads `milestones.jsonl`. The fix: apply the same `GIT_*` filter there, and note it in 0026.
   - The "outside a repo" test no longer exercises the no-repository path on a machine whose temp folder sits inside a repo.
@@ -117,6 +117,11 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - An agent that guesses the next milestone slug can append a wide `milestone` line through `log-event.js milestone` before intake. If it later edits the STATUS block to match, `status.js grant` exits 0 with that wide grant. The proposed fix: `log-event.js milestone` refuses a second line for a slug.
   - A hand-made first log line torn before the slug ends is skipped.
   - An agent that can rewrite `milestones.jsonl` or the shared `.git` object store is not stopped.
+- **Follow-ups from FU-23 (PR #179), security minors (not fixed; for the next release):**
+  - `startsTurn` accepts a compaction-summary entry (`isCompactSummary`), so a line-start TASK line quoted in it can swap the card's `head=` in `handback-check` `cardOf` and in `completionTask`. The code path was probed; whether a real summary does this is unconfirmed. Fix: skip `isCompactSummary` and `isVisibleInTranscriptOnly` entries.
+  - `CARD_HEAD` in `lib.js` accepts a 7-hex `head=` prefix, which allows commit-hash grinding if a card carries a short head. Fix: require 40 or 64 hex.
+  - Decision 0030's residual source list omits output of the diff's own code that a reviewer runs (same accepted class). The reviewer files don't yet say `head=` must match `head_sha`.
+  - From the close re-check: `merging.md:58` writes bare `status.js set` instead of the plugin-root `node .../scripts/status.js` form.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
