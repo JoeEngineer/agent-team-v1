@@ -55,7 +55,7 @@ Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2
 | FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted; attempt 3 xlarge (fable) / high | 4 (fold-in) | merged | 175 |
 | FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | merged | |
 | FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | merged | |
-| FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | in review: PR 180 at b632b37; reviewer running | |
+| FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | merged | |
 
 Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
@@ -127,6 +127,12 @@ States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` ·
   - A stale record lock whose pid was reused or can't be signalled (EPERM) gives "busy, retry" forever. Name the lock file in the message.
   - `plainString` in `log-event.js` admits bidi and zero-width characters in attribution values (keys are folded, values are not).
   - Pre-existing: `AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY` is joined without a plain-name check (needs env control). Give it the same check as the link hook, or move the test hooks out of production code.
+- **Follow-ups from FU-25 (PR #180), docs minors (not fixed; for the next release):**
+  - README grant-words entry: "a git-tracked log exits 24" reads as the logger; only `status.js grant` exits 24, the logger exits 1 and writes nothing.
+  - README scanner entry omits the 0027 `skip-dirs`/`skip-files` residual for `.scan-pr-config` and that the template has had no live run.
+  - README head-binding entry says "the agent gets a message"; on the bridge and foreground paths the Director does. It doesn't say a card without `head=` binds to any full SHA.
+  - `AGENT_TEAM_CODEX_SESSIONS` is stated twice in the README (lines 113 and 308).
+  - `agents/coach.md`: the Codex stub line lost "metrics are null until"; the unknown-merge example note was cut.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
