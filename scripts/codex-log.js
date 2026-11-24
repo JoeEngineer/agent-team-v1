@@ -28,7 +28,7 @@ function inCodexSessions(file) {
   if (typeof file !== 'string' || !file) return false;
   try {
     const rel = path.relative(fs.realpathSync.native(sessionsRoot()), fs.realpathSync.native(file));
-    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+    return !!rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
   } catch { return false; }
 }
 

@@ -7,9 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const { counts } = require('./helpers');
 
-// Codex transcripts are opened only inside the Codex sessions folder (codex-log.inCodexSessions).
-// The tests keep theirs in the temp folder, so that is the folder here; tests that check the rule set their own.
-if (!process.env.AGENT_TEAM_CODEX_SESSIONS) process.env.AGENT_TEAM_CODEX_SESSIONS = require('fs').realpathSync.native(require('os').tmpdir());
 
 const files = fs.readdirSync(__dirname).filter((f) => f.endsWith('.test.js')).sort();
 

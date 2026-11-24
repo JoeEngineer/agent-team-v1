@@ -895,7 +895,7 @@ const codexLog = require(path.join(SCRIPTS, 'codex-log.js'));
 function withSessions(dir, fn) {
   const was = process.env.AGENT_TEAM_CODEX_SESSIONS;
   process.env.AGENT_TEAM_CODEX_SESSIONS = dir;
-  try { return fn(); } finally { process.env.AGENT_TEAM_CODEX_SESSIONS = was; }
+  try { return fn(); } finally { if (was === undefined) delete process.env.AGENT_TEAM_CODEX_SESSIONS; else process.env.AGENT_TEAM_CODEX_SESSIONS = was; }
 }
 
 test('FU-24 codex: a transcript is read only inside the Codex sessions folder (inside read; outside, a ../ path and a link out are not)', () => {
@@ -1001,5 +1001,53 @@ test('FU-24 codex: reconcile reports a refused pending drain and exits non-zero;
   const ok = reconcile();
   eq(ok.status, 0, ok.stderr + ok.stdout);
   eq(readLog(p, 'completions.jsonl').length, 1, 'completion written');
+  eq(pendingFiles(p).length, 0, 'snapshot consumed');
+});
+
+test('FU-24 codex: a legitimate entry named like "..x" inside the sessions folder is read; "..", a sibling folder and another drive are not', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-sessions-'));
+  const dotted = path.join(root, '..x');
+  fs.mkdirSync(dotted);
+  const inFile = transcript(dotted);
+  withSessions(root, () => {
+    assert(fs.existsSync(inFile), 'precondition: the file exists');
+    assert(codexLog.inCodexSessions(inFile), 'a file under "..x" is inside the folder');
+    assert(codexLog.turnIds(inFile).length === 1, 'and is read');
+    assert(!codexLog.inCodexSessions(root), 'the folder itself is not a transcript');
+    assert(!codexLog.inCodexSessions(path.dirname(root)), 'its parent is not inside');
+    assert(!codexLog.inCodexSessions(path.join(root, '..', path.basename(root) + '-sibling', 'x')), 'a missing sibling path is not inside');
+  });
+});
+
+test('FU-24 codex: reconcile with no Claude projects folder still reports a refused snapshot and exits non-zero', () => {
+  const p = tmpProject();
+  directorLine(p);
+  const file = transcript(p);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file));
+  eq(pendingFiles(p).length, 1, 'precondition: a snapshot is waiting');
+  completeTurn(file, 'turn-1', 1234);
+  const logs = path.join(p, '.agent-team', 'logs');
+  const victim = path.join(os.tmpdir(), `agent-team-victim2-${process.pid}-${Date.now()}.jsonl`);
+  fs.writeFileSync(victim, '');
+  const comp = path.join(logs, 'completions.jsonl');
+  fs.rmSync(comp, { force: true });
+  fs.linkSync(victim, comp);
+  const missing = path.join(os.tmpdir(), `agent-team-no-such-root-${process.pid}-${Date.now()}`);
+  assert(!fs.existsSync(missing), 'precondition: the projects folder does not exist');
+  const reconcile = () => spawnSync('node', [path.join(SCRIPTS, 'reconcile-logs.js')], {
+    cwd: p, encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p, AGENT_TEAM_MODELS: NO_MODELS_FILE, AGENT_TEAM_PROJECTS_ROOT: missing },
+  });
+  const r = reconcile();
+  assert(/No Claude Code projects folder found/.test(r.stdout), 'precondition: the no-projects branch ran: ' + r.stdout);
+  assert(r.status === 1, 'exit 1, got ' + r.status);
+  assert(/reconcile-logs: pending Codex snapshot refused/.test(r.stderr), r.stderr);
+  eq(pendingFiles(p).length, 1, 'the snapshot is kept');
+  // Recovery and control: the link gone, the same run exits 0.
+  fs.unlinkSync(comp);
+  const ok = reconcile();
+  eq(ok.status, 0, ok.stderr);
+  assert(/No Claude Code projects folder found/.test(ok.stdout), 'still the no-projects branch');
   eq(pendingFiles(p).length, 0, 'snapshot consumed');
 });

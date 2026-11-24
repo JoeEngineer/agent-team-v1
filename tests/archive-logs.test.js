@@ -506,3 +506,31 @@ test('archive FU-24: --clear does not delete a live log that became a link after
   assert(!fs.existsSync(path.join(logs(p), 'b.jsonl')), 'control: an ordinary log is still cleared');
   assert(r.stdout.includes('Cleared 1 live log'), r.stdout);
 });
+
+test('archive FU-24: a stale .pending entry with a second name is not deleted, and stderr says so; an ordinary stale one still is', () => {
+  const p = project();
+  const pend = path.join(logs(p), '.pending');
+  const old = new Date(Date.now() - 3 * 24 * 3600 * 1000);
+  const linked = path.join(pend, 'stop-linked');
+  const plain = path.join(pend, 'stop-plain');
+  fs.writeFileSync(linked, 'x');
+  fs.writeFileSync(plain, 'x');
+  fs.linkSync(linked, path.join(p, 'elsewhere'));
+  for (const f of [linked, plain]) fs.utimesSync(f, old, old);
+  eq(fs.lstatSync(linked).nlink, 2, 'precondition: the entry has a second name');
+  const r = arch(p, ['m', '--project', 'x']);
+  eq(r.status, 0, r.stderr);
+  assert(/stale \.pending entry not deleted.*stop-linked/.test(r.stderr), r.stderr);
+  assert(fs.existsSync(linked), 'the linked entry is kept');
+  assert(!fs.existsSync(plain), 'control: the ordinary stale entry is deleted');
+});
+
+test('archive FU-24: the link-after-verify test hook takes a plain file name only', () => {
+  for (const bad of ['../a.jsonl', 'sub/a.jsonl', '..']) {
+    const p = project({ 'a.jsonl': rec('m') + '\n' });
+    const r = arch(p, ['m', '--project', 'x', '--clear'], { AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY: bad });
+    eq(r.status, 1, `${bad}: refused`);
+    assert(/must be a plain file name/.test(r.stderr), r.stderr);
+    assert(fs.existsSync(path.join(logs(p), 'a.jsonl')), `${bad}: nothing deleted`);
+  }
+});

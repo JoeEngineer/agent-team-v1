@@ -8,6 +8,11 @@ const os = require('os');
 const path = require('path');
 const { spawnSync, execFileSync } = require('child_process');
 
+// Codex transcripts are opened only inside the Codex sessions folder (codex-log.inCodexSessions).
+// The tests keep theirs in the temp folder, so that is the folder unless a test file sets its own;
+// set here so a test file passes when run on its own (node tests/x.test.js) as well as under run.js.
+if (!process.env.AGENT_TEAM_CODEX_SESSIONS) process.env.AGENT_TEAM_CODEX_SESSIONS = fs.realpathSync.native(os.tmpdir());
+
 const ROOT = path.resolve(__dirname, '..');
 const SCRIPTS = path.join(ROOT, 'scripts');
 

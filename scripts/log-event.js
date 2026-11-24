@@ -16,6 +16,11 @@
 //   review       e.g. '{"card":"TASK id=X-2 reviewed_task=X-1 pr=5 ...","verdict":"approve","agent_id":"..."}'
 // `card` is parsed into `task` (task card fields, plus `why` from a WHY line or a `why` field).
 // `tool` defaults to AGENT_TEAM_TOOL, else "unknown". Director-written lines carry source "director".
+// review: the task is the card's alone (a `task` object in the JSON is ignored); `tool` is "claude" or "codex"
+//   (else the default above); agent_id, resolved_model, model, effort and tier are kept only as short plain
+//   strings. A block never gives session_id or a field of the row that the logger owns. When another writer
+//   holds the record lock for the same review, nothing is written: "not logged: busy ... retry", exit 1.
+//   A review already in the log is "not logged: duplicate of <id>", exit 0.
 // Every line carries session_id: CLAUDE_CODE_SESSION_ID when set (session_source "env"), else the
 // SessionStart marker's (session_source "marker"). A review line has session_id only.
 // session_id and session_source always name the session that ran this script: a session_id
@@ -49,6 +54,7 @@ const PAUSE_REASONS = ['user', 'runway', 'usage_limit'];
 const REVIEW_TOOLS = ['claude', 'codex'];
 const plainString = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\u0000-\u001f\u007f]/.test(v);
 // The refusals that write nothing end with this: the Director's intake line is not in the log yet.
+// tests/fu22-intake-line.test.js ties this sentence to the bullet in skills/milestone/SKILL.md.
 const RELOG = 'once the problem is fixed, log this line again; only exit 0 clears it.';
 const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review', 'pause', 'resume']);
 

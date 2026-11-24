@@ -600,3 +600,14 @@ test('FU-24 milestone: a damaged milestones.jsonl refuses with the re-log senten
   assert(/cannot tell whether "m1" already has an intake line/.test(r.err), r.err);
   assert(RELOG.test(r.err), r.err);
 });
+
+test('FU-24 milestone: the re-log sentence the logger prints is the one in skills/milestone/SKILL.md', () => {
+  const p = project();
+  const r = intake(p, line('m1', CLOSE), { CLAUDE_PROJECT_DIR: project() });
+  eq(r.status, 1, 'precondition: refused');
+  const m = /(once the problem is fixed, log this line again; only exit 0 clears it\.)/.exec(r.err);
+  assert(m, 'the logger prints the sentence: ' + r.err);
+  const skill = fs.readFileSync(path.join(ROOT, 'skills', 'milestone', 'SKILL.md'), 'utf8');
+  const bullet = skill.split(/\r?\n/).find((l) => l.includes('A damaged log, a log git tracks'));
+  assert(bullet && bullet.includes(`Nothing was written; ${m[1]}`), 'the SKILL.md bullet carries the same sentence: ' + bullet);
+});

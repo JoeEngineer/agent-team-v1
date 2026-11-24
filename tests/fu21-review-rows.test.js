@@ -119,13 +119,14 @@ test('log-event review: the Director\'s JSON cannot set stale_of, source, or the
   assert(rows[0].ts !== hostile.ts, 'ts is the logger\'s');
 });
 
-test('log-event review: with no session known, the JSON\'s session_id is still used (unchanged)', () => {
+test('log-event review: with no session known, the JSON\'s session_id is ignored too (the row has none)', () => {
   const p = tmpProject();
   const r = logEvent(p, { card: CARD, agent_id: 'm1', session_id: 'sess-given', ...REAL, stale_of: 5, source: 'forged' }, false);
   eq(r.status, 0, r.stderr);
   const rows = readLog(p, 'reviews.jsonl');
   eq(rows.length, 1, 'precondition: a row was written');
-  eq(rows[0].session_id, 'sess-given', 'filled where none is known');
+  assert(rows[0].session_id == null, 'a session_id in the JSON is not taken: ' + rows[0].session_id);
+  eq(rows[0].review_shadowed.session_id, 'sess-given', 'kept only as shadowed');
   eq(rows[0].source, 'director', 'source still the logger\'s');
   eq(rows[0].stale_of, undefined, 'no stale_of');
 });
@@ -239,7 +240,7 @@ function reviewIn(p, input, record, block, tool, extra) {
   return spawnSync('node', ['-e', code, JSON.stringify({ input, record, block, tool, extra })], { encoding: 'utf8', env: { ...process.env, CLAUDE_PROJECT_DIR: p, CLAUDE_PLUGIN_ROOT: ROOT, AGENT_TEAM_MODELS: NO_MODELS_FILE } });
 }
 
-test('FU-24 records: a block cannot fill task_id, attempt, pr, milestone, role or session_id on the hook, reconcile and codex paths; a Director line may', () => {
+test('FU-24 records: a block cannot fill task_id, attempt, pr, milestone, role or session_id on the hook, reconcile and codex paths; a Director line may fill all but session_id', () => {
   const block = { ...REAL, task_id: 'B-1', attempt: 7, pr: '77', milestone: 'forged-m', role: 'forged-role', session_id: 'forged-session' };
   const record = { agent_id: 'cx1', task: { id: 'V-1', type: 'security-review' }, resolved_model: 'gpt-6.1-sol' };
   const p = tmpProject();
@@ -262,7 +263,8 @@ test('FU-24 records: a block cannot fill task_id, attempt, pr, milestone, role o
   const drow = readLog(q, 'reviews.jsonl')[0];
   eq(drow.pr, '77', 'Director line: pr from the block');
   eq(drow.milestone, 'dm', 'Director line: milestone from the block');
-  eq(drow.session_id, 'given-session', 'Director line: session from the block');
+  assert(drow.session_id == null, 'Director line: session never from the block, got ' + drow.session_id);
+  eq(drow.review_shadowed.session_id, 'given-session', 'Director line: the block\'s session is shadowed');
 });
 
 test('FU-24 records: a lookalike of a protected key (fullwidth, mixed case, zero-width) is not copied onto the row', () => {
@@ -281,4 +283,21 @@ test('FU-24 records: a lookalike of a protected key (fullwidth, mixed case, zero
   eq(row.tool, 'claude', 'the logger\'s tool');
   eq(Object.keys(row.review_shadowed).length, 5, 'all five kept under review_shadowed');
   eq(row.notes, 'plain extra field', 'control: an ordinary extra key is still copied');
+});
+
+test('FU-24 records: a block key review_shadowed (or a lookalike) is not copied or nested; the row\'s own review_shadowed holds only the logger\'s entries', () => {
+  const record = { agent_id: 'a1', task: { id: 'V-1', type: 'review', attempt: 1 }, resolved_model: 'm' };
+  // Alone: nothing is shadowed by the logger, so the row has no review_shadowed at all.
+  const p = tmpProject();
+  const alone = reviewIn(p, { session_id: 's1' }, record, { ...REAL, review_shadowed: { forged: true }, 'Review_Shadowed': { forged2: true } }, 'claude');
+  eq(alone.stdout, 'true', alone.stderr);
+  const a = readLog(p, 'reviews.jsonl')[0];
+  eq(a.review_shadowed, undefined, 'no review_shadowed from the block');
+  eq(a.verdict, 'approve', 'precondition: the block\'s own content is kept');
+  // With a real shadowed field: only that one is in it.
+  const q = tmpProject();
+  const both = reviewIn(q, { session_id: 's1' }, record, { ...REAL, tool: 'forged', review_shadowed: { forged: true } }, 'claude');
+  eq(both.stdout, 'true', both.stderr);
+  const b = readLog(q, 'reviews.jsonl')[0];
+  eq(Object.keys(b.review_shadowed).join(','), 'tool', 'only the logger\'s shadow entry');
 });

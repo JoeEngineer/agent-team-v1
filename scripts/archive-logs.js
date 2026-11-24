@@ -352,11 +352,14 @@ function main() {
   let removed = 0;
   for (const x of stale) {
     try {
-      // Listed a moment ago: a name that is a link now is left alone.
-      if (fs.lstatSync(x.p).isSymbolicLink()) continue;
+      // Listed a moment ago: a name that is a link now, or has a second name, is left alone and said so.
+      lib.checkLogFile(x.p);
       fs.unlinkSync(x.p);
       removed++;
-    } catch { /* ignore */ }
+    } catch (err) {
+      if (err && err.code === lib.REFUSED) console.error(`archive-logs: stale .pending entry not deleted (a link, or a file with another name): ${x.p}`);
+      /* anything else: best effort */
+    }
   }
   let cleared = 0;
   const skipped = [];
@@ -368,6 +371,7 @@ function main() {
     if (appendTo) lib.safeAppend(path.join(logDir, appendTo), 'late write\n');
     // AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY=<file> gives that log a second name after verification (same content).
     const linkIt = process.env.AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY;
+    if (linkIt && (path.basename(linkIt) !== linkIt || linkIt === '.' || linkIt === '..')) fail('AGENT_TEAM_ARCHIVE_TEST_LINK_AFTER_VERIFY must be a plain file name');
     if (linkIt) fs.linkSync(path.join(logDir, linkIt), path.join(logDir, `${linkIt}.second-name`));
     for (const f of files) {
       const src = path.join(logDir, f);
