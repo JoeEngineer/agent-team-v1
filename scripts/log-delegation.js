@@ -8,7 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
-const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
+const { base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, findDelegation: findDelegationBy, logMerges, cardDrift, driftMessage, cardSettings, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, isAmbiguous, ambiguousNudge, ambiguousDirectorNudge, UNCARDED_MESSAGE, closeOpenPause } = require('./records');
 
 // Loaded once per hook run; loadMap never throws, but stay safe anyway.
 let MAP = null;
@@ -72,7 +72,7 @@ function onPre(input) {
   const tool = input.tool_name || '';
   if (SUBAGENT_TOOLS.has(tool) || tool === SESSION_START || isBridge(tool)) closeOpenPause(input, 'delegation');
   if (!input.tool_use_id) return;
-  fs.writeFileSync(startFile(input), JSON.stringify({ started: Date.now() }));
+  lib.safeReplace(startFile(input), JSON.stringify({ started: Date.now() }));
 }
 
 function resolveRouting(input, ti) {
@@ -136,10 +136,13 @@ function onPostSubagent(input) {
     record.duration_ms = elapsed;
     Object.assign(record, lib.usageFrom(resp));
     record.result = lib.lastFencedJson(text, 'result-json');
-    const review = lib.lastFencedJson(text, 'review-json');
+    const review = lib.reviewFor(text, ti.subagent_type, record.task);
     if (review) {
       record.review = review;
-      logReview(input, record, review);
+      // An ambiguous review writes no row; the Director is told to re-ask once.
+      // Only a review delegation writes a row at all (an implementer's reply never does).
+      if (isAmbiguous(review)) context = [context, lib.headNudge(review, 'director') || ambiguousDirectorNudge(review)].filter(Boolean).join('\n');
+      else if (lib.isReviewDelegation(ti.subagent_type, record.task)) logReview(input, record, review);
     }
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
@@ -187,10 +190,13 @@ function onPostBridge(input) {
   const text = lib.responseText(input.tool_response);
   const model = ti.model || 'default';
   const task = lib.parseTaskCard(ti.prompt || ti.task || ti.instructions);
+  // The server name is "<name>-bridge" (codex-bridge, antigravity-bridge).
+  const server = input.tool_name.replace(/^mcp__/, '').replace(/__.*/, '');
   const record = {
     ...base(input),
     kind: 'bridge',
-    agent: input.tool_name.replace(/^mcp__/, '').replace(/__.*/, ''),
+    agent: server,
+    tool_use_id: input.tool_use_id || null,
     model,
     effort: ti.effort || ti.reasoning_effort || 'default',
     task,
@@ -200,12 +206,18 @@ function onPostBridge(input) {
   // A review that came back through a bridge is logged as a review, with the
   // bridge's model, so reviews from both families can be compared. A block
   // that doesn't parse is kept as _unparsed and writes no row.
-  const review = lib.lastFencedJson(text, 'review-json');
+  const review = lib.reviewFor(text, null, task);
   if (review) {
     record.review = review;
-    if (task.id && !review._unparsed) logReview(input, record, review);
+    // The row's `tool` is the bridge (codex, antigravity), not claude. Only a review card gets a row.
+    if (task.id && isReviewTask(task) && !review._unparsed && !isAmbiguous(review)) logReview(input, record, review, server.replace(/-bridge$/, ''));
   }
   lib.appendJsonl(input, 'delegations.jsonl', record);
+  // No stop hook runs on the bridge path, so the Director gets the nudge.
+  const messages = [...flagMessages(task),
+    ...(isAmbiguous(review) ? [lib.headNudge(review, 'director') || ambiguousDirectorNudge(review)] : []),
+    ...(review && verdictConflict(review) ? [VERDICT_CONFLICT_DIRECTOR_NUDGE] : [])];
+  return messages.length ? messages.join('\n') : undefined;
 }
 
 // SendMessage to an existing agent with a task card is a new attempt of that
@@ -352,7 +364,15 @@ function onSubagentStop(input) {
       ['handback', t.handback],
       ['text', t.lastText],
     ].filter(([, v]) => v);
-    const [reportSource, report] = sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
+    // A handback that carries a review block wins: text said before the handback
+    // (last_assistant_message, the last text) may only quote one. Only a handback
+    // that handback-check accepts wins: a refused one (an ambiguous, unreadable or
+    // tilde-fenced block, or one that fails the head check) is followed by more
+    // of the agent's reply, so a newer hook-input message may hold the real one.
+    const card = completionTask(delegation, t);
+    const accepted = (v) => /```review-json/.test(v) && lib.handbackReadable(v, agentType, card);
+    const [reportSource, report] = sources.find(([k, v]) => k === 'handback' && accepted(v)) ||
+      sources.find(([, v]) => hasBlock(v)) || sources[0] || ['none', ''];
     return { t, reportSource, report };
   };
   let { t, reportSource, report } = choose();
@@ -383,7 +403,7 @@ function onSubagentStop(input) {
   if (agentId && !claimOnce(input, `stop-${agentId}-${t.turn}-${shortHash(report || t.lastId || t.last || 'none')}`)) return;
   const record = completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report });
   lib.appendJsonl(input, 'completions.jsonl', record);
-  if (record.review) logReview(input, record, record.review);
+  if (record.review && lib.isReviewDelegation(agentType, record.task)) logReview(input, record, record.review);
   // A role agent that ended without its JSON block gets a nudge. SubagentStop's
   // additionalContext is delivered to the subagent (which continues so it can
   // act on it), not to the Director, so the text speaks to the subagent. It
@@ -397,15 +417,31 @@ function onSubagentStop(input) {
     const block = isReview ? 'review-json' : 'result-json';
     return `agent-team: your reply ended without its \`${block}\` block. End your reply with your \`${block}\` block (the fenced JSON block your instructions describe) so the Director and the logs can read your result.`;
   }
+  // A review whose verdict contradicts its severity gets one nudge per turn.
+  // The missing-block nudge above returns first, and the two can't both apply:
+  // a parsed review means the fence was there. So a turn draws at most one nudge,
+  // whatever else its review-json lacks (tests/fu3-logger.test.js pins this).
+  if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && verdictConflict(record.review)) {
+    return VERDICT_CONFLICT_NUDGE;
+  }
+  // A review-json that is not one top-level block at the end of the reply, or
+  // that fails the head check (decision 0030), wrote no row: tell the reviewer
+  // why, once per turn (quiet under stop_hook_active).
+  if (agentType && agentType.startsWith('agent-team:') && !input.stop_hook_active && isAmbiguous(record.review)) {
+    return lib.headNudge(record.review, 'reviewer') || ambiguousNudge(record.review);
+  }
 }
 
 // Task card for a completion: the delegation's, with the attempt taken from
 // the turn's own TASK line. With no attempt= on that line (malformed card) the
-// delegation's attempt stays, which may be stale.
+// delegation's attempt stays, which may be stale. A `head=` on the turn's line
+// replaces the delegation's too: a review's block is checked against the head
+// of the turn it answers (lib.reviewFor).
 function completionTask(delegation, t) {
   const turnTask = t.task || {};
   const task = delegation ? { ...delegation.task } : lib.parseTaskCard(t.prompt);
   if (turnTask.attempt != null && Number(turnTask.attempt) !== Number(task.attempt)) task.attempt = turnTask.attempt;
+  if (turnTask.head) task.head = turnTask.head;
   return task;
 }
 
@@ -413,6 +449,7 @@ function completionTask(delegation, t) {
 // scripts/reconcile-logs.js so a backfilled line has the same shape.
 function completionRecord(input, { agentType, agentId, meta, delegation, t, reportSource, report }) {
   const routing = delegation || resolveRouting(input, { subagent_type: agentType });
+  const task = completionTask(delegation, t);
   return {
     ...base(input),
     kind: 'completion',
@@ -434,7 +471,7 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     // The attempt comes from the turn being logged (the TASK line that opened
     // it), not from the latest delegation, so a stale verdict is never stamped
     // with a newer attempt number.
-    task: completionTask(delegation, t),
+    task,
     // Latest turn only (a resumed agent's attempt 2 doesn't include attempt 1).
     // From the transcript, so they can miss the final message if the file lags.
     duration_ms: t.first && t.last ? t.last - t.first : null,
@@ -445,7 +482,7 @@ function completionRecord(input, { agentType, agentId, meta, delegation, t, repo
     tokens_by_class: t.tokens ? { ...t.classes } : null,
     report_source: reportSource,
     result: lib.lastFencedJson(report, 'result-json'),
-    review: lib.lastFencedJson(report, 'review-json'),
+    review: lib.reviewFor(report, agentType, task),
   };
 }
 
@@ -480,13 +517,13 @@ function main() {
   if (SUBAGENT_TOOLS.has(tool)) return emit(event, onPostSubagent(input));
   if (tool === SESSION_START) return onPostSession(input);
   if (SESSION_SETTINGS.has(tool)) return onPostSessionSetting(input);
-  if (isBridge(tool)) return onPostBridge(input);
+  if (isBridge(tool)) return emit(event, onPostBridge(input));
   // A merge-log warning (e.g. a cancel the forge didn't confirm) goes to the Director.
   if (isShell(tool)) return emit(event, logMerges(input, 'claude'));
   if (tool === 'SendMessage') return emit(event, onPostSendMessage(input));
 }
 
-module.exports = { readSubagentTranscript, readMeta, completionRecord };
+module.exports = { readSubagentTranscript, readMeta, completionRecord, completionTask, startsTurn };
 
 // Only run as the hook; reconcile-logs.js requires this file for the helpers.
 if (require.main === module) {

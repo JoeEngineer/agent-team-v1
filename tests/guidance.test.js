@@ -60,19 +60,19 @@ test('inventory: every guidance file has rules, and the script-enforced ones nam
 // safe over-estimate of tokens for this kind of text). The other budgets stop
 // the files growing back a sentence at a time: to add a rule, find the room.
 const BUDGET = {
-  'skills/director/SKILL.md': 10000,
-  'skills/director/references/merging.md': 9500,
-  'skills/director/references/routing.md': 7500,
+  'skills/director/SKILL.md': 9400,
+  'skills/director/references/merging.md': 9430,
+  'skills/director/references/routing.md': 7850,
   'skills/director/references/task-card.md': 6200,
   'skills/director/references/decisions.md': 1800,
   'skills/director/references/codex.md': 7500,
   'skills/director/references/gitlab.md': 4200,
   'agents/reviewer.md': 9500,
   'agents/implementer.md': 6000,
-  'agents/coach.md': 12500,
+  'agents/coach.md': 12970,
   'agents/architect.md': 3000,
   'agents/scout.md': 1500,
-  'agents/security-reviewer.md': 7200,
+  'agents/security-reviewer.md': 8040,
 };
 
 test('budgets: every guidance file has a budget and is inside it', () => {
@@ -88,10 +88,10 @@ test('budgets: SKILL.md fits the post-compaction re-attach cap with room to spar
   assert(tokens <= 3500, `SKILL.md is about ${tokens} tokens by the bytes/3 estimate; the cap is 5,000 and the budget 3,500`);
 });
 
-test('budgets: what a Claude + GitHub Director loads (SKILL, merging, routing, task-card, decisions) stays under 32.5 KB', () => {
+test('budgets: what a Claude + GitHub Director loads (SKILL, merging, routing, task-card, decisions) stays under 33.8 KB', () => {
   const core = ['SKILL.md', 'references/merging.md', 'references/routing.md', 'references/task-card.md', 'references/decisions.md'];
   const total = core.reduce((sum, f) => sum + bytes(`${DIRECTOR}/${f}`), 0);
-  assert(total <= 32500, `the core Director set is ${total} bytes (it was 42,073 before 1.0.0, about 28,800 in 1.0.2)`);
+  assert(total <= 33800, `the core Director set is ${total} bytes (it was 42,073 before 1.0.0, about 28,800 in 1.0.2; decision 0025 caps it at 33,800)`);
 });
 
 // ---- one home per thing -----------------------------------------------------
@@ -127,19 +127,68 @@ test('single source: the Director files name no model, and use <plugin root> for
 });
 
 // ---- the xlarge grant never widens by wording --------------------------------
-// Decision 0022 grants "hard-fix escalation, after large/high fails". Ladder
-// step 4 also covers a `reject` at any tier, so a no-ask sentence that doesn't
-// name the large/high failure would send a rejected small or medium task to
-// xlarge without the user's yes.
+// Decision 0022 grants "hard-fix escalation", and decision 0023 scopes it to a
+// task that has failed twice at large/high. Ladder step 4 also covers a `reject`
+// at any tier, so a no-ask sentence that doesn't name the large/high failures
+// would send a rejected small or medium task to xlarge without the user's yes.
 
-test('routing: xlarge runs "without asking" only for a task that has already failed at large/high', () => {
+test('routing: xlarge runs "without asking" only for a task that has failed twice at large/high', () => {
   const noAsk = (t) => t.split(/(?<=\.)\s+|\n/).filter((s) => /without asking/.test(s));
-  const unscoped = (t) => noAsk(t).filter((s) => !/a task that has already failed at large\/high/.test(s));
+  const unscoped = (t) => noAsk(t).filter((s) => !/a task that has failed twice at large\/high/.test(s));
   const routing = text[`${DIRECTOR}/references/routing.md`];
   eq(noAsk(routing).length, 1, 'routing.md has one no-ask sentence: the hard-fix grant in ladder step 4');
   eq(unscoped(routing).join('\n'), '', 'a no-ask sentence that is not scoped to a large/high failure');
   assert(/The grant doesn't cover a `reject` at a lower tier/.test(routing), 'a reject at a lower tier stays outside the grant');
   eq(unscoped('Stop. With `hard-fix` in the milestone\'s grant, the next attempt runs at xlarge/high without asking.').length, 1, 'detector flags the unscoped wording');
+  eq(unscoped('A task that has already failed at large/high runs at xlarge/high without asking.').length, 1, 'detector flags the 1.1.0 wording (one failure)');
+  eq(unscoped('With hard-fix, a task that has failed twice at large/high runs at xlarge/high without asking.').length, 0, 'detector accepts the scoped wording');
+});
+
+// ---- the escalation ladder and the grant (decision 0023) ---------------------
+
+test('routing: ladder steps 3 and 4 send a large/high task back once, then go to xlarge or the user', () => {
+  const routing = text[`${DIRECTOR}/references/routing.md`];
+  const step = (n) => (routing.match(new RegExp(`^${n}\\. .*$`, 'm')) || [''])[0];
+  assert(/Exit 1 means there is none, so the task is at large\/high: send back once to the same agent; on the next failure, step 4\./.test(step(3)), 'step 3: exit 1 sends it back once to the same agent, then step 4');
+  assert(/A step 1 send-back at large\/high is that one\./.test(step(3)), 'step 3: a step 1 send-back at large/high counts as the one');
+  assert(!/ask the user/.test(step(3)), 'step 3 no longer asks the user (step 4 does)');
+  assert(/^4\. \*\*Large\/high failing a second time, or a verdict of `reject`:\*\*/.test(step(4)), 'step 4 starts at a second failure at large/high');
+  assert(/as a new spawn of the role that made the failed attempt/.test(step(4)), 'the granted attempt belongs to the role that failed');
+  assert(!/already failed at large/.test(routing), 'the 1.1.0 wording (one failure) is gone');
+  assert(/hard-fix escalation, after a second failure at large\/high \| ask the user \| xlarge \/ high/.test(routing), 'the grant table row');
+});
+
+test('routing: the grant is what status.js prints, and the sentence that told the Director to re-read STATUS.md is gone', () => {
+  const routing = text[`${DIRECTOR}/references/routing.md`];
+  const section = routing.slice(routing.indexOf('## The xlarge grant'), routing.indexOf('## Local-only routes'));
+  assert(section.includes('node "<plugin root>/scripts/status.js" grant --milestone <slug>'), 'the grant command');
+  assert(!/re-read it there/.test(routing), 'the old re-read sentence');
+  assert(!/is the `## xlarge grant` block/.test(routing), 'the old definition of the grant');
+});
+
+test('labels: the coach row of the grant is "coach (run for this milestone)" in the table, the intake question and the STATUS template; the log name stays coach', () => {
+  const label = 'coach (run for this milestone)';
+  const milestone = read('skills/milestone/SKILL.md');
+  for (const [name, body] of [['routing.md', text[`${DIRECTOR}/references/routing.md`]], ['milestone SKILL.md', milestone], ['STATUS template', read('templates/project/STATUS.md')]]) {
+    assert(body.includes(label), `${name} lacks "${label}"`);
+    assert(!/coach \(at milestone close\)|coach at close/.test(body), `${name} still has the old coach label`);
+  }
+  assert(milestone.includes('"xlarge_grant":["security-review-close","security-review-task","architect","coach","hard-fix"]'), 'the logged role name is still coach');
+});
+
+test('task card: the reason row lists exactly the reasons the logger accepts, and the flags row the flags it knows', () => {
+  const { ATTEMPT_REASONS, KNOWN_FLAGS } = require(path.join(ROOT, 'scripts', 'records.js'));
+  const ticked = (row) => [...row.matchAll(/`([a-z-]+)`/g)].map((m) => m[1]).filter((w) => w !== 'reason');
+  const rows = text[`${DIRECTOR}/references/task-card.md`].split('\n');
+  const reasonRow = rows.find((l) => l.startsWith('| `reason`'));
+  assert(reasonRow, 'the reason row');
+  eq(ticked(reasonRow).sort().join(','), [...ATTEMPT_REASONS].sort().join(','), 'task-card.md reason values vs ATTEMPT_REASONS in scripts/records.js');
+  assert(ATTEMPT_REASONS.includes('confirm'), 'ATTEMPT_REASONS has confirm');
+  eq(ticked('a `x` and `y`, `reason`').join(','), 'x,y', 'the extractor reads backticked words');
+  const flagsRow = rows.find((l) => l.startsWith('| `flags`'));
+  assert(flagsRow, 'the flags row');
+  for (const flag of KNOWN_FLAGS) assert(flagsRow.includes(flag), `the flags row lacks ${flag}`);
+  assert(flagsRow.includes('flags=security-sensitive[,above-table]'), 'the flags= form');
 });
 
 // ---- structure --------------------------------------------------------------

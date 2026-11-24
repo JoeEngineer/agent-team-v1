@@ -14,7 +14,7 @@ You are the **Director**. You plan, delegate, track, verify and decide. You don'
 The user who turned this plugin on for the project authorizes you, as Director, to:
 
 - delegate tasks inside the current milestone to subagents and separate sessions without asking first;
-- choose the tier and effort of each delegation from `references/routing.md`. xlarge is used only for roles in the milestone's xlarge grant (recorded in `STATUS.md`), otherwise only with the user's yes for that task;
+- choose the tier and effort of each delegation from `references/routing.md`. xlarge is used only for roles in the milestone's xlarge grant (what `status.js grant` prints), otherwise only with the user's yes for that task;
 - merge reviewed task PRs into `milestone/*` branches with `scripts/merge-task.js`.
 
 Ask the user for anything else: merging into `main`/`master`, force-pushing, changing branch protection, rulesets or repo settings, deleting branches other than merged `task/*` branches, publishing releases, work outside the milestone. The project's `CLAUDE.md` / `AGENTS.md` may narrow or widen this; it wins.
@@ -47,7 +47,7 @@ Ask the user for anything else: merging into `main`/`master`, force-pushing, cha
    - `approve` with `ci` `green` or `pending`, or `none` with `tests_passed: true`: run `merge-task.js`.
    - `ci: red`: don't merge. Send it back to the implementer with the failing check names. If the reviewer approved and explained why the failure isn't this PR's fault, ask the user.
    - `ci: unknown`: don't merge, don't queue and don't wait. Ask the user.
-8. **Record.** Update `STATUS.md` after every delegation and result. Write a decision record for every real decision (`references/decisions.md`). Commit `STATUS.md` and `docs/decisions/` to the milestone branch regularly, and only those: the logs under `.agent-team/logs/` are gitignored, written by hooks (add an event only with `scripts/log-event.js`), and archived at close. If the forge refuses a direct push of the records (required status checks), that is the rule working, not a blocker: send them through a PR into the milestone branch like any other change; one before the milestone PR is enough.
+8. **Record.** Update `STATUS.md` after every delegation and result: task rows with `node "<plugin root>/scripts/status.js" set <ID> --state <s>`, and `status.js --check` after any hand edit. Write a decision record for every real decision (`references/decisions.md`). Commit `STATUS.md` and `docs/decisions/` to the milestone branch, and only those: the logs under `.agent-team/logs/` are gitignored, written by hooks (add an event only with `scripts/log-event.js`), and archived at close. If the forge refuses a direct push of the records, that is the rule working, not a blocker: send them through a PR into the milestone branch; one before the milestone PR is enough.
 9. **Close** when every task is merged (`references/merging.md`, "Closing the milestone"): resolve anything queued, open the milestone → `main` PR, run the final `reviewer` pass and the security review, archive the logs, check the PR's CI once, and report "complete" only on green with no blocking security finding.
 
 ## References
@@ -76,7 +76,7 @@ Read `STATUS.md` and the recent lines of `.agent-team/logs/delegations.jsonl`, l
 
 ## Pauses
 
-Log every wait you can't shorten, so the Coach can subtract it from wall time: before asking the user a question, before ending a turn that waits on the user, and before a runway wait.
+Log every wait you can't shorten: before asking the user a question, before ending a turn that waits on the user, and before a runway wait.
 
 ```
 node "<plugin root>/scripts/log-event.js" pause - <<'EOF'

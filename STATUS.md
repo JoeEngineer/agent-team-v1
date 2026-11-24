@@ -1,6 +1,6 @@
 # Status
 
-_Last updated: 2026-11-23. Milestone security-review is a Director run._
+_Last updated: 2026-11-23. Milestone coach-followups is a Director run under 1.1.0._
 
 ## Since the milestone
 
@@ -9,36 +9,64 @@ _Last updated: 2026-11-23. Milestone security-review is a Director run._
 | 1.0.1 | Three wording fixes from the live runs, and the live-run report | #107 | 2026-11-14 | `v1.0.1` |
 | (docs) | Antigravity mapping from the live spike (`docs/antigravity-mapping.md`) | #108 | 2026-11-19 | |
 | 1.0.2 | The guard and the hooks-active line act only in projects set up for agent-team; logs go to the main checkout when run from a git worktree (decision 0021) | #109 | 2026-11-21 | `v1.0.2` |
+| 1.1.0 | Milestone security-review: decision 0022 (security reviewer, security review at close, per-milestone xlarge grant, plan-neutral model map) | #125 | 2026-11-23 | `v1.1.0` |
+| (docs) | Coach report for milestone security-review (`docs/coach/2026-11-23-security-review.md`) | #129 | 2026-11-23 | |
 
 ## Current milestone
 
-**security-review**: implement decision 0022 in full (a `security-reviewer` agent, the reviewer's security checklist, the `security-sensitive` flag, a mandatory security review at milestone close, the per-milestone xlarge grant, a plan-neutral model map, the optional second security review through the Codex bridge). Version 1.1.0.
-Branch: `milestone/security-review` (from `main` at 41814ee) · Issue: #112 · Started: 2026-11-22
+**coach-followups**: act on the Coach report for milestone security-review. Make the close and the records cheaper and safer, and close the security reviewer's open gaps. Version 1.2.0.
+Branch: `milestone/coach-followups` (from `main` at 9c47e4c) · Issue: #130 · Started: 2026-11-23
 
-This run follows the installed 1.0.2 rules: xlarge needs the user's yes per task, and there is no security-review step yet. The new rules apply after this milestone merges. One exception the user asked for on 2026-11-22: a security review at close, run with the new `security-reviewer` role file from the branch (large / high, as a general agent, because the installed plugin has no such agent yet).
+In scope:
+- **Records and logger:** S1 `scripts/status.js` with `--check`; S2 G15–G20; `tests/guidance.test.js` exits non-zero on failure.
+- **Close and card rules:** M2, M1, T1 (`confirm`), R1, R3 (decision 0023), R4, A1, A2.
+- **Security reviewer:** A3 scan-state table (architect design), A4 project lessons, the forged `review-json` fence, bridge review row attribution, the grant cross-checked against `milestones.jsonl`, and the Trivy config and no-Dockerfile gaps in the scanner template.
 
-Previous milestone: **v1** (1.0.0), merged into `main` as #105 on 2026-11-13 (tag `v1.0.0`).
+Out of scope: R2 (held; count the next three docs/medium tasks), a live run of the scanner template, live GitLab, the OWASP list edition, the SR-2 timing-based tests, and the `tests/live/ci-turns.js` parser.
+
+Previous milestone: **security-review** (1.1.0), merged into `main` as #125 on 2026-11-23 (tag `v1.1.0`).
 
 ## Tasks
 
 | ID | Title | Agent | Tier (model) / effort | Attempt | State | PR |
 |---|---|---|---|---|---|---|
-| SR-0 | Breakdown | architect | large (opus) / high | 1 | done | |
-| SR-1 | Model map `note`, xlarge on by default but never auto, Codex xlarge agent files (#113) | implementer | medium (sonnet) / medium | 1 | merged | #121 |
-| SR-2 | Logger and handback check know the security reviewer; bridge reviews are logged (#114) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #120 |
-| SR-3 | team-init scanner CI template; STATUS template grant block; `security-sensitive` (#115) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #119 |
-| SR-4 | Director guidance: grant, intake questions, security reviews, blocking rules, second review (#116) | architect | attempt 1 large (opus) / high; attempt 2 xlarge (fable) / high on the user's yes for this task | 2 (escalation) | merged | #122 |
-| SR-5 | Role files: new `security-reviewer`, reviewer checklist, architect flag, Coach (#117) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #123 |
-| SR-6 | README, docs, "amended by 0022" notes, version 1.1.0 (#118) | implementer | attempt 1 small (haiku) / medium; attempt 2 small (haiku) / high | 2 (escalation) | merged | #124 |
-| SR-7 | Fold in minor findings from the final and security reviews (#126) | implementer | medium (sonnet) / medium | 2 (sendback) | merged | #127, #128 |
-| SR-final | Final review of the milestone PR | reviewer | large (opus) / high | 1 | changes requested on `STATUS.md` (repaired), then confirmed on the incremental diff | #125 |
-| SR-security | Security review of the milestone PR | general agent with `agents/security-reviewer.md` from the branch | large (opus) / high | 2 | attempt 1: approve, `scan: none` (no scanner in this repo's CI), eight minor findings; attempt 2 asked for four wording fixes to its role file (#128); then confirms on the incremental diff | #125 |
+| FU-0 | Breakdown | architect | xlarge (fable) / medium, granted | 1 | done | |
+| FU-1 | `scripts/status.js` set and `--check` (#131) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | merged | #147 |
+| FU-2 | Scan-state table design, decision 0024 (#132) | architect | xlarge (fable) / medium, granted | 1 | merged | #145 |
+| FU-3 | Logger: review cards, `flags=`, `confirm`, verdict conflict (#133) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | merged | #148 |
+| FU-4 | A test file run alone exits non-zero (#134) | implementer | medium (sonnet) / medium | 1 | merged | #146 |
+| FU-5 | Usage at archive time: G18, G19 (#135) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #149 |
+| FU-6 | `status.js --check --since` and `grant`; security-sensitive (#136) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #154 |
+| FU-7 | Merge-line session id from the calling shell, G17 (#137) | implementer | small (haiku) / medium | 2 (fold-in) | merged | #153 |
+| FU-8 | `review-json` fence forgery, bridge rows; security-sensitive (#138) | implementer (subagent; session unavailable) | medium (sonnet) / high | 2 (fold-in) | merged | #155 |
+| FU-9 | Role files: scan table, A4, A1, A2 (#139) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #152 |
+| FU-10 | Scanner template: base config, image job; security-sensitive (#140) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 3 (escalation) | merged | #151 |
+| FU-11 | `routing.md`, `task-card.md`: R1, R3, R4, T1, flags, grant (#141) | implementer (subagent; session unavailable) | medium (sonnet) / high | 1 | merged | #156 |
+| FU-12 | `merging.md`, `SKILL.md`: M1, M2, status.js pointer (#142) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #157 |
+| FU-13 | Coach reads the new fields (#143) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #159 |
+| FU-14 | Release 1.2.0 (#144) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | #158 |
+| FU-15 | A test file run alone still exits 0 when the code under test calls `process.exit` (follow-up to FU-4) (#150) | implementer | small (haiku) / medium | 1 | done: closed, not reproducible (the FU-1 branch predates FU-4; no change) | |
+| FU-16 | Close fix: `status.js` coach label, `diff.relative`, temp file, note stripping; security-sensitive (#161) | implementer | medium (sonnet) / medium | 1 | merged | 171 |
+| FU-17 | Close fix: `review-json` fence parsing paths; security-sensitive (#162) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high | 2 (escalation) | merged | 172 |
+| FU-18 | Close fix: log appends and transcript lookup; security-sensitive (#163) | implementer | medium (sonnet) / medium; attempt 2 medium (sonnet) / high; attempt 3 large (opus) / high | 4 (sendback) | merged | 170 |
+| FU-19 | Close fix: scanner template config files and push run; security-sensitive (#164) | implementer | medium (sonnet) / medium | 2 (fold-in) | merged | 167 |
+| FU-20 | Close fix: guidance wording (#165) | implementer | small (haiku) / medium | 2 (fold-in) | merged | 168 |
+| FU-21 | Close fix: review rows, nudge wording, `log-event.js` result; security-sensitive (#166) | implementer | medium (sonnet) / medium | 1 | merged | 169 |
+| FU-22 | Close fix: two security-review grant words; grant-check hardening; security-sensitive (#173) | architect | xlarge (fable) / medium, granted; attempt 3 xlarge (fable) / high | 4 (fold-in) | merged | 175 |
+| FU-23 | Close fix: `review-json` fence residuals, `choose()`, handback-check, FU-17 minors; security-sensitive (#174) | architect | large (opus) / high | 1 | merged | |
+| FU-24 | Close fix: log record and logger minors (FU-18, FU-21, FU-22 security minors); security-sensitive (#176) | implementer | medium (sonnet) / medium | 1 | merged | |
+| FU-25 | Docs: 1.2.0 release notes, `coach.md` milestone lines (#177) | implementer | small (haiku) / medium | 1 | merged | |
 
-States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked`
+Waves: 1 = FU-1 to FU-5; 2 = FU-6, FU-7, FU-8, FU-9, FU-10; 3 = FU-11; 4 = FU-12; 5 = FU-13, FU-14. The guidance tasks are a chain (FU-9 → FU-11 → FU-12 → FU-13): they share `tests/guidance-rules.js` and the core budget. FU-8 and FU-11 were flagged above-table by the breakdown; declined (start at the table, per the Coach's 5/8 against 0/1). Each per-PR review: reviewer, medium (sonnet) / high. FU-6, FU-8 and FU-10 also get a security-reviewer pass at large (opus) / high.
 
-All tasks are merged. Milestone PR: #125 into `main` (opened 2026-11-23). The final review and the security review ran on it at 04950d1; SR-7 folded in their cheap minor findings (#127, then #128 for four wording fixes the security reviewer asked for); the final reviewer confirmed at 64663ac, and the security reviewer confirms the last diff (verdicts are in the logs and in comments on the PR). Only the user merges it.
+States: `planned` · `in progress` · `in review` · `waiting CI` · `queued` · `changes requested` · `merged` · `blocked` · `done`
 
-Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed above the table (implement/hard is implementer medium/high): it amends the Director's authorization line and must keep one home per rule across seven files inside the size budgets, which is design work.
+## xlarge grant
+
+- Granted roles: security reviews, architect, hard-fix escalation (the user narrowed security reviews of flagged task PRs to large/high on 2026-11-23; the close review stays xlarge/high)
+- xlarge model and note per tool: Claude: fable, "included, limited, or billed as credits, depending on your plan" · Codex: gpt-6.2-astra, same note
+- Map source: default
+- Second security review: large/high
 
 ## CI
 
@@ -52,16 +80,73 @@ Waves: SR-1, SR-2, SR-3, SR-4 in parallel; then SR-5; then SR-6. SR-4 is routed 
 ## Needs the user
 
 - **Required checks on `milestone/*`.** Add the four `test (...)` checks as required status checks with no bypass list, and turn on "Allow auto-merge" (asked 2026-11-22).
-- **After the milestone merges:** tag and release 1.1.0 if wanted; update the installed plugin so the new rules apply.
-- **Follow-ups from the close-time reviews, not fixed in this milestone:** the close-time security result is not tied to the head reported complete (`merging.md`); the xlarge grant lives only in an agent-writable `STATUS.md` block with no cross-check against `milestones.jsonl`; a quoted `review-json` fence in a bridge reply can forge the logged second-review verdict (`log-delegation.js`); bridge review rows in `reviews.jsonl` say `tool: claude` with no `agent` or tier; no task-card field carries the `security-sensitive` flag; the grant row "coach (at milestone close)" refers to a close step that does not exist; the scanner template lets a PR weaken the scan with its own `trivy.yaml` or `.trivyignore`, and `trivy-image` reports success without a root Dockerfile; in the security reviewer's scan states: the `green` clause does not name the nothing-to-scan exception, the value when every scanner job says nothing to scan is not stated, and head-moved versus an old-head failed check is not ordered.
-- **Follow-ups from this milestone, not fixed in it:** ladder step 3 still says "ask the user" with hard-fix granted; the guidance does not say whether the granted xlarge attempt is the architect's or the implementer's; the logger reports card drift on every review card that carries its task's id; `tests/guidance.test.js` run on its own exits 0 on failure; the SR-2 retry tests are timing-based; the security reviewer's GitLab command has not run against a live GitLab; its OWASP list is the 2021 edition; the scanner workflow template has not been through a YAML parser.
+- **Follow-ups not in this milestone:** the scanner workflow template has not been through a YAML parser or a live Actions run; the security reviewer's GitLab command has not run against a live GitLab; its OWASP list is the 2021 edition; the SR-2 retry tests are timing-based.
+- **Follow-ups from FU-2 (decision 0024), minor:** `noscan` and `unconfirmed` differ only in the matrix and evaluator (one rule in the section text); with several GitLab pipelines per SHA, whether a job absent from one counts as missing is unstated (safe reading: yes, `unknown`); one over-long line in "Cost of the read".
+- **Follow-ups from FU-5 (PR #149), minor:** a superseding completion line keeps the old `duration_ms`; `markStale` skips superseding copies too (archive-first on a 0.3.0-era mislabelled resume could keep a stale copy); `supersedeShortTurns` covers agents of earlier milestones in the live log; no test for a `readFileSync` failure in `readSessionUsage`; reconcile and archive word the `completions:` line differently. Carried into later cards: `session_usage` is cumulative per session and model (readers take the last line per session+model) → FU-13; README and Coach text for `sessions.jsonl` → FU-13, FU-14.
+- **Follow-up from FU-1 (PR #147), minor:** the real-symlink branch of the "refuses a symlink" test in `tests/status.test.js` is skipped silently where symlinks cannot be made; log the skip so CI shows it ran on ubuntu.
+- **Follow-ups from FU-7 (PR #153), minor:** review lines get `session_id` but no `session_source`, and resume lines get no session fields (both need `records.js`: `logReview`, `closeOpenPause`); `session_id` now feeds the `review_id` hash, so a re-log of the same review from a new session adds a second row (untested; option: leave the session out of the hash for `source:"director"`). `session_source` in README and `coach.md` → FU-13, FU-14. The header comment in `scripts/log-event.js` says a JSON `session_id` is ignored. On review lines it is not: `withReview` keeps it under `review_shadowed`, or uses it when no session is known, and lets a JSON `session_source` pass through.
+- **Follow-ups from FU-8 (PR #155), minor:**
+  - The manual Director review row (`log-event.js review`) doesn't get the bridge-style `agent`, `tier` and `effort` fields.
+  - Codex and background completions mark an ambiguous review only on the completion line, with no re-ask message, because Codex has no hook output channel.
+  - FU-8 also changed `scripts/handback-check.js`, which wasn't on its card. The change is small and correct, and the PR says so.
+  - From the security review:
+    - The bridge row's protected-field list doesn't cover `reviewer_tier` (filled from the block when the card has no tier), `agent_id`, `turn_id`, `stale_of`, `kind` or `tool_use_id`.
+    - JS `trim()` strips Unicode whitespace, so a fence line ending in NBSP opens or closes a fence where CommonMark wouldn't. Probes fail closed; trim only spaces and tabs.
+    - The subagent path's Director nudge reuses the bridge wording.
+  - From the fold-in review:
+    - The Codex reviewer-name regex in `lib.isReviewDelegation` must track the roles in `codex-agents.js`.
+    - An uncarded review sent to a non-reviewer agent now writes no row.
+  - The Coach and README text for `_ambiguous` and the bridge row fields goes to FU-13 and FU-14.
+- **Follow-ups from FU-11 and FU-12 (PRs #156, #157), minor:**
+  - Ladder step 1 could say that its send-back at large/high is step 3's one send-back. Step 3 says so now.
+  - The R-18 comment in `tests/guidance-rules.js` still reads for one failure.
+  - `merging.md` "First CI run" step 1 says "require the check names". It should say "add them as required status checks", the forge setting's name.
+  - The core set is at 33,780 of 33,800 (after FU-23) bytes: the next guidance addition needs a cut or a new budget decision.
+- **Follow-ups from FU-6 (PR #154), minor:**
+  - `lib.projectDir` runs `git rev-parse` with the caller's environment. `GIT_DIR`, `GIT_WORK_TREE` or `CLAUDE_PROJECT_DIR` can move where `grant` reads `milestones.jsonl`. The fix: apply the same `GIT_*` filter there, and note it in 0026.
+  - The "outside a repo" test no longer exercises the no-repository path on a machine whose temp folder sits inside a repo.
+  - The argv-array test matches source text.
+- **Follow-up from FU-14 (PR #158), minor:** the version test checks only the manifests. Nothing checks that the README upgrade note, the `status.js` row or the `docs/guidance.md` budget statement exist.
+- **Follow-up from FU-13 (PR #159), minor:** `agents/coach.md` lost two `pauses.jsonl` caveats and the tentative "try starting lower" when it was trimmed to fit 13,000 bytes. The caveats: `milestone` may come from the latest delegation, and the upper bound exists because the Director may have worked before delegating. The file has 4 bytes of headroom, so restoring them needs a cut or a budget raise. The fold-in's own trims also flattened three points:
+  - "a guidance fix may beat a bigger model" became "fix its prompt before using a bigger model";
+  - "(what was not checked)" became "(not checked)";
+  - the unknown-merge cause became an ellipsis.
+- **Follow-up from FU-9 (PR #152), minor:** the evaluator row-count test in `tests/scan-table.test.js` takes the highest row the matrix reaches, so it repeats "every row is hit" and would not catch a ninth unreached evaluator row.
+- **Accepted by the user 2026-11-23 (decision 0028): scanner template gaps (FU-10, decision 0027).** A PR can still weaken its own scan four ways: by editing `security-scan.yml` itself; with inline `trivy:ignore` comments; by removing or moving the root Dockerfile (`trivy-image` is then skipped, and a skipped job doesn't block a merge); and through files a base `trivy.yaml` names, which are read from the PR tree. The template header and team-init step 6 now say so. The `.scan-base` guard rests on a reading of the `actions/checkout` source, not a live run. A live run in a scratch repo, including a PR that commits `.scan-base -> .`, is still a follow-up.
+- **Rejected by the user 2026-11-23 (decision 0028), fixed in FU-22 (merged, PR #175; decision 0029): grant check residuals (FU-6, decision 0026).** Its one security minor (re-log after a refusal that wrote nothing) is in FU-24. Pre-existing, not in this milestone: `grant` exit 17 copies `STATUS.md` text into its message.
+  - An agent that guesses the next milestone slug can append a wide `milestone` line through `log-event.js milestone` before intake. If it later edits the STATUS block to match, `status.js grant` exits 0 with that wide grant. The proposed fix: `log-event.js milestone` refuses a second line for a slug.
+  - A hand-made first log line torn before the slug ends is skipped.
+  - An agent that can rewrite `milestones.jsonl` or the shared `.git` object store is not stopped.
+- **Follow-ups from FU-23 (PR #179), security minors (not fixed; for the next release):**
+  - `startsTurn` accepts a compaction-summary entry (`isCompactSummary`), so a line-start TASK line quoted in it can swap the card's `head=` in `handback-check` `cardOf` and in `completionTask`. The code path was probed; whether a real summary does this is unconfirmed. Fix: skip `isCompactSummary` and `isVisibleInTranscriptOnly` entries.
+  - `CARD_HEAD` in `lib.js` accepts a 7-hex `head=` prefix, which allows commit-hash grinding if a card carries a short head. Fix: require 40 or 64 hex.
+  - Decision 0030's residual source list omits output of the diff's own code that a reviewer runs (same accepted class). The reviewer files don't yet say `head=` must match `head_sha`.
+  - From the close re-check: `merging.md:58` writes bare `status.js set` instead of the plugin-root `node .../scripts/status.js` form.
+- **Follow-ups from FU-24 (PR #178), security minors (not fixed; for the next release):**
+  - `inCodexSessions` checks the resolved path, but callers re-open the original path; a junction swap between check and read reads an outside file (simulated). Fix: read the real path the check returns.
+  - A stale record lock whose pid was reused or can't be signalled (EPERM) gives "busy, retry" forever. Name the lock file in the message.
+  - `plainString` in `log-event.js` admits bidi and zero-width characters in attribution values (keys are folded, values are not).
+  - Pre-existing: `AGENT_TEAM_ARCHIVE_TEST_APPEND_AFTER_VERIFY` is joined without a plain-name check (needs env control). Give it the same check as the link hook, or move the test hooks out of production code.
+- **Follow-ups from FU-25 (PR #180), docs minors (not fixed; for the next release):**
+  - README grant-words entry: "a git-tracked log exits 24" reads as the logger; only `status.js grant` exits 24, the logger exits 1 and writes nothing.
+  - README scanner entry omits the 0027 `skip-dirs`/`skip-files` residual for `.scan-pr-config` and that the template has had no live run.
+  - README head-binding entry says "the agent gets a message"; on the bridge and foreground paths the Director does. It doesn't say a card without `head=` binds to any full SHA.
+  - `AGENT_TEAM_CODEX_SESSIONS` is stated twice in the README (lines 113 and 308).
+  - `agents/coach.md`: the Codex stub line lost "metrics are null until"; the unknown-merge example note was cut.
 - **Not covered by live runs.** The 1.0.1 live runs (`docs/coach/2026-11-13-v1-live.md`) did not cover compaction, the queued and waiting merge paths, or GitLab. The 1.0.2 change to where logs are written was tested with the unit tests only, not in a live Codex session run from a worktree.
 - **Harness parser follow-up.** `tests/live/ci-turns.js` counts script names inside task-card text piped to `log-event.js` as CI turns (Codex runs). Not changed; it needs its own task.
 - **Codex projects** must re-run `scripts/codex-agents.js` after upgrading.
 
 ## Recent decisions
 
-- 0019: one script merges a task PR (accepted by the user 2026-11-13)
 - 0020: guidance in layers, one home per rule, size budgets (accepted by the user 2026-11-13)
 - 0021: the guard and the hooks-active line are enabled per project; logs live in the main checkout (asked for by the user 2026-11-20)
-- 0022: a security review at every milestone close, and a per-milestone xlarge grant (accepted by the user 2026-11-22; implemented in 1.1.0 by this milestone)
+- 0022: a security review at every milestone close, and a per-milestone xlarge grant (accepted by the user 2026-11-22; implemented in 1.1.0)
+- 0023: one same-agent send-back at large/high before xlarge; amends 0022 (chosen by the user 2026-11-23)
+- 0024: scan states as one ordered table (FU-2, architect)
+- 0025: guidance budget raises for 1.2.0 (approved by the user 2026-11-23)
+- 0026: the xlarge grant is cross-checked against the first intake log line; `--milestone` required (FU-6; first-line-wins chosen by the user 2026-11-23)
+- 0027: the scanner template uses the base branch's Trivy config on PRs (FU-10)
+- 0028: two security-review grant words; scanner residuals accepted, grant and fence residuals fixed (chosen by the user 2026-11-23)
+- 0030: review blocks bound to the card head (`head=`); verbatim-copy residual accepted (chosen by the user 2026-11-23; in PR #179)
+- 0031: remaining Codex close-review majors accepted as residuals; close after FU-23 to FU-25 (chosen by the user 2026-11-23)

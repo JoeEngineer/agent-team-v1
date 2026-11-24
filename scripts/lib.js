@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { execFileSync } = require('child_process');
 
 const PLUGIN_ROOT = process.env.CLAUDE_PLUGIN_ROOT || path.resolve(__dirname, '..');
@@ -23,19 +24,84 @@ function readStdin() {
 // cwd for the life of this process: a hook run is short, and a folder does not
 // become a repo mid-run.
 const GIT_ROOTS = new Map();
-function projectDir(input) {
-  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
-  const cwd = (input && typeof input.cwd === 'string' && input.cwd) || process.cwd();
+// The git top level of `cwd`, or `cwd` itself outside a repository. git runs
+// without the caller's GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_CONFIG*, ...),
+// so the environment cannot name another repository as this folder's project
+// (decision 0029, residual d). Only the one trailing newline is cut: a folder
+// name may end in a space.
+const gitEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^GIT_/i.test(k)));
+function gitRoot(cwd) {
   if (GIT_ROOTS.has(cwd)) return GIT_ROOTS.get(cwd);
   let found = cwd;
   try {
     const top = execFileSync('git', ['rev-parse', '--show-toplevel'], {
-      cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
-    }).trim();
+      cwd, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000,
+    }).replace(/\r?\n$/, '');
     if (top) found = top;
   } catch { /* not a git folder, or git missing */ }
   GIT_ROOTS.set(cwd, found);
   return found;
+}
+
+// Does the checkout at `root` track `rel` in git? Asked about the xlarge grant's log: git puts a
+// tracked file's committed content back on a checkout, a stash or a reset, so a line appended to
+// it, or removed from it by hand, does not last (decision 0029, amended). The name is compared
+// without case, because on Windows and macOS a committed `Milestones.jsonl` is the same file.
+// A folder above the file counts as well when it is an index entry itself: a submodule (or a
+// committed link) at `.agent-team` or `.agent-team/logs` puts the file under another checkout,
+// and `git ls-files` on the file's own path says nothing about it. So the index entries under
+// the first folder of `rel` are listed and compared with `rel` and each folder above it.
+// `rel` uses "/" and is relative to `root`. git runs without the caller's GIT_* variables,
+// like gitRoot. Returns { state, entry }:
+//   'no'       no such entry; or `root` is in no repository (no `.git` in it or above it); or
+//              git is missing. Nothing restores the file then.
+//   'yes'      `entry` is the index path that matched.
+//   'unknown'  git failed: a timeout, a repository it refuses to read, too much output. The
+//              callers treat it like 'yes' (fail closed).
+function gitTracks(root, rel) {
+  let inRepo = false;
+  for (let d = path.resolve(root); !inRepo; d = path.dirname(d)) {
+    inRepo = fs.existsSync(path.join(d, '.git'));
+    if (path.dirname(d) === d) break;
+  }
+  if (!inRepo) return { state: 'no' };
+  const parts = rel.split('/');
+  const names = new Set(parts.map((_, i) => parts.slice(0, i + 1).join('/').toLowerCase()));
+  try {
+    const out = execFileSync('git', ['ls-files', '-z', '--', `:(icase)${parts[0]}`], {
+      cwd: root, env: gitEnv(), encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 5000, maxBuffer: 16 * 1024 * 1024,
+    });
+    const entry = out.split('\0').find((p) => names.has(p.toLowerCase()));
+    return entry === undefined ? { state: 'no' } : { state: 'yes', entry };
+  } catch (e) {
+    return { state: e && e.code === 'ENOENT' ? 'no' : 'unknown' };
+  }
+}
+function projectDir(input) {
+  if (process.env.CLAUDE_PROJECT_DIR) return process.env.CLAUDE_PROJECT_DIR;
+  return gitRoot((input && typeof input.cwd === 'string' && input.cwd) || process.cwd());
+}
+
+// Where the xlarge grant's intake line lives for the project that holds `dir`:
+// the git top level of `dir` (GIT_* ignored, CLAUDE_PROJECT_DIR not consulted),
+// or the main checkout when that is a linked worktree. `status.js grant` reads
+// there and `log-event.js milestone` writes there, so the two cannot disagree.
+function grantLogRoot(dir) {
+  const top = gitRoot(dir);
+  return mainCheckout(top) || top;
+}
+function samePath(a, b) {
+  const real = (p) => { try { return fs.realpathSync.native(p); } catch { return path.resolve(p); } };
+  const [x, y] = [real(a), real(b)];
+  return process.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
+}
+// CLAUDE_PROJECT_DIR may agree with the cwd's project; it may not move the grant
+// check or the intake line to another project. Returns null when it is unset or
+// agrees, else { env, root } for the message.
+function foreignProjectDir(cwd) {
+  const env = process.env.CLAUDE_PROJECT_DIR;
+  const root = grantLogRoot(cwd);
+  return env && !samePath(grantLogRoot(env), root) ? { env, root } : null;
 }
 
 // The main checkout of a linked git worktree, or null when `dir` is the main
@@ -77,11 +143,155 @@ function logPath(input) {
   return path.join(logRoot(input), '.agent-team', 'logs');
 }
 
+// The logs folder path, created if missing. Throws (see safeMkdir) when
+// `.agent-team` or `logs` is a link or junction.
 function logDir(input) {
-  const dir = logPath(input);
-  fs.mkdirSync(dir, { recursive: true });
+  return safeMkdir(logPath(input));
+}
+
+// --- safe writes under .agent-team/logs/ (begin) ---
+// A cloned repo can commit anything under .agent-team/logs/, links included:
+// `completions.jsonl` -> `~/.bashrc`, or `.pending` -> a folder of the user's.
+// Every write, folder creation, listing for deletion and temp file under the
+// logs folder goes through these helpers, so none of them follows a link.
+// tests/fu18-safe-write.test.js greps scripts/ for raw writes outside this block.
+//
+// The checks: `.agent-team` and every folder below it down to the file's own
+// folder must be a real folder (lstat: not a symlink, not a junction); the
+// file, when it exists, must be a regular file with one name (not a link, not
+// a hard link). The open uses O_NOFOLLOW where the platform has it (not
+// Windows), and fstat after the open catches a hard link made since the check.
+// Accepted: on Windows a file symlink swapped in between the lstat and the open
+// is followed. Making one there takes write access to the logs folder and, on
+// Windows, the symlink privilege; a committed link is always caught.
+//
+// A refusal prints one line to stderr naming the path (once per path per
+// process) and throws an Error with code EAGENTTEAMREFUSED. Hooks catch it
+// and carry on without the write.
+const O_NOFOLLOW = fs.constants.O_NOFOLLOW || 0;
+const REFUSED = 'EAGENTTEAMREFUSED';
+const warnedRefusals = new Set();
+// Test seam: runs between the checks and the open of safeAppend.
+const safeWriteHooks = { beforeOpen: null };
+
+function refuse(file, why) {
+  const err = new Error(`refusing to write ${file}: ${why}`);
+  err.code = REFUSED;
+  err.path = file;
+  if (!warnedRefusals.has(err.message)) {
+    warnedRefusals.add(err.message);
+    try { process.stderr.write(`agent-team: ${err.message}\n`); } catch { /* stderr closed */ }
+  }
+  throw err;
+}
+
+// `.agent-team` and each folder below it, down to `dir`; [dir] for a path with
+// no `.agent-team` component.
+function guardedDirs(dir) {
+  const parts = path.resolve(dir).split(path.sep);
+  const i = parts.lastIndexOf('.agent-team');
+  if (i < 0) return [path.resolve(dir)];
+  const out = [];
+  for (let j = i; j < parts.length; j++) out.push(parts.slice(0, j + 1).join(path.sep) || path.sep);
+  return out;
+}
+
+// 'missing', or 'ok' for a real folder; refuses a link, a junction or a file.
+function dirState(d) {
+  let st;
+  try { st = fs.lstatSync(d); } catch (e) { if (e && e.code === 'ENOENT') return 'missing'; throw e; }
+  if (st.isSymbolicLink()) refuse(d, 'the folder is a link or junction');
+  if (!st.isDirectory()) refuse(d, 'not a folder');
+  return 'ok';
+}
+
+// Create `dir` and the guarded folders above it, one level at a time, each a
+// real folder. Returns dir.
+function safeMkdir(dir) {
+  const chain = guardedDirs(dir);
+  for (const [n, d] of chain.entries()) {
+    if (dirState(d) === 'ok') continue;
+    if (n === 0) fs.mkdirSync(path.dirname(d), { recursive: true }); // the project folder, outside .agent-team
+    try { fs.mkdirSync(d); } catch (e) { if (!e || e.code !== 'EEXIST') throw e; }
+    if (dirState(d) !== 'ok') refuse(d, 'the folder vanished while it was created');
+  }
   return dir;
 }
+
+// The entries of a folder under the logs folder, to drain or prune it; null
+// when it (or a folder above it) is missing. Refuses a linked folder.
+function safeListDir(dir, opts) {
+  for (const d of guardedDirs(dir)) if (dirState(d) === 'missing') return null;
+  return fs.readdirSync(dir, opts);
+}
+
+function checkFile(file, st) {
+  if (st.isSymbolicLink()) refuse(file, 'the file is a link');
+  if (!st.isFile()) refuse(file, 'not a regular file');
+  if (st.nlink > 1) refuse(file, 'the file has another hard link');
+}
+
+// Refuse an existing log that is a link, not a regular file, or hard-linked;
+// also check the folders above it. A missing file passes.
+function checkLogFile(file) {
+  for (const d of guardedDirs(path.dirname(file))) dirState(d);
+  let st = null;
+  try { st = fs.lstatSync(file); } catch (e) { if (!e || e.code !== 'ENOENT') throw e; }
+  if (st) checkFile(file, st);
+}
+
+// Append `data` to a log, creating it if missing.
+function safeAppend(file, data) {
+  safeMkdir(path.dirname(file));
+  checkLogFile(file);
+  if (safeWriteHooks.beforeOpen) safeWriteHooks.beforeOpen(file);
+  let fd;
+  try {
+    fd = fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_APPEND | fs.constants.O_CREAT | O_NOFOLLOW, 0o666);
+  } catch (e) {
+    if (e && (e.code === 'ELOOP' || e.code === 'EMLINK')) refuse(file, 'the file is a link');
+    throw e;
+  }
+  try {
+    checkFile(file, fs.fstatSync(fd));
+    fs.writeFileSync(fd, data, 'utf8');
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+// Create `file` exclusively (it must not exist: EEXIST otherwise) and return
+// the open fd. O_EXCL never follows a link at the name.
+function safeOpenNew(file) {
+  safeMkdir(path.dirname(file));
+  return fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | O_NOFOLLOW, 0o666);
+}
+
+// Create `file` exclusively with `data`. Throws EEXIST when the name exists.
+function safeWriteNew(file, data) {
+  const fd = safeOpenNew(file);
+  try { fs.writeFileSync(fd, data, 'utf8'); } finally { fs.closeSync(fd); }
+}
+
+// A temp name next to `file` that no committed file can already hold.
+function tempName(file) {
+  return `${file}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+}
+// A name tempName made. A process that dies between the create and the rename
+// leaves one behind; records.prunePending and archive-logs sweep old ones.
+const TEMP_FILE = /\.[0-9a-f]{16}\.tmp$/;
+
+// Replace `file` with `data`: a new temp file, renamed over it. A rename
+// replaces a link at the name; it never writes to what the link points at.
+function safeReplace(file, data) {
+  const tmp = tempName(file);
+  safeWriteNew(tmp, data);
+  try { fs.renameSync(tmp, file); } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* already gone */ }
+    throw e;
+  }
+}
+// --- safe writes under .agent-team/logs/ (end) ---
 
 // Does this project use agent-team? True when it has an .agent-team folder
 // (team-init, or an earlier log line), or its own settings turn the plugin on
@@ -114,8 +324,9 @@ function enabledHere(input) {
   return process.env.AGENT_TEAM_HOOK_SOURCE === 'project' || inUse(input);
 }
 
+// Append one JSON line to a log. Throws on a refused path (see safeAppend).
 function appendJsonl(input, file, record) {
-  fs.appendFileSync(path.join(logDir(input), file), JSON.stringify(record) + '\n', 'utf8');
+  safeAppend(path.join(logPath(input), file), JSON.stringify(record) + '\n');
 }
 
 function guidanceVersion() {
@@ -174,6 +385,11 @@ function parseTaskCard(prompt) {
       if (i > 0) card[pair.slice(0, i)] = pair.slice(i + 1);
     }
     if (card.attempt && /^\d+$/.test(card.attempt)) card.attempt = Number(card.attempt);
+    if (card.flags !== undefined) {
+      // Empty items drop (`flags=`, `a,`), and a repeated flag counts once, in first-seen order.
+      const flags = [...new Set(card.flags.split(',').map((f) => f.trim()).filter(Boolean))];
+      if (flags.length) card.flags = flags; else delete card.flags;
+    }
   }
   const why = prompt.match(/^\s*WHY\s+(.+)$/m);
   if (why) card.why = why[1].trim();
@@ -207,6 +423,282 @@ function lastFencedJson(text, tag) {
   } catch {
     return { _unparsed: last.trim().slice(0, 500) };
   }
+}
+
+// The review in a reply, taken only when it is unambiguous. Logged verdicts
+// decide whether a milestone can close, so a `review-json` fence quoted in a
+// diff, a nested fence or a `>` quote must never be read as the verdict.
+//
+// A review block counts when it is a top-level fence (the fence line at column
+// 0, backticks, not inside another fence of any length, not in a `>` quote,
+// not hidden by HTML) and the last non-blank content of the reply. Fences
+// follow CommonMark: a fence opens with three or more backticks or tildes (up
+// to three spaces of indent) and closes on a line of the same character, at
+// least as long, with nothing after it but spaces or tabs; an unterminated
+// fence runs to the end of the reply. Only spaces and tabs are trimmed from a
+// fence line, as CommonMark says: JS trim() would also strip NBSP, VT and FF,
+// so a closing run followed by one of those does not close, and `review-json`
+// followed by one is another info string.
+//
+// Returns:
+//   null                              no review-json fence anywhere in the reply
+//   the parsed JSON, or { _unparsed } the one qualifying block
+//   { _ambiguous: true, count }       review-json fences were there but none
+//                                     qualifies, or two or more are top-level;
+//                                     count is the top-level blocks found
+// (reviewFor below also checks the block against the card's head.)
+//
+// HTML blocks are raw text, not markdown, so a fence inside one is never the
+// reply's own. CommonMark's start conditions:
+//   1-5  <pre|script|style|textarea>, <!-- -->, <? ?>, <!X >, <![CDATA[ ]]> run
+//        to the line with their end marker, and that line is raw too;
+//   6    a block tag such as <details> or <div> runs to a blank line;
+//   7    any other complete open or closing tag alone on its line runs to a
+//        blank line, but can't interrupt a paragraph: after a paragraph line
+//        it is text. A line that may not be paragraph text (a heading, a `>`
+//        quote, a list item, a setext or thematic line) counts as not one, so
+//        the tag is read as HTML: that can hide a block, never forge one.
+// While a <details> or a <div> is open (opened more often than closed, each
+// counted on its own, so a stray </div> can't close a <details>), every line
+// is hidden, even past its HTML block, since a renderer shows that content as
+// part of the quote. Fences are still tracked there, so a closing tag inside
+// one is text, but none of them is a review block.
+// Tags count only where a renderer reads them as tags: in raw HTML (the lines
+// of a type 6 or 7 block, and what follows the end marker of a type 1-5
+// block), outside a comment or a <script>, <style> or <textarea> element. A
+// comment or such an element opened there may span lines, hides every line
+// while it is open, and ends only in raw HTML. In a markdown line (paragraph text, indented code, a
+// line that starts with an NBSP or VT) a <details> or <div> opening tag counts
+// while one is already open, and a closing tag never counts: a code span or an
+// escape can make it text, so it could only fake a close.
+// One pass over the text, one line at a time. No regex runs across the text,
+// and each scan of a line is linear (no regex that backtracks over a line).
+const HTML_BLOCK_TAGS = 'address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul';
+const HTML_STARTS = [
+  [/^<(pre|script|style|textarea)([ \t>]|$)/i, /<\/(pre|script|style|textarea)>/i],
+  [/^<!--/, /-->/],
+  [/^<\?/, /\?>/],
+  [/^<![A-Za-z]/, />/],
+  [/^<!\[CDATA\[/, /\]\]>/],
+  [new RegExp('^</?(' + HTML_BLOCK_TAGS + ')([ \\t]|/?>|$)', 'i'), null],
+];
+const isBlank = (c) => c === ' ' || c === '\t';
+// True when s from position k holds only spaces and tabs.
+function onlyBlanks(s, k) {
+  for (; k < s.length; k++) if (!isBlank(s[k])) return false;
+  return true;
+}
+// s without leading and trailing spaces and tabs (not the other Unicode whitespace trim() drops).
+function trimBlanks(s) {
+  let a = 0, b = s.length;
+  while (a < b && isBlank(s[a])) a++;
+  while (b > a && isBlank(s[b - 1])) b--;
+  return s.slice(a, b);
+}
+// Start condition 7: s (a line from its first non-blank character) is one
+// complete open or closing tag, of a name other than pre, script, style or
+// textarea, then only spaces or tabs. A hand-written scan, linear in s.
+const ATTR_START = /[A-Za-z_:]/;
+const ATTR_CHAR = /[A-Za-z0-9_.:-]/;
+const UNQUOTED_STOP = ' \t\n\r"\'=<>`';
+function tagLine(s) {
+  const n = s.length;
+  let k = 1;
+  if (s[0] !== '<') return false;
+  const closing = s[k] === '/';
+  if (closing) k++;
+  const nameStart = k;
+  if (!/[A-Za-z]/.test(s[k] || '')) return false;
+  while (k < n && /[A-Za-z0-9-]/.test(s[k])) k++;
+  if (/^(pre|script|style|textarea)$/i.test(s.slice(nameStart, k))) return false;
+  if (closing) {
+    while (k < n && isBlank(s[k])) k++;
+    if (s[k] !== '>') return false;
+    return onlyBlanks(s, k + 1);
+  }
+  for (;;) {
+    const gap = k;
+    while (k < n && isBlank(s[k])) k++;
+    if (s[k] === '>') return onlyBlanks(s, k + 1);
+    if (s[k] === '/' && s[k + 1] === '>') return onlyBlanks(s, k + 2);
+    if (k === gap || !ATTR_START.test(s[k] || '')) return false; // an attribute starts after a space or tab
+    while (k < n && ATTR_CHAR.test(s[k])) k++;
+    let j = k;
+    while (j < n && isBlank(s[j])) j++;
+    if (s[j] !== '=') continue; // no value: k stays before the blanks, read again as the next gap
+    j++;
+    while (j < n && isBlank(s[j])) j++;
+    if (s[j] === '"' || s[j] === "'") {
+      const close = s.indexOf(s[j], j + 1);
+      if (close < 0) return false;
+      k = close + 1;
+    } else {
+      const v = j;
+      while (j < n && !UNQUOTED_STOP.includes(s[j])) j++;
+      if (j === v) return false;
+      k = j;
+    }
+  }
+}
+// A markdown line (from its first non-blank character, indented three columns
+// or less) that is not paragraph text, or may not be.
+const NOT_PARAGRAPH = [
+  /^#{1,6}([ \t]|$)/,                    // ATX heading
+  /^(?:=+|-+)[ \t]*$/,                    // setext underline
+  /^([-*_])(?:[ \t]*\1){2,}[ \t]*$/,      // thematic break
+  /^>/,                                   // block quote
+  /^(?:[-+*]|\d{1,9}[.)])([ \t]|$)/,      // list item
+];
+// Count <details> and <div> tags in s from position k into st
+// ({ details, div, comment, raw }). In raw HTML (openersOnly false) a comment
+// or a <script>, <style> or <textarea> element is skipped, across lines. In a
+// markdown line (openersOnly true) only an opening <details> or <div> counts.
+const RAW_TEXT_END = { script: /<\/script/gi, style: /<\/style/gi, textarea: /<\/textarea/gi };
+const TAG_AT = /(\/?)([A-Za-z][A-Za-z0-9-]*)/y;
+const CLOSE_REST = /[ \t\n\f\r]*>/y;
+const TAG_NAME_END = ' \t\n\f\r/>';
+function scanTags(s, k, st, openersOnly) {
+  const n = s.length;
+  // Markdown text can't end a comment or raw text opened in raw HTML (its `>`
+  // is escaped), and nothing counts inside one.
+  if (openersOnly && (st.comment || st.raw)) return;
+  while (k < n) {
+    if (st.comment) {
+      const e = s.indexOf('-->', k);
+      if (e < 0) return;
+      st.comment = false;
+      k = e + 3;
+      continue;
+    }
+    if (st.raw) {
+      const re = RAW_TEXT_END[st.raw];
+      re.lastIndex = k;
+      const m = re.exec(s);
+      if (!m) return;
+      st.raw = null;
+      k = m.index + m[0].length;
+      continue;
+    }
+    const lt = s.indexOf('<', k);
+    if (lt < 0) return;
+    k = lt + 1;
+    if (!openersOnly && s.startsWith('!--', k)) { st.comment = true; k += 3; continue; }
+    TAG_AT.lastIndex = k;
+    const m = TAG_AT.exec(s);
+    if (!m) continue;
+    k = TAG_AT.lastIndex;
+    if (k < n && !TAG_NAME_END.includes(s[k])) continue; // `<divx`, `<div\u00a0`: another name
+    const name = m[2].toLowerCase();
+    if (m[1]) {
+      if (openersOnly || (name !== 'details' && name !== 'div')) continue;
+      CLOSE_REST.lastIndex = k;
+      if (CLOSE_REST.exec(s)) { st[name] = Math.max(0, st[name] - 1); k = CLOSE_REST.lastIndex; }
+    } else if (name === 'details' || name === 'div') {
+      st[name]++;
+    } else if (!openersOnly && RAW_TEXT_END[name]) {
+      st.raw = name;
+    }
+  }
+}
+function reviewJson(text) {
+  if (typeof text !== 'string' || !text) return null;
+  const mentioned = text.includes('```review-json') || text.includes('~~~review-json');
+  if (!mentioned) return null;
+  const n = text.length;
+  let fence = null;         // the open fence: { ch, len, review, bodyStart }
+  const blocks = [];        // closed top-level review blocks: { body, closeLine }
+  let lineNo = 0;
+  let lastContent = -1;     // the last line with anything but blanks on it
+  let html = null;          // the open HTML block: { end } (end null: types 6 and 7, which run to a blank line)
+  let para = false;         // the line before is paragraph text, so a type 7 tag can't start a block
+  const tags = { details: 0, div: 0, comment: false, raw: null };
+  const hidden = () => tags.details > 0 || tags.div > 0 || tags.comment || tags.raw !== null;
+  let pos = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
+  while (pos < n) {
+    let end = pos;
+    while (end < n) { const c = text.charCodeAt(end); if (c === 10 || c === 13) break; end++; }
+    const line = text.slice(pos, end);
+    let next = end;
+    if (next < n) next += text.charCodeAt(end) === 13 && text.charCodeAt(end + 1) === 10 ? 2 : 1;
+    // Indent in columns (a tab goes to the next multiple of 4) and the first non-blank character.
+    let col = 0, i = 0;
+    for (; i < line.length; i++) {
+      const c = line[i];
+      if (c === ' ') col++;
+      else if (c === '\t') col += 4 - (col % 4);
+      else break;
+    }
+    if (i >= line.length) {
+      // A blank line: content inside a fence; it ends a type 6 or 7 block and a paragraph.
+      if (!fence) {
+        if (html && !html.end) html = null;
+        para = false;
+      }
+    } else {
+      lastContent = lineNo;
+      const ch = line[i];
+      const rest = line.slice(i);
+      let run = 0;
+      if (ch === '`' || ch === '~') { while (i + run < line.length && line[i + run] === ch) run++; }
+      if (fence) {
+        // CommonMark's closing rule: same character, at least as long, then only spaces or tabs.
+        if (col <= 3 && run >= fence.len && ch === fence.ch && onlyBlanks(line, i + run)) {
+          if (fence.review) blocks.push({ body: text.slice(fence.bodyStart, pos), closeLine: lineNo });
+          fence = null;
+        }
+      } else if (html && html.end) {
+        // Inside a type 1-5 block, up to and including the line with its end
+        // marker: raw text, never a fence. Tags after the marker count.
+        const m = rest.match(html.end);
+        if (m) { html = null; scanTags(rest, m.index + m[0].length, tags, false); }
+        para = false;
+      } else {
+        let start = null;
+        if (!html && col <= 3 && ch === '<') {
+          start = HTML_STARTS.find(([re]) => re.test(rest)) || (!para && tagLine(rest) ? [null, null] : null);
+        }
+        if (start) {
+          const endMarker = start[1];
+          if (endMarker) {
+            // A type 1-5 block may end on its own start line.
+            const m = rest.slice(1).match(endMarker);
+            if (m) scanTags(rest, 1 + m.index + m[0].length, tags, false);
+            else html = { end: endMarker };
+          } else {
+            html = { end: null };
+            scanTags(rest, 0, tags, false);
+          }
+          para = false;
+        } else if (html) {
+          scanTags(rest, 0, tags, false); // a line of an open type 6 or 7 block
+          para = false;
+        } else if (col <= 3 && run >= 3 && (ch !== '`' || !line.slice(i + run).includes('`'))) {
+          // A backtick fence's info string can't hold a backtick (that is inline code).
+          const info = trimBlanks(line.slice(i + run));
+          fence = { ch, len: run, review: !hidden() && col === 0 && ch === '`' && info === 'review-json', bodyStart: next };
+          para = false;
+        } else {
+          if (hidden()) scanTags(rest, 0, tags, true);
+          // Four columns of indent continue a paragraph, or are indented code.
+          if (col <= 3) para = !NOT_PARAGRAPH.some((re) => re.test(rest));
+        }
+      }
+    }
+    pos = next;
+    lineNo++;
+  }
+  // A `>` quote starts with ">" and an indent of four columns fails the column
+  // test, so neither opens a fence: a fence quoted there is not the reply's own.
+  // An unterminated fence is never a block; its lines count as content.
+  if (blocks.length === 1 && blocks[0].closeLine === lastContent) {
+    const body = blocks[0].body.trim();
+    try {
+      return JSON.parse(body);
+    } catch {
+      return { _unparsed: body.slice(0, 500) };
+    }
+  }
+  return { _ambiguous: true, count: blocks.length };
 }
 
 // Best-effort usage numbers from a subagent tool response.
@@ -560,10 +1052,86 @@ function detectTool(input, env = process.env) {
 const REVIEWER_AGENT_TYPES = ['agent-team:reviewer', 'agent-team:security-reviewer'];
 const REVIEW_TASK_TYPES = ['review', 'security-review'];
 
+// Is this delegation a review? A reviewer agent (Claude's `agent-team:reviewer`
+// and `agent-team:security-reviewer`, or Codex's `reviewer-<tier>` and
+// `security-reviewer-<tier>`), or a card whose type is a review type.
+const CODEX_REVIEWER = /^(?:security-)?reviewer-[a-z]+$/;
+function isReviewDelegation(agentType, task) {
+  return REVIEWER_AGENT_TYPES.includes(agentType) || (typeof agentType === 'string' && CODEX_REVIEWER.test(agentType)) ||
+    !!(task && REVIEW_TASK_TYPES.includes(task.type));
+}
+
+// The head a review block must name (decision 0030). A block quoted from the
+// PR body, a diff, a hand-back or an older review can be the only top-level
+// block at the end of a reply, and the parser can't tell it from the
+// reviewer's own. So a review of a PR binds its block to a head: when the card
+// names a PR, branch or head (`pr=`, `branch=`, `head=`), the block's
+// `head_sha` must be a full commit SHA, and when the card names `head=` (7 or
+// more hex digits), the SHA must start with it. A file in the diff can't name
+// the commit that contains it, and an older review names an older head. A card
+// with none of the three (a review with no PR) binds nothing. `none` or an
+// empty value counts as absent.
+const FULL_SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+const CARD_HEAD = /^[0-9a-f]{7,64}$/i;
+const named = (v) => (typeof v === 'string' || typeof v === 'number') && String(v) !== '' && String(v).toLowerCase() !== 'none';
+function headProblem(review, task) {
+  const t = task && typeof task === 'object' ? task : {};
+  if (!named(t.head) && !named(t.pr) && !named(t.branch)) return null;
+  const sha = review && typeof review === 'object' && typeof review.head_sha === 'string' ? review.head_sha : '';
+  // `bound`: the card key that made the check apply, for the message.
+  if (!FULL_SHA.test(sha)) return { reason: 'head_sha', bound: named(t.head) ? 'head' : named(t.pr) ? 'pr' : 'branch' };
+  if (named(t.head)) {
+    const head = String(t.head);
+    if (!CARD_HEAD.test(head) || !sha.toLowerCase().startsWith(head.toLowerCase())) return { reason: 'head_mismatch', card_head: head.slice(0, 64) };
+  }
+  return null;
+}
+const BOUND_BY = { pr: 'a PR (`pr=`)', branch: 'a branch (`branch=`)', head: 'a head (`head=`)' };
+// Why a review marked ambiguous by reviewFor's head check was not read, or null for the parser's own marker.
+function headWhy(review) {
+  if (!review) return null;
+  if (review.reason === 'head_sha') return `its \`head_sha\` is not the full SHA of the head reviewed, and the card names ${BOUND_BY[review.bound] || BOUND_BY.pr}`;
+  if (review.reason === 'head_mismatch') return `its \`head_sha\` is not the head the card names (\`head=${review.card_head}\`)`;
+  return null;
+}
+// The re-ask for a head-check marker: to the reviewer (SubagentStop) or to the Director.
+function headNudge(review, to) {
+  const why = headWhy(review);
+  if (!why) return null;
+  return to === 'reviewer'
+    ? `agent-team: your review-json was not logged: ${why}. A block quoted from the PR, a diff or another reply is not your verdict. End your reply with your own \`review-json\` block, with the full SHA of the head you reviewed as \`head_sha\`.`
+    : `agent-team: the review's review-json was not logged: ${why}, so it may be a quoted block. Re-ask once for the reviewer's own block with the full \`head_sha\` it reviewed. If it is still not logged, treat the review as missing.`;
+}
+
+// The review in a reply, for this delegation. Only a review delegation gets the
+// `_ambiguous` marker: any other agent may quote a review-json fence (in a diff,
+// a test, a decision) without having written a review, so there it is no review.
+// A review delegation's block that fails the head check above becomes
+// { _ambiguous: true, count: 1, reason, card_head? }: no row is written for it.
+function reviewFor(text, agentType, task) {
+  const review = reviewJson(text);
+  if (!review) return review;
+  const reviewing = isReviewDelegation(agentType, task);
+  if (review._ambiguous) return reviewing ? review : null;
+  if (review._unparsed || !reviewing) return review;
+  const problem = headProblem(review, task);
+  return problem ? { _ambiguous: true, count: 1, ...problem } : review;
+}
+
+// Would scripts/handback-check.js accept this hand-back message? A reviewer
+// agent's needs a review reviewFor can read; any other agent's, a readable
+// result-json or review-json block. `task` is the card, when known.
+function handbackReadable(message, agentType, task) {
+  const read = (v) => !!v && !v._unparsed && !v._ambiguous;
+  const review = reviewFor(message, agentType, task);
+  return REVIEWER_AGENT_TYPES.includes(agentType) ? read(review) : read(lastFencedJson(message, 'result-json')) || read(review);
+}
+
 module.exports = {
-  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES,
-  detectTool, PLUGIN_ROOT, readStdin, projectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
-  agentDefaults, parseTaskCard, responseText, lastFencedJson, usageFrom,
+  REVIEWER_AGENT_TYPES, REVIEW_TASK_TYPES, isReviewDelegation, reviewFor, headProblem, headWhy, headNudge, handbackReadable,
+  detectTool, PLUGIN_ROOT, readStdin, projectDir, gitRoot, gitTracks, grantLogRoot, foreignProjectDir, logPath, logDir, logRoot, mainCheckout, inUse, enabledHere, appendJsonl, guidanceVersion,
+  safeAppend, safeWriteNew, safeOpenNew, safeReplace, safeMkdir, safeListDir, checkLogFile, tempName, TEMP_FILE, safeWriteHooks, REFUSED,
+  agentDefaults, parseTaskCard, responseText, lastFencedJson, reviewJson, usageFrom,
   segments, allSegments, ghParts, prMergeTarget, findPrMerges,
   glabParts, isGlabMr, isGlabMerge, mrMergeTarget, findMerges, segmentMerges,
 };

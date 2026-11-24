@@ -12,7 +12,7 @@ const { SCRIPTS, ROOT, NO_MODELS_FILE, tmpProject, run, fakeGh, readLog, test, a
 console.log('coach-logger');
 
 const usage = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-const REVIEW = (v, summary) => '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[],"summary":"' + summary + '"}\n```';
+const REVIEW = (v, summary) => '```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"' + v + '","severity":"none","issues":[],"summary":"' + summary + '"}\n```';
 
 const logsOf = (proj) => path.join(proj, '.agent-team', 'logs');
 function appendLog(proj, file, rows) {
@@ -20,14 +20,15 @@ function appendLog(proj, file, rows) {
   fs.appendFileSync(path.join(logsOf(proj), file), rows.map((r) => JSON.stringify(r)).join('\n') + '\n');
 }
 
-// A subagent transcript with one turn per report; turn n carries `attempt=n`.
-function transcript(dir, agentId, reports, card = (n) => `TASK id=RC-1 type=review milestone=rc attempt=${n} pr=9`) {
+// A subagent transcript with one turn per report; turn n carries `attempt=n`. `cwd` is the folder
+// Claude Code records the session in (reconcile reads only this project's transcripts, FU-18).
+function transcript(dir, agentId, reports, card = (n) => `TASK id=RC-1 type=review milestone=rc attempt=${n} pr=9`, cwd = undefined) {
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `agent-${agentId}.jsonl`);
   const lines = [];
   reports.forEach((report, i) => {
     const ts = (s) => `2026-10-30T1${i}:00:${s}.000Z`;
-    lines.push({ type: 'user', isMeta: i > 0, timestamp: ts('00'), message: { role: 'user', content: card(i + 1) } });
+    lines.push({ type: 'user', isMeta: i > 0, cwd, timestamp: ts('00'), message: { role: 'user', content: card(i + 1) } });
     lines.push({ type: 'assistant', timestamp: ts('05'), message: { id: `m${i}`, model: 'claude-sonnet-5-5', usage, content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message: report } }] } });
   });
   fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
@@ -155,7 +156,7 @@ test('log-event pause: a missing or unknown reason is rejected and nothing is wr
 function reconcileSetup(agentId, reports, hookRows) {
   const proj = tmpProject();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-projects-'));
-  const file = transcript(path.join(root, 'folder', 'sess-1', 'subagents'), agentId, reports);
+  const file = transcript(path.join(root, 'folder', 'sess-1', 'subagents'), agentId, reports, undefined, proj);
   fs.writeFileSync(file.replace(/\.jsonl$/, '.meta.json'), JSON.stringify({ agentType: 'agent-team:reviewer' }));
   const del = (kind, attempt) => ({ ts: 't', tool: 'claude', session_id: 'sess-1', kind, agent: 'agent-team:reviewer', agent_id: agentId, guidance_version: '0.3.0', model: 'sonnet', effort: 'high', tier: 'medium', background: true, task: { id: 'RC-1', type: 'review', attempt, pr: '9' } });
   appendLog(proj, 'delegations.jsonl', [del('subagent', 1), ...reports.slice(1).map((_, i) => del('resume', i + 2))]);

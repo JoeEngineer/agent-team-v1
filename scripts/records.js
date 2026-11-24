@@ -19,8 +19,7 @@ function base(input, tool = 'claude') {
 }
 
 function startFile(input) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = lib.safeMkdir(path.join(lib.logPath(input), '.pending'));
   return path.join(dir, `${String(input.tool_use_id || 'unknown').replace(/[^\w-]/g, '_')}.json`);
 }
 
@@ -36,12 +35,11 @@ function takeDuration(input) {
 }
 
 // Create a marker file once; false if it already exists. Used to log an event
-// once when several hooks see it.
+// once when several hooks see it. A refused path (a linked folder, see
+// lib.safeWriteNew) claims nothing, so nothing is logged.
 function claimOnce(input, key) {
-  const dir = path.join(lib.logDir(input), '.pending');
-  fs.mkdirSync(dir, { recursive: true });
   try {
-    fs.writeFileSync(path.join(dir, String(key).replace(/[^\w-]/g, '_')), '', { flag: 'wx' });
+    lib.safeWriteNew(path.join(lib.logPath(input), '.pending', String(key).replace(/[^\w-]/g, '_')), '');
     return true;
   } catch {
     return false;
@@ -51,22 +49,33 @@ function claimOnce(input, key) {
 // Best-effort sweep of old .pending entries: dedupe markers (stop-*, resume-*, review-*)
 // and leaked start files (toolu_*.json) older than maxAgeMs. Looks at no more
 // than `cap` entries per run, skips anything else (dotfiles, other tasks'
-// files) and swallows every error.
+// files) and swallows every error. A linked .pending is not listed, so nothing
+// in the folder it points at is deleted (lib.safeListDir).
+// Temp files a crashed lib.safeReplace or reconcile rewrite left behind
+// (lib.TEMP_FILE) go by the same age rule, in .pending, .pending/codex-completions
+// and the logs folder itself.
 const PRUNABLE = /^(stop-|resume-|review-|toolu_.*\.json$)/;
 function prunePending(input, { maxAgeMs = 24 * 3600 * 1000, cap = 200 } = {}) {
-  try {
-    const dir = path.join(lib.logPath(input), '.pending');
-    const now = Date.now();
-    let seen = 0;
-    for (const name of fs.readdirSync(dir)) {
-      if (name.startsWith('.') || !PRUNABLE.test(name)) continue;
-      if (++seen > cap) break;
-      try {
-        const f = path.join(dir, name);
-        if (now - fs.statSync(f).mtimeMs > maxAgeMs) fs.unlinkSync(f);
-      } catch { /* best effort */ }
-    }
-  } catch { /* no .pending yet */ }
+  const now = Date.now();
+  let seen = 0;
+  const sweep = (dir, pattern) => {
+    try {
+      for (const name of lib.safeListDir(dir) || []) {
+        if (name.startsWith('.') || !pattern.test(name)) continue;
+        if (++seen > cap) return;
+        try {
+          const f = path.join(dir, name);
+          const st = fs.lstatSync(f);
+          if (!st.isDirectory() && now - st.mtimeMs > maxAgeMs) fs.unlinkSync(f);
+        } catch { /* best effort */ }
+      }
+    } catch { /* missing, or refused */ }
+  };
+  const logs = lib.logPath(input);
+  const dir = path.join(logs, '.pending');
+  sweep(dir, { test: (n) => PRUNABLE.test(n) || lib.TEMP_FILE.test(n) });
+  for (const sub of ['codex-completions']) sweep(path.join(dir, sub), lib.TEMP_FILE);
+  sweep(logs, lib.TEMP_FILE);
 }
 
 const shortHash = (s) => crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 12);
@@ -85,13 +94,14 @@ function readJsonl(file) {
 // Serialize writes of one durable event. Unlike claimOnce, a lock is released
 // after writing, so a process that dies before appending cannot consume the
 // event forever. Recover a dead process's lock on a later hook/reconcile run.
+// The lock file is created exclusively in real folders (lib.safeOpenNew); a
+// linked folder throws, and the caller writes nothing.
 function withRecordLock(input, id, fn) {
-  const dir = path.join(lib.logDir(input), '.pending', 'record-locks');
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = path.join(lib.logPath(input), '.pending', 'record-locks');
   const file = path.join(dir, `${shortHash(id)}.lock`);
   let fd;
   try {
-    try { fd = fs.openSync(file, 'wx'); } catch (err) {
+    try { fd = lib.safeOpenNew(file); } catch (err) {
       if (err.code !== 'EEXIST') throw err;
       let dead = false;
       try {
@@ -102,11 +112,11 @@ function withRecordLock(input, id, fn) {
       } catch {
         // The owner may still be writing its pid. Only reap a torn lock after
         // a generous grace period, never while another fresh hook is starting.
-        dead = Date.now() - fs.statSync(file).mtimeMs > 5 * 60 * 1000;
+        dead = Date.now() - fs.lstatSync(file).mtimeMs > 5 * 60 * 1000;
       }
       if (!dead) return false;
       fs.unlinkSync(file);
-      try { fd = fs.openSync(file, 'wx'); } catch (e) {
+      try { fd = lib.safeOpenNew(file); } catch (e) {
         if (e.code === 'EEXIST') return false;
         throw e;
       }
@@ -124,7 +134,7 @@ function withRecordLock(input, id, fn) {
 // The JSONL record, rather than an expiring marker, is the durable receipt.
 function appendOnce(input, file, idField, record) {
   return withRecordLock(input, `${file}:${record[idField]}`, () => {
-    if (readJsonl(path.join(lib.logDir(input), file)).some((r) => r[idField] === record[idField])) return false;
+    if (readJsonl(path.join(lib.logPath(input), file)).some((r) => r[idField] === record[idField])) return false;
     lib.appendJsonl(input, file, record);
     return true;
   });
@@ -140,9 +150,24 @@ function milestoneFor(input, taskId, task) {
   return d ? d.task.milestone : undefined;
 }
 
+// A bridge call has no agent id; its call id (tool_use_id) names the review.
+// The hash input differs from a subagent's, so no existing review_id changes.
+const isBridgeRecord = (record) => !!record && record.kind === 'bridge';
+
+// The effort a bridge ran at: the call's own, else the card's (the call logs 'default' when it gave none).
+const bridgeEffort = (record, task, bridge) =>
+  (bridge && (record.effort == null || record.effort === 'default') && task.effort) || record.effort;
+
 function reviewIdentity(input, record, review, tool = 'claude') {
   const task = record.task || {};
   const identity = task.id || record.turn_id;
+  if (isBridgeRecord(record)) {
+    return task.id && record.tool_use_id ? `review-${shortHash(JSON.stringify([
+      'bridge', tool, record.session_id || input.session_id || null, record.tool_use_id,
+      task.id, task.reviewed_task || null, task.attempt == null ? null : String(task.attempt),
+      task.role || task.type || record.agent || null, review,
+    ]))}` : null;
+  }
   return record.agent_id && identity ? `review-${shortHash(JSON.stringify([
     tool, record.session_id || input.session_id || null, record.agent_id,
     task.id || null, task.reviewed_task || null, task.attempt == null ? null : String(task.attempt),
@@ -157,22 +182,79 @@ const milestoneField = (m) => (m ? { milestone: m } : {});
 // kept under `review_shadowed` instead. The block may fill a field the hook has
 // no value for (a Director-written line passes `pr` or `milestone` this way),
 // but never the row's identity (`review_id`, `ts`, `tool`, `guidance_version`).
-const HOOK_ONLY = ['review_id', 'ts', 'tool', 'guidance_version', 'reconciled_by', 'review_shadowed'];
-function withReview(known, review) {
+// Everything the logger owns is in HOOK_ONLY: identity, provenance, attribution
+// and timestamps. A block value for one is never copied onto the row (a
+// different one is kept under `review_shadowed`), even when the hook has no
+// value for it. `session_id` is the one exception: where no session is known,
+// a block (a Director-written line) may still give it.
+const HOOK_ONLY = [
+  'review_id', 'ts', 'tool', 'guidance_version', 'reconciled_by', 'review_shadowed',
+  'source', 'session_source', 'stale_of', 'kind', 'tool_use_id', 'agent_id', 'turn_id', 'verdict_conflict',
+  'model', 'effort', 'tier', 'agent', 'reviewer_model', 'reviewer_effort', 'requested_model', 'requested_effort', 'reviewer_tier',
+  'timestamp', 'created_at', 'started_at', 'completed_at', 'duration_ms',
+];
+// Fields only a Director-written line (log-event.js review) may take from the block when the
+// card gave none (its identity is the Director's own words). On the hook, reconcile and codex
+// paths the card and the hook know these, and a block never fills them. session_id is the
+// session that ran the logger, on every path: a block never gives it.
+const CARD_FIELDS = ['task_id', 'review_task_id', 'attempt', 'pr', 'milestone', 'role'];
+const SESSION_FIELD = 'session_id';
+const SHADOW_KEY = foldKeyOf('review_shadowed');
+function foldKeyOf(k) { return String(k).normalize('NFKC').toLowerCase().replace(/[\p{Cf}\s]/gu, ''); }
+// A key the way a reader sees it: NFKC, lowercase, no format or space characters.
+// A fullwidth "tool" or one with a zero-width character in it reads as "tool": never copied onto the row.
+const foldKey = foldKeyOf;
+function withReview(known, review, hookOnly = HOOK_ONLY) {
   const row = { ...known };
   const shadowed = {};
+  const reserved = new Set([...hookOnly, ...Object.keys(known)].map(foldKey));
   for (const [key, value] of Object.entries(review && typeof review === 'object' ? review : {})) {
-    if (known[key] == null && !HOOK_ONLY.includes(key)) row[key] = value;
-    else if (JSON.stringify(known[key]) !== JSON.stringify(value)) shadowed[key] = value;
+    // The row's review_shadowed is the logger's own: a block's key of that name is dropped, not nested in it.
+    if (foldKey(key) === SHADOW_KEY) continue;
+    const lookalike = !(key in known) && !hookOnly.includes(key) && reserved.has(foldKey(key));
+    if (known[key] == null && !hookOnly.includes(key) && !lookalike) row[key] = value;
+    else if (lookalike || JSON.stringify(known[key]) !== JSON.stringify(value)) shadowed[key] = value;
   }
   if (Object.keys(shadowed).length) row.review_shadowed = shadowed;
   return row;
 }
 
+// A verdict that contradicts the review's own top-level severity: a rejection
+// with nothing worse than minor, or an approval with a major or critical.
+function verdictConflict(review) {
+  if (!review || typeof review !== 'object') return false;
+  const { verdict, severity } = review;
+  if (verdict === 'changes_requested' || verdict === 'reject') return severity === 'none' || severity === 'minor';
+  if (verdict === 'approve') return severity === 'major' || severity === 'critical';
+  return false;
+}
+
+// One text for the reviewer and the security-reviewer: a security review's
+// evidence is an exploit path, a code review's is what breaks and where.
+const VERDICT_CONFLICT_NUDGE = 'agent-team: your review-json has a verdict that contradicts its severity: ' +
+  'give a `major` with the evidence that makes it blocking (the exploit path, for a security review), or an `approve`.';
+// The bridge path has no stop hook: the text goes to the Director, not the reviewer.
+const VERDICT_CONFLICT_DIRECTOR_NUDGE = "agent-team: the bridge review's verdict contradicts its severity: " +
+  'ask it for a `major` with the evidence that makes it blocking (the exploit path, for a security review), or an `approve`.';
+
+// A reply whose review-json is not exactly one top-level block at its end (see
+// lib.reviewJson) is read as no review: no reviews.jsonl row, and the line it is
+// on carries { _ambiguous: true, count }.
+const isAmbiguous = (review) => !!review && typeof review === 'object' && review._ambiguous === true;
+const ambiguousDetail = (review) => `${review.count} top-level \`review-json\` block${review.count === 1 ? '' : 's'} found`;
+// SubagentStop's text goes to the reviewer itself; the bridge path's to the Director.
+const ambiguousNudge = (review) => `agent-team: your reply's review-json could not be read (${ambiguousDetail(review)}). ` +
+  'It must be exactly one `review-json` fence, at column 0, not inside another fence or a quote, and the last thing in the reply. End your reply with it alone.';
+const ambiguousDirectorNudge = (review) => `agent-team: the bridge review's review-json could not be read (${ambiguousDetail(review)}), so no review row was logged. ` +
+  'Re-ask once for one `review-json` fence at column 0, not inside another fence or a quote, as the last thing in its reply. If it is still ambiguous, treat the review as missing.';
+
 // Task identity matters: a resumed reviewer may issue the same verdict for a
 // new attempt, or reuse its thread for a new task whose attempt resets to one.
-function logReview(input, record, review, tool = 'claude') {
+function logReview(input, record, review, tool = 'claude', extra = {}) {
+  // Never a row for a review that could not be read unambiguously.
+  if (isAmbiguous(review)) return false;
   const task = record.task || {};
+  const bridge = isBridgeRecord(record);
   const identity = task.id || record.turn_id;
   const reviewId = reviewIdentity(input, record, review, tool);
   if (record.agent_id && !identity && !claimOnce(input, `review-${record.agent_id}-${shortHash(JSON.stringify(review))}`)) return false;
@@ -191,13 +273,19 @@ function logReview(input, record, review, tool = 'claude') {
     pr: task.pr,
     attempt: task.attempt,
     ...milestoneField(milestoneFor(input, task.reviewed_task || task.id, task)),
+    // A bridge row also says which bridge ran (`tool` above, `agent` here) and the tier and effort the card asked for.
+    ...(bridge ? { agent: record.agent, tier: task.tier ?? null, effort: task.effort ?? null } : {}),
     reviewer_model: tool === 'codex' && record.resolved_model !== undefined ? record.resolved_model : (record.resolved_model || record.model),
-    reviewer_effort: tool === 'codex' && record.resolved_effort !== undefined ? record.resolved_effort : (record.resolved_effort || record.effort),
+    reviewer_effort: tool === 'codex' && record.resolved_effort !== undefined ? record.resolved_effort : (record.resolved_effort || bridgeEffort(record, task, bridge)),
     requested_model: record.model ?? null,
     requested_effort: record.effort ?? null,
-    reviewer_tier: record.tier === undefined ? null : record.tier,
+    reviewer_tier: record.tier != null ? record.tier : (bridge ? task.tier ?? null : null),
+    // The caller's own fields (a Director line's `source`), set by code, not by the block.
+    ...extra,
   };
-  const row = withReview(known, review);
+  const director = extra.source === 'director';
+  const row = withReview(known, review, director ? [...HOOK_ONLY, SESSION_FIELD] : [...HOOK_ONLY, SESSION_FIELD, ...CARD_FIELDS]);
+  if (verdictConflict(review)) row.verdict_conflict = true;
   if (reviewId) return appendOnce(input, 'reviews.jsonl', 'review_id', row);
   lib.appendJsonl(input, 'reviews.jsonl', row);
   return true;
@@ -222,13 +310,15 @@ function findDelegation(input, predicate) {
 // only the fields that changed, or null.
 function cardDrift(input, task, kind) {
   if (kind === 'followup' || !task || !task.id) return null;
+  // A review card carries the task's id by convention and is never the baseline.
+  if (lib.REVIEW_TASK_TYPES.includes(task.type)) return null;
   let first = null;
   try {
     for (const line of fs.readFileSync(path.join(lib.logDir(input), 'delegations.jsonl'), 'utf8').split(/\r?\n/)) {
       if (!line.trim()) continue;
       let rec;
       try { rec = JSON.parse(line); } catch { continue; }
-      if (rec && rec.kind !== 'followup' && rec.task && rec.task.id === task.id && (rec.task.type || rec.task.difficulty)) { first = rec.task; break; }
+      if (rec && rec.kind !== 'followup' && rec.task && rec.task.id === task.id && !lib.REVIEW_TASK_TYPES.includes(rec.task.type) && (rec.task.type || rec.task.difficulty)) { first = rec.task; break; }
     }
   } catch { /* no delegations yet */ }
   if (!first) return null;
@@ -705,7 +795,8 @@ function resolveQueuedMerges(input, { dryRun = false, run, limit = MAX_RESOLVE_P
 }
 
 // Why an attempt after the first exists. A followup is not an attempt (kind=followup).
-const ATTEMPT_REASONS = ['sendback', 'escalation', 'fold-in', 'retry'];
+const ATTEMPT_REASONS = ['sendback', 'escalation', 'fold-in', 'retry', 'confirm'];
+const KNOWN_FLAGS = ['security-sensitive', 'above-table'];
 const known = (v) => v != null && v !== '' && !['inherited', 'unknown', 'default'].includes(String(v));
 
 // Compare a task card's requested tier= and effort= with the settings that run:
@@ -728,10 +819,21 @@ function cardSettings(task, ran, kind) {
   if (task.reason && !ATTEMPT_REASONS.includes(task.reason)) {
     messages.push(`agent-team: task ${task.id || '?'} has reason=${task.reason}; use one of ${ATTEMPT_REASONS.join(', ')}.`);
   }
-  if (task.reason === 'escalation' && kind === 'resume' && !fields.tier_mismatch && !fields.effort_mismatch) {
+  const isReview = lib.REVIEW_TASK_TYPES.includes(task.type);
+  if (task.reason === 'confirm' && !isReview) {
+    messages.push(`agent-team: task ${task.id || '?'} has reason=confirm on a ${task.type || 'card without a type'}; confirm is for review cards.`);
+  }
+  messages.push(...flagMessages(task));
+  if (task.reason === 'escalation' && kind === 'resume' && !isReview && !fields.tier_mismatch && !fields.effort_mismatch) {
     messages.push(`agent-team: task ${task.id || '?'} is an escalation sent as a resume, which keeps the original model and effort. Spawn a new agent with the new settings, and put them on the card (tier=, effort=).`);
   }
   return { fields, messages };
+}
+
+// One warning for the unknown flags= on a card. They stay on the card.
+function flagMessages(task) {
+  const unknown = (Array.isArray(task && task.flags) ? task.flags : []).filter((f) => !KNOWN_FLAGS.includes(f));
+  return unknown.length ? [`agent-team: task ${task.id || '?'} has unknown flags=${unknown.join(',')}; known flags: ${KNOWN_FLAGS.join(', ')}.`] : [];
 }
 
 // A role-agent delegation without a TASK line is logged without task fields,
@@ -773,8 +875,8 @@ function closeOpenPause(input, closedBy, { reasons = null, note } = {}) {
 }
 
 module.exports = {
-  base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview,
-  readJsonl, withRecordLock, appendOnce, reviewIdentity, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
+  base, startFile, takeDuration, claimOnce, prunePending, shortHash, logReview, reviewIdentity,
+  readJsonl, withRecordLock, appendOnce, findDelegation, milestoneFor, milestoneOfBase, prState, mergeOutcome, logMerges,
   cardDrift, driftMessage, sanitizeCommand, resolveQueuedMerges, openQueued, unresolvedQueued,
-  ATTEMPT_REASONS, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
+  ATTEMPT_REASONS, KNOWN_FLAGS, flagMessages, verdictConflict, VERDICT_CONFLICT_NUDGE, VERDICT_CONFLICT_DIRECTOR_NUDGE, isAmbiguous, ambiguousNudge, ambiguousDirectorNudge, cardSettings, UNCARDED_MESSAGE, closeOpenPause,
 };

@@ -3,6 +3,18 @@
 # Trivy scans the working tree (not git history) for vulnerabilities,
 # misconfiguration and secrets at HIGH and CRITICAL. Read-only: results stay in the job log.
 # After the first run, add the job names below to your required checks.
+# On pull requests the four Trivy config and ignore files (trivy.yaml, .trivyignore,
+# .trivyignore.yaml, trivy-secret.yaml) are taken from the base branch, so a PR's
+# change to them applies only after it merges. Other files a base trivy.yaml names
+# are still read from the PR tree. A PR can still weaken its scan by editing this
+# workflow, with inline trivy:ignore comments, or by removing or moving the root
+# Dockerfile (trivy-image is then skipped, which does not block a merge). Review
+# PR changes to those.
+# Push runs are for main only. A push to a milestone/** branch would use that
+# branch's own Trivy config under the same job names as the PR run, so a pass
+# there could sit beside a failing PR run on the same SHA; PRs into and out of
+# milestone branches are scanned with the base config instead.
+# With no Dockerfile at the repo root, trivy-image shows as skipped, not passed.
 name: security-scan
 
 on:
@@ -10,7 +22,6 @@ on:
   push:
     branches:
       - main
-      - 'milestone/**'
 
 permissions:
   contents: read
@@ -25,6 +36,44 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # A PR must not change these four files for its own scan: use the base
+      # branch's copy of each, or none if the base has none. The base commit comes
+      # from a second checkout (no token kept, so it also works on private repos),
+      # inside the workspace because checkout requires that. It is deleted before
+      # Trivy so it is never scanned. The SHA is only ever in with:, never inline
+      # in a run: script. A PR that ships its own .scan-base (a symlink to . would
+      # make the second checkout replace the PR tree) fails the job first.
+      - name: Refuse a .scan-base from the PR
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -e .scan-base ] || [ -L .scan-base ]; then
+            echo "::error::.scan-base exists in the PR tree; the base config checkout needs that path. Remove it from the PR."
+            exit 1
+          fi
+      - name: Check out base branch config
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .scan-base
+          persist-credentials: false
+      # The PR's own copies are kept in .scan-pr-config (the job fails if the
+      # PR already has that path) so the scan below still reads them for secrets,
+      # under the base config; they are never used as config.
+      - name: Use base-branch scanner config
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -e .scan-pr-config ] || [ -L .scan-pr-config ]; then
+            echo "::error::.scan-pr-config exists in the PR tree; the scan keeps the PR's config copies at that path. Remove it from the PR."
+            exit 1
+          fi
+          mkdir .scan-pr-config
+          for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
+            if [ -f "$f" ]; then cp "$f" ".scan-pr-config/$f"; fi
+            rm -f "$f"
+            if [ -f ".scan-base/$f" ]; then cp ".scan-base/$f" "$f"; fi
+          done
+          rm -rf .scan-base
       - name: Trivy file system scan
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -35,10 +84,12 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
 
-  trivy-image:
-    name: trivy-image
+  detect-dockerfile:
+    name: detect-dockerfile
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 5
+    outputs:
+      found: ${{ steps.dockerfile.outputs.found }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -49,14 +100,43 @@ jobs:
         id: dockerfile
         run: |
           if [ -f Dockerfile ]; then echo "found=true" >> "$GITHUB_OUTPUT"; else echo "found=false" >> "$GITHUB_OUTPUT"; fi
-      - name: Note that the image scan is skipped
-        if: steps.dockerfile.outputs.found != 'true'
-        run: echo "::notice::No Dockerfile at the repo root, image scan skipped"
+
+  trivy-image:
+    name: trivy-image
+    needs: detect-dockerfile
+    if: needs.detect-dockerfile.outputs.found == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Refuse a .scan-base from the PR
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -e .scan-base ] || [ -L .scan-base ]; then
+            echo "::error::.scan-base exists in the PR tree; the base config checkout needs that path. Remove it from the PR."
+            exit 1
+          fi
+      - name: Check out base branch config
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .scan-base
+          persist-credentials: false
+      - name: Use base-branch scanner config
+        if: github.event_name == 'pull_request'
+        run: |
+          for f in trivy.yaml .trivyignore .trivyignore.yaml trivy-secret.yaml; do
+            rm -f "$f"
+            if [ -f ".scan-base/$f" ]; then cp ".scan-base/$f" "$f"; fi
+          done
+          rm -rf .scan-base
       - name: Build image
-        if: steps.dockerfile.outputs.found == 'true'
         run: docker build -t scan-target:ci .
       - name: Trivy image scan
-        if: steps.dockerfile.outputs.found == 'true'
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           version: v0.76.2

@@ -16,10 +16,28 @@
 //   review       e.g. '{"card":"TASK id=X-2 reviewed_task=X-1 pr=5 ...","verdict":"approve","agent_id":"..."}'
 // `card` is parsed into `task` (task card fields, plus `why` from a WHY line or a `why` field).
 // `tool` defaults to AGENT_TEAM_TOOL, else "unknown". Director-written lines carry source "director".
+// review: the task is the card's alone (a `task` object in the JSON is ignored); `tool` is "claude" or "codex"
+//   (else the default above); agent_id, resolved_model, model, effort and tier are kept only as short plain
+//   strings. A block never gives session_id or a field of the row that the logger owns. When another writer
+//   holds the record lock for the same review, nothing is written: "not logged: busy ... retry", exit 1.
+//   A review already in the log is "not logged: duplicate of <id>", exit 0.
+// Every line carries session_id: CLAUDE_CODE_SESSION_ID when set (session_source "env"), else the
+// SessionStart marker's (session_source "marker"). A review line has session_id only.
+// session_id and session_source always name the session that ran this script: a session_id
+// given in the JSON input is ignored (the session fields are written last and win).
 // Writes to <project>/.agent-team/logs/<kind>s.jsonl (pauses.jsonl for pause), adding ts and guidance_version.
 // note, escalation and merge lines get `milestone` from the linked task's delegation card when the JSON has none
 // (the task is the `task` or `task_id` field); a merge also takes it from a `base` of milestone/<name>.
 // merge: `command` is stored without leading `cd …` segments or absolute local paths.
+// milestone: the intake line of the xlarge grant (decisions 0026 and 0029). One answer per slug:
+//   a line `status.js grant` would not accept, or one with a key besides milestone, xlarge_grant,
+//   second_review and map_source, is refused and nothing is written. The same grant again writes
+//   nothing and exits 0. A grant that differs from a line the slug already has IS written, next
+//   to that line, and the exit is 1: the lines now disagree, so `status.js grant` grants nothing
+//   for the slug (exit 23) until the user removes the foreign line by hand. The message gives
+//   the line numbers. It goes to the project of the cwd; CLAUDE_PROJECT_DIR naming another
+//   project is refused, and so is a milestones.jsonl that git tracks (a checkout would put its
+//   committed lines back). Every refusal exits 1.
 // decision: a duplicate `id` is rejected; `model`/`effort` given as a family name, "unknown" or nothing
 //   are filled from the session's resolved settings (the text given is kept as model_given).
 // delegation: `kind` is subagent (default), resume or followup (scope added without a review verdict;
@@ -33,6 +51,11 @@ const records = require('./records');
 
 const DELEGATION_KINDS = ['subagent', 'resume', 'followup'];
 const PAUSE_REASONS = ['user', 'runway', 'usage_limit'];
+const REVIEW_TOOLS = ['claude', 'codex'];
+const plainString = (v) => typeof v === 'string' && v.length > 0 && v.length <= 200 && !/[\u0000-\u001f\u007f]/.test(v);
+// The refusals that write nothing end with this: the Director's intake line is not in the log yet.
+// tests/fu22-intake-line.test.js ties this sentence to the bullet in skills/milestone/SKILL.md.
+const RELOG = 'once the problem is fixed, log this line again; only exit 0 clears it.';
 const KINDS = new Set(['decision', 'escalation', 'merge', 'note', 'milestone', 'tier_fallback', 'delegation', 'review', 'pause', 'resume']);
 
 const USAGE = [
@@ -69,6 +92,8 @@ function readJson(file) {
 function lastTurnContext(file) {
   const out = { model: null, effort: null };
   let text;
+  // The path comes from a log: opened only inside the Codex sessions folder.
+  if (!require('./codex-log').inCodexSessions(file)) return out;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return out; }
   for (const line of text.split(/\r?\n/)) {
     if (!line.includes('turn_context')) continue;
@@ -81,6 +106,17 @@ function lastTurnContext(file) {
     } catch { /* torn line */ }
   }
   return out;
+}
+
+// The session that ran this script: CLAUDE_CODE_SESSION_ID when the shell has it.
+// The SessionStart marker is overwritten by whichever session started last (G17),
+// so it is only the fallback (Codex, or a shell without the variable).
+// session_source says which one was used.
+function sessionFields() {
+  const env = process.env.CLAUDE_CODE_SESSION_ID;
+  if (env) return { session_id: env, session_source: 'env' };
+  const marker = readJson(path.join(lib.logPath({}), '.pending', 'hooks-alive.json'));
+  return { session_id: (marker && marker.session_id) || null, session_source: 'marker' };
 }
 
 // The Director session's resolved model and effort, from what the hooks saw:
@@ -140,6 +176,84 @@ function duplicateDecision(data) {
     `${next ? ` The next free id is ${next}.` : ''} Nothing was written.`;
 }
 
+// The intake line of the xlarge grant, in the log `status.js grant` reads, found and read the way
+// grant does it. Exit 0 only when the log holds this answer for the slug and no other.
+// Returns the exit code.
+function logMilestone(data, session) {
+  const status = require('./status');
+  const bad = status.intakeProblem(data);
+  if (bad) {
+    console.error(`invalid milestone line: ${bad}. Nothing was written.`);
+    return 1;
+  }
+  const cwd = process.cwd();
+  const foreign = lib.foreignProjectDir(cwd);
+  if (foreign) {
+    console.error(`CLAUDE_PROJECT_DIR (${foreign.env}) is not the project of the cwd (${foreign.root}); the intake line would land where \`status.js grant\` does not read. Nothing was written. Run from the project folder; ${RELOG}`);
+    return 1;
+  }
+  const root = lib.grantLogRoot(cwd);
+  const tracked = status.trackedProblem(root);
+  if (tracked) {
+    console.error(`${tracked}. Nothing was written. Write no grant; ask the user; ${RELOG}`);
+    return 1;
+  }
+  const file = path.join(root, status.LOG_REL);
+  const slug = data.milestone;
+  const read = () => {
+    try { return status.readLog(file, slug); } catch (err) {
+      if (!(err instanceof status.Refusal)) throw err;
+      console.error(`cannot tell whether "${slug}" already has an intake line: ${err.message}. Nothing more was written. Write no grant; ask the user; ${RELOG}`);
+      return undefined;
+    }
+  };
+  const want = { roles: new Set(data.xlarge_grant), second: data.second_review };
+  const mine = (l) => status.sameGrant(l, want);
+  lib.checkLogFile(file);
+  let log = read();
+  if (log === undefined) return 1;
+  // The log must hold this answer: append it unless a line for the slug already says the same.
+  // A line that says something else does not stop the append. It used to, and then the other
+  // line stayed the only one, and `grant` read it as the answer from then on.
+  let written = null;
+  if (!log || !log.all.some(mine)) {
+    // A session id read from the marker file (no CLAUDE_CODE_SESSION_ID) is whatever that file
+    // holds; only a string goes into the line (see status.intakeProblem on nested values).
+    const sid = typeof session.session_id === 'string' ? session.session_id : null;
+    written = JSON.stringify({ ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data, ...session, session_id: sid });
+    // A hand edit can leave the last line without its newline; this one must not join it.
+    let tail = '\n';
+    try { tail = fs.readFileSync(file, 'utf8').slice(-1) || '\n'; } catch { /* no file yet */ }
+    lib.safeAppend(file, `${tail === '\n' ? '' : '\n'}${written}\n`);
+    // No lock: two writers can both find no line and both append. Each append is atomic and both
+    // lines stay, so the second read shows whether they agree.
+    log = read();
+    if (log === undefined) return 1;
+    if (!log || !log.all.some((l) => l.line === written)) {
+      console.error(`the intake line for "${slug}" was appended, but ${file} does not hold it now: the file was changed while this ran. Write no grant; ask the user.`);
+      return 1;
+    }
+  }
+  // Exit 0 says: every line for the slug grants what this call was given.
+  if (log.agree && mine(log)) {
+    console.log(written ? 'logged milestone to .agent-team/logs/milestones.jsonl' : `milestone "${slug}" already has this intake line (line ${log.n} of .agent-team/logs/milestones.jsonl); nothing written`);
+    return 0;
+  }
+  // Lines for the slug that disagree. Only line numbers and the fields readLog checked are
+  // printed, never text from the file.
+  const shown = (l) => `roles ${[...l.roles].sort().join(', ') || 'none'}; second review ${l.second}`;
+  const own = log.all.find((l) => (written ? l.line === written : mine(l)));
+  const others = log.all.filter((l) => !mine(l)).map((l) => l.n);
+  const list = others.length > 1 ? `lines ${others.slice(0, -1).join(', ')} and ${others[others.length - 1]}` : `line ${others[0]}`;
+  console.error([
+    `milestone "${slug}": the intake lines in ${file} disagree.`,
+    ...log.all.map((l) => `  line ${l.n}: ${shown(l)}${l === own ? ` <- yours (${written ? 'just written' : 'already there'})` : mine(l) ? '' : ' <- foreign line: not the answer you logged'}`),
+    `\`status.js grant\` grants nothing for "${slug}" (exit 23) until the user removes ${list} from that file by hand. Use no grant for this milestone until then.`,
+    'Show the user these lines and ask them to remove every one that is not their intake answer; do not remove a line yourself. Then log your line again: exit 0 means the log is settled.',
+  ].join('\n'));
+  return 1;
+}
+
 function main(argv) {
   const [kind, ...args] = argv;
   if (!KINDS.has(kind)) {
@@ -170,13 +284,24 @@ function main(argv) {
     return 1;
   }
 
+  const session = sessionFields();
+  if (kind === 'milestone') return logMilestone(data, session);
   if (kind === 'delegation' || kind === 'review') {
     const { card, why, ...rest } = data;
-    const task = { ...(rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };
+    // A review's task is its card alone: a `task` object in pasted JSON is not read (a delegation may carry one).
+    const task = { ...(kind === 'delegation' && rest.task && typeof rest.task === 'object' ? rest.task : {}), ...lib.parseTaskCard(card) };
     if (why) task.why = why;
     delete rest.task;
-    const tool = rest.tool || process.env.AGENT_TEAM_TOOL || 'unknown';
+    // A review's tool is claude or codex (as the hooks say), else the environment's.
+    const given = kind === 'review' ? (REVIEW_TOOLS.includes(rest.tool) ? rest.tool : null) : rest.tool;
+    const tool = given || process.env.AGENT_TEAM_TOOL || 'unknown';
     delete rest.tool;
+    if (kind === 'review') {
+      // Attribution fields are short plain strings; anything else in a pasted block is dropped, not logged as who reviewed.
+      for (const f of ['agent_id', 'resolved_model', 'model', 'effort', 'tier']) {
+        if (!plainString(rest[f])) delete rest[f];
+      }
+    }
     if (kind === 'delegation') {
       const dkind = rest.kind || 'subagent';
       if (!DELEGATION_KINDS.includes(dkind)) {
@@ -214,13 +339,32 @@ function main(argv) {
         ...(drift ? { card_drift: drift } : {}),
         ...(task.id ? {} : { uncarded: true }),
         source: 'director',
+        // Last on purpose: a session_id in the JSON input is ignored.
+        ...session,
       });
     } else {
-      // Same shape as records.logReview writes for hook-seen reviews.
+      // Same shape as records.logReview writes for hook-seen reviews, plus source "director"
+      // (passed as the caller's own field). The session id comes in through its input (base
+      // takes it from there); logReview does not write session_source.
       const { agent_id, resolved_model, model, effort, tier, ...review } = rest;
-      records.logReview({}, {
+      const written = records.logReview({ session_id: session.session_id }, {
         agent_id, task, resolved_model, model, effort, tier,
-      }, { ...review, source: 'director' }, tool);
+      }, review, tool, { source: 'director' });
+      if (!written) {
+        if (records.isAmbiguous(review)) {
+          console.error('not logged: ambiguous review-json');
+          return 1;
+        }
+        const id = records.reviewIdentity({ session_id: session.session_id }, { agent_id, task, resolved_model, model, effort, tier }, review, tool);
+        // false also means a live record lock (another writer is on this review right now).
+        // Only a row that is in the log makes it a duplicate.
+        if (id && !records.readJsonl(path.join(lib.logDir({}), 'reviews.jsonl')).some((r) => r.review_id === id)) {
+          console.error(`not logged: busy, another writer holds the record lock for ${id}; retry in a moment`);
+          return 1;
+        }
+        console.log(`not logged: duplicate of ${id || 'an earlier review'}`);
+        return 0;
+      }
     }
     console.log(`logged ${kind} to .agent-team/logs/${kind}s.jsonl`);
     return 0;
@@ -263,10 +407,18 @@ function main(argv) {
     const m = typeof id === 'string' ? records.milestoneFor({}, id, t && typeof t === 'object' ? t : null) : undefined;
     if (m) data.milestone = m;
   }
-  const record = { ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data };
+  // The session fields come last on purpose: a session_id in the JSON input is ignored.
+  const record = { ts: new Date().toISOString(), guidance_version: lib.guidanceVersion(), ...data, ...session };
   lib.appendJsonl({}, `${kind}s.jsonl`, record);
   console.log(`logged ${kind} to .agent-team/logs/${kind}s.jsonl`);
   return 0;
 }
 
-process.exitCode = main(process.argv.slice(2));
+// A refused log path (a link under .agent-team/logs/, see lib.safeAppend) was
+// already named on stderr by the helper: exit 1 without a stack trace.
+try {
+  process.exitCode = main(process.argv.slice(2));
+} catch (err) {
+  if (!err || err.code !== lib.REFUSED) throw err;
+  process.exitCode = 1;
+}

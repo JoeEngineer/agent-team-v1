@@ -96,20 +96,21 @@ const cancelCommand = (forge, n) => (forge === 'gitlab'
 // instructions: it is read only when it applies.
 function nextStep(state, c) {
   const noun = forgeLib.noun(c.forge);
+  const setCmd = (st) => `node "<plugin root>/scripts/status.js" set ${c.task} --state "${st}"${c.pr ? ` --pr ${c.pr}` : ''}`;
   const rerun = `node "<plugin root>/scripts/merge-task.js" ${c.pr} --sha ${c.sha} --task ${c.task} --attempt ${c.attempt}${c.allowNone ? ' --allow-none' : ''}`;
   switch (state) {
     case 'merged':
       return c.already
-        ? `${noun} ${c.pr} was already merged. If STATUS.md has it as queued, run reconcile-logs.js --merges; then set it to merged.`
-        : `Set the task to merged in STATUS.md. In a separate call: git pull, then the next task.`;
+        ? `${noun} ${c.pr} was already merged. If STATUS.md has it as queued, run reconcile-logs.js --merges; then run ${setCmd('merged')}`
+        : `Set the task to merged in STATUS.md with ${setCmd('merged')}. In a separate call: git pull, then the next task.`;
     case 'queued':
-      return `Auto-merge is on; the forge merges when CI passes. Set the state to queued in STATUS.md and move on. ` +
+      return `Auto-merge is on; the forge merges when CI passes. Set the state to queued in STATUS.md with ${setCmd('queued')} and move on. ` +
         `Before any push to this ${noun}, cancel first: ${cancelCommand(c.forge, c.pr)}. ` +
         `Check it with reconcile-logs.js --merges before the next merge, at the end of the wave and before the milestone ${noun}.`;
     case 'waiting':
       return c.waited
-        ? `CI is still pending after the extra wait. Tell the user, keep the state waiting CI in STATUS.md, and don't start another wait.`
-        : `CI is pending and the ${noun} can't be queued (${c.queueReason || 'not queueable'}). Set the state to waiting CI in STATUS.md with that reason. ` +
+        ? `CI is still pending after the extra wait. Tell the user, keep the state waiting CI in STATUS.md (${setCmd('waiting CI')}), and don't start another wait.`
+        : `CI is pending and the ${noun} can't be queued (${c.queueReason || 'not queueable'}). Set the state to waiting CI in STATUS.md with that reason: ${setCmd('waiting CI')} --note "<reason>". ` +
           `Claude: run \`${rerun} --wait 1800\` as a background command. Codex: send the same reviewer a followup ("wait again and report ci", kind=followup, same attempt), then run this command again on its report.`;
     case 'red':
       return `CI is red${c.failing && c.failing.length ? ` (${c.failing.join(', ')})` : ''}. Don't merge. Send the task back to the implementer with the failing check names. ` +
@@ -136,6 +137,13 @@ function sessionMarker(cwd) {
   } catch {
     return {};
   }
+}
+
+// The session that ran this script. The marker is overwritten by whichever
+// session started last (G17), so CLAUDE_CODE_SESSION_ID wins when the shell has it.
+function sessionFields(env, marker) {
+  if (env.CLAUDE_CODE_SESSION_ID) return { session_id: env.CLAUDE_CODE_SESSION_ID, session_source: 'env' };
+  return { session_id: marker.session_id || null, session_source: 'marker' };
 }
 
 function main(argv, deps = {}) {
@@ -252,7 +260,7 @@ function main(argv, deps = {}) {
       lib.appendJsonl(input, 'merges.jsonl', {
         ts: new Date((deps.now || Date.now)()).toISOString(),
         tool: env.AGENT_TEAM_TOOL || marker.tool || 'unknown',
-        session_id: marker.session_id || null,
+        ...sessionFields(env, marker),
         guidance_version: lib.guidanceVersion(),
         command: `merge-task.js ${opts.pr} --sha ${opts.sha} --task ${opts.task} --attempt ${opts.attempt}${opts.allowNone ? ' --allow-none' : ''}${opts.wait ? ` --wait ${opts.wait}` : ''}`,
         pr: String(opts.pr),

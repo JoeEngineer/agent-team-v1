@@ -470,7 +470,7 @@ test('codex: pending state recovers a dead writer lock and a failed review appen
   const p = tmpProject();
   const file = transcript(p);
   fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
-  hook(p, stop(p, file, { last_assistant_message: '```review-json\n{"verdict":"approve"}\n```' }));
+  hook(p, stop(p, file, { agent_type: 'reviewer-medium', last_assistant_message: '```review-json\n{"verdict":"approve"}\n```' }));
   const [pending] = pendingFiles(p);
   const records = require(path.join(SCRIPTS, 'records.js'));
   const lockDir = path.join(p, '.agent-team', 'logs', '.pending', 'record-locks');
@@ -554,8 +554,8 @@ test('codex: a review block in the final message writes one reviews.jsonl line w
   const p = tmpProject();
   const file = transcript(p);
   const msg = 'ok\n```review-json\n{"verdict":"approve","findings":[]}\n```';
-  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: msg }));
-  hook(p, stop(p, file, { turn_id: 'turn-1', last_assistant_message: msg }));
+  hook(p, stop(p, file, { agent_type: 'reviewer-medium', turn_id: 'turn-1', last_assistant_message: msg }));
+  hook(p, stop(p, file, { agent_type: 'reviewer-medium', turn_id: 'turn-1', last_assistant_message: msg }));
   const r = readLog(p, 'reviews.jsonl');
   eq(r.length, 1, 'one review (deduped)');
   eq(r[0].tool, 'codex', 'tool');
@@ -877,8 +877,8 @@ test('log-event argv: the <kind> <json> form still works, and an empty argument 
   eq(logEventWith(p, ['note', '{"text":"argv"}']).status, 0, 'argv ok');
   eq(readLog(p, 'notes.jsonl')[0].text, 'argv', 'argv body');
   // an empty argument is {} (unchanged behaviour), not an error
-  eq(logEventWith(p, ['milestone', '']).status, 0, 'empty argv is {}');
-  eq(readLog(p, 'milestones.jsonl').length, 1, 'milestone with no body');
+  eq(logEventWith(p, ['escalation', '']).status, 0, 'empty argv is {}');
+  eq(readLog(p, 'escalations.jsonl').length, 1, 'escalation with no body');
 });
 
 test('log-event: unknown kind prints all three forms and exits 1', () => {
@@ -886,4 +886,168 @@ test('log-event: unknown kind prints all three forms and exits 1', () => {
   const r = logEventWith(p, ['bogus', '-'], '{}');
   eq(r.status, 1, 'exit 1');
   for (const form of ["'<json>'", '-', '--file <path>']) assert(r.stderr.includes(form), `usage lists ${form}`);
+});
+
+// --- FU-24: refusals, transcript folder, link-safe touch ---------------------------------------------
+
+const codexLog = require(path.join(SCRIPTS, 'codex-log.js'));
+
+function withSessions(dir, fn) {
+  const was = process.env.AGENT_TEAM_CODEX_SESSIONS;
+  process.env.AGENT_TEAM_CODEX_SESSIONS = dir;
+  try { return fn(); } finally { if (was === undefined) delete process.env.AGENT_TEAM_CODEX_SESSIONS; else process.env.AGENT_TEAM_CODEX_SESSIONS = was; }
+}
+
+test('FU-24 codex: a transcript is read only inside the Codex sessions folder (inside read; outside, a ../ path and a link out are not)', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-sessions-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-outside-'));
+  const inFile = transcript(root);
+  const outFile = transcript(outside);
+  withSessions(root, () => {
+    assert(codexLog.turnIds(inFile).length === 1, 'control: a transcript inside is read');
+    eq(codexLog.readTranscript(inFile, 'turn-1').turnFound, true, 'control: readTranscript finds the turn');
+    assert(fs.existsSync(outFile) && codexLog.turnIds(outFile).length === 0, 'outside: no turn ids (the file exists)');
+    eq(codexLog.readTranscript(outFile, 'turn-1').turnFound, false, 'outside: not read');
+    eq(codexLog.turnIds(path.join(root, '..', path.basename(outside), path.basename(outFile))).length, 0, 'a ../ path out is not read');
+    eq(codexLog.turnIds(null).length, 0, 'no path: nothing');
+    const at = path.join(root, 'link.jsonl');
+    let linked = false;
+    try { fs.symlinkSync(outFile, at, 'file'); linked = true; } catch { /* no symlink right on this machine */ }
+    if (linked) eq(codexLog.turnIds(at).length, 0, 'a link out of the folder is not followed');
+  });
+});
+
+test('FU-24 log-event decision: a codex-events transcript_path outside the sessions folder is not read for the model', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-sessions-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-outside-'));
+  const mk = (dir) => {
+    const f = path.join(dir, 'rollout.jsonl');
+    fs.writeFileSync(f, JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-leak', effort: 'high' } }) + '\n');
+    return f;
+  };
+  const run1 = (file) => {
+    const p = tmpProject();
+    const logs = path.join(p, '.agent-team', 'logs');
+    fs.mkdirSync(logs, { recursive: true });
+    fs.writeFileSync(path.join(logs, 'codex-events.jsonl'), JSON.stringify({ transcript_path: file }) + '\n');
+    const r = logEvent(p, 'decision', { id: '1', title: 't', model: 'unknown', effort: 'unknown' }, { AGENT_TEAM_TOOL: 'codex', AGENT_TEAM_CODEX_SESSIONS: root });
+    eq(r.status, 0, r.stderr);
+    return readLog(p, 'decisions.jsonl')[0];
+  };
+  eq(run1(mk(root)).model, 'gpt-6.1-leak', 'control: a transcript inside the folder gives the model');
+  const out = run1(mk(outside));
+  assert(out.model !== 'gpt-6.1-leak', 'a transcript outside is not read: ' + out.model);
+});
+
+test('FU-24 codex: touching a snapshot never follows a link; a hard-linked or swapped-in snapshot is refused', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-touch-'));
+  const f = path.join(dir, 'codex-aaaa.json');
+  fs.writeFileSync(f, '{}');
+  const old = new Date(2020, 0, 1);
+  fs.utimesSync(f, old, old);
+  codexLog.touchSnapshot(f);
+  assert(fs.statSync(f).mtimeMs > old.getTime() + 1000, 'control: a plain snapshot is touched');
+  // Another name for the file: refused with the link-safe code, not touched.
+  const h = path.join(dir, 'codex-bbbb.json');
+  fs.linkSync(f, h);
+  fs.utimesSync(h, old, old);
+  let err = null;
+  try { codexLog.touchSnapshot(h); } catch (e) { err = e; }
+  assert(err && err.code === lib.REFUSED, 'hard link refused: ' + (err && err.message));
+  assert(fs.statSync(h).mtimeMs < Date.now() - 86400000, 'precondition held and the hard-linked file was not touched');
+  // A symlink: the target keeps its time.
+  const victim = path.join(dir, 'victim.json');
+  fs.writeFileSync(victim, '{}');
+  fs.utimesSync(victim, old, old);
+  const s = path.join(dir, 'codex-cccc.json');
+  let linked = false;
+  try { fs.symlinkSync(victim, s, 'file'); linked = true; } catch { /* no symlink right on this machine */ }
+  if (linked) {
+    let e2 = null;
+    try { codexLog.touchSnapshot(s); } catch (e) { e2 = e; }
+    assert(e2 && e2.code === lib.REFUSED, 'symlink refused');
+    assert(fs.statSync(victim).mtimeMs < Date.now() - 86400000, 'the link target was not touched');
+  }
+  codexLog.touchSnapshot(path.join(dir, 'gone.json')); // a vanished snapshot is no error
+});
+
+test('FU-24 codex: reconcile reports a refused pending drain and exits non-zero; with the refusal gone it completes', () => {
+  const p = tmpProject();
+  directorLine(p);
+  const file = transcript(p);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file));
+  eq(pendingFiles(p).length, 1, 'precondition: a snapshot is waiting');
+  completeTurn(file, 'turn-1', 1234);
+  // completions.jsonl is another name for a file elsewhere: the append is refused.
+  const logs = path.join(p, '.agent-team', 'logs');
+  const victim = path.join(os.tmpdir(), `agent-team-victim-${process.pid}-${Date.now()}.jsonl`);
+  fs.writeFileSync(victim, '');
+  const comp = path.join(logs, 'completions.jsonl');
+  fs.rmSync(comp, { force: true });
+  fs.linkSync(victim, comp);
+  const reconcile = () => spawnSync('node', [path.join(SCRIPTS, 'reconcile-logs.js')], {
+    cwd: p, encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p, AGENT_TEAM_MODELS: NO_MODELS_FILE, AGENT_TEAM_PROJECTS_ROOT: fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-proj-')) },
+  });
+  const r = reconcile();
+  assert(/refusing to write/.test(r.stderr), 'precondition: the write was refused: ' + r.stderr);
+  assert(r.status !== 0, 'non-zero exit, got ' + r.status + ' ' + r.stdout);
+  assert(/pending Codex snapshot refused/.test(r.stderr), r.stderr);
+  eq(fs.readFileSync(victim, 'utf8'), '', 'the file behind the link is untouched');
+  eq(pendingFiles(p).length, 1, 'the snapshot is kept');
+  // Recovery: the link is gone, the snapshot completes and the exit is 0.
+  fs.unlinkSync(comp);
+  const ok = reconcile();
+  eq(ok.status, 0, ok.stderr + ok.stdout);
+  eq(readLog(p, 'completions.jsonl').length, 1, 'completion written');
+  eq(pendingFiles(p).length, 0, 'snapshot consumed');
+});
+
+test('FU-24 codex: a legitimate entry named like "..x" inside the sessions folder is read; "..", a sibling folder and another drive are not', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-sessions-'));
+  const dotted = path.join(root, '..x');
+  fs.mkdirSync(dotted);
+  const inFile = transcript(dotted);
+  withSessions(root, () => {
+    assert(fs.existsSync(inFile), 'precondition: the file exists');
+    assert(codexLog.inCodexSessions(inFile), 'a file under "..x" is inside the folder');
+    assert(codexLog.turnIds(inFile).length === 1, 'and is read');
+    assert(!codexLog.inCodexSessions(root), 'the folder itself is not a transcript');
+    assert(!codexLog.inCodexSessions(path.dirname(root)), 'its parent is not inside');
+    assert(!codexLog.inCodexSessions(path.join(root, '..', path.basename(root) + '-sibling', 'x')), 'a missing sibling path is not inside');
+  });
+});
+
+test('FU-24 codex: reconcile with no Claude projects folder still reports a refused snapshot and exits non-zero', () => {
+  const p = tmpProject();
+  directorLine(p);
+  const file = transcript(p);
+  fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().split('\n').slice(0, -1).join('\n') + '\n');
+  hook(p, stop(p, file));
+  eq(pendingFiles(p).length, 1, 'precondition: a snapshot is waiting');
+  completeTurn(file, 'turn-1', 1234);
+  const logs = path.join(p, '.agent-team', 'logs');
+  const victim = path.join(os.tmpdir(), `agent-team-victim2-${process.pid}-${Date.now()}.jsonl`);
+  fs.writeFileSync(victim, '');
+  const comp = path.join(logs, 'completions.jsonl');
+  fs.rmSync(comp, { force: true });
+  fs.linkSync(victim, comp);
+  const missing = path.join(os.tmpdir(), `agent-team-no-such-root-${process.pid}-${Date.now()}`);
+  assert(!fs.existsSync(missing), 'precondition: the projects folder does not exist');
+  const reconcile = () => spawnSync('node', [path.join(SCRIPTS, 'reconcile-logs.js')], {
+    cwd: p, encoding: 'utf8', timeout: 60000,
+    env: { ...process.env, CLAUDE_PROJECT_DIR: p, AGENT_TEAM_MODELS: NO_MODELS_FILE, AGENT_TEAM_PROJECTS_ROOT: missing },
+  });
+  const r = reconcile();
+  assert(/No Claude Code projects folder found/.test(r.stdout), 'precondition: the no-projects branch ran: ' + r.stdout);
+  assert(r.status === 1, 'exit 1, got ' + r.status);
+  assert(/reconcile-logs: pending Codex snapshot refused/.test(r.stderr), r.stderr);
+  eq(pendingFiles(p).length, 1, 'the snapshot is kept');
+  // Recovery and control: the link gone, the same run exits 0.
+  fs.unlinkSync(comp);
+  const ok = reconcile();
+  eq(ok.status, 0, ok.stderr);
+  assert(/No Claude Code projects folder found/.test(ok.stdout), 'still the no-projects branch');
+  eq(pendingFiles(p).length, 0, 'snapshot consumed');
 });

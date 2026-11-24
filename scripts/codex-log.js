@@ -6,6 +6,7 @@
 'use strict';
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const lib = require('./lib');
 const models = require('./models');
@@ -16,6 +17,20 @@ const FOLLOWUP_TOOL = /^(?:followup_task|send_input|resume_agent)$/;
 const MAX_MESSAGE = 2000;
 const MAX_RESPONSE = 500;
 const TIER_SUFFIX = /-(small|medium|large|xlarge)$/;
+
+// Codex's rollout transcripts live under <CODEX_HOME or ~/.codex>/sessions (AGENT_TEAM_CODEX_SESSIONS
+// names another folder). A transcript path in a log or a pending snapshot is data, not trusted: it is
+// opened only when it resolves (links followed) to a file inside that folder.
+function sessionsRoot() {
+  return process.env.AGENT_TEAM_CODEX_SESSIONS || path.join(process.env.CODEX_HOME || path.join(os.homedir(), '.codex'), 'sessions');
+}
+function inCodexSessions(file) {
+  if (typeof file !== 'string' || !file) return false;
+  try {
+    const rel = path.relative(fs.realpathSync.native(sessionsRoot()), fs.realpathSync.native(file));
+    return !!rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel);
+  } catch { return false; }
+}
 
 function smallResponse(resp) {
   if (resp === undefined || resp === null) return null;
@@ -223,6 +238,7 @@ function interruption(p) {
 // The child's turn ids in transcript order (one per task_started).
 function turnIds(file) {
   const ids = [];
+  if (!inCodexSessions(file)) return ids;
   try {
     for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       if (!line.includes('task_started')) continue;
@@ -240,6 +256,7 @@ function turnIds(file) {
 function readTranscript(file, turnId) {
   const out = { taskName: null, model: null, effort: null, tokens: null, detail: null, duration_ms: null, turnFound: false, complete: false, interrupted: null, lastMessage: null };
   const events = [];
+  if (!inCodexSessions(file)) return out;
   try {
     for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -328,6 +345,8 @@ function readTranscript(file, turnId) {
   return out;
 }
 
+// 2: the review was read by the strict fence parser. 1 (1.1.0) used the lenient one.
+const PENDING_VERSION = 2;
 const pendingDir = (input) => path.join(lib.logDir(input), '.pending', 'codex-completions');
 
 function completionRecord(input, t) {
@@ -365,7 +384,7 @@ function completionRecord(input, t) {
     // 'missing': the stop carried no report (for example a turn cut off by a usage limit).
     report_source: report ? 'hook-input' : 'missing',
     result: lib.lastFencedJson(report, 'result-json'),
-    review: lib.lastFencedJson(report, 'review-json'),
+    review: lib.reviewFor(report, input.agent_type, task),
   };
 }
 
@@ -381,7 +400,7 @@ function fillFromTranscript(original, t) {
   if (t.interruptionMessage) record.interruption_message = t.interruptionMessage;
   if (record.report_source === 'missing' && t.lastMessage) {
     record.result = lib.lastFencedJson(t.lastMessage, 'result-json');
-    record.review = lib.lastFencedJson(t.lastMessage, 'review-json');
+    record.review = lib.reviewFor(t.lastMessage, record.agent, record.task);
     record.report_source = 'transcript';
   }
   if (record.tier == null && record.resolved_model) {
@@ -402,19 +421,28 @@ function finishPending(input, file, { dryRun = false } = {}) {
   const finish = () => {
     let pending;
     try { pending = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return { state: 'waiting' }; }
-    if (pending.version !== 1 || !pending.record || !pending.record.event_id) return { state: 'waiting' };
+    if (![1, PENDING_VERSION].includes(pending.version) || !pending.record || !pending.record.event_id) return { state: 'waiting' };
     const original = pending.record;
     const existing = records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).find((r) => r.event_id === original.event_id);
     const t = readTranscript(pending.transcript_path, original.turn_id);
     if (!existing && pending.wait_for_complete && (!t.turnFound || (!t.complete && !t.interrupted))) return { state: 'waiting' };
     const record = existing || fillFromTranscript(original, t);
+    // A v1 snapshot's verdict came from the old lenient parser. Re-read it with the
+    // strict one from the transcript's last message; with no text to read, the
+    // stored verdict is dropped.
+    if (!existing && pending.version === 1) {
+      const text = t.lastMessage;
+      record.review = text ? lib.reviewFor(text, record.agent, record.task) : null;
+    }
     if (dryRun) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
     if (!existing) lib.appendJsonl(input, 'completions.jsonl', record);
     const sess = { ...input, session_id: record.session_id };
-    const reviewAdded = record.review ? records.logReview(sess, record, record.review, 'codex') : false;
+    // An ambiguous review, or a reply of a delegation that is not a review, writes no row and is not retried.
+    const wantsRow = record.review && !records.isAmbiguous(record.review) && lib.isReviewDelegation(record.agent, record.task);
+    const reviewAdded = wantsRow ? records.logReview(sess, record, record.review, 'codex') : false;
     // If a concurrent review writer owns the lock, leave the snapshot for a
     // later run rather than losing the completion's separate review record.
-    if (record.review && !reviewAdded) {
+    if (wantsRow && !reviewAdded) {
       const reviewId = records.reviewIdentity(sess, record, record.review, 'codex');
       if (reviewId && !records.readJsonl(path.join(lib.logDir(input), 'reviews.jsonl')).some((r) => r.review_id === reviewId)) return { state: existing ? 'present' : 'backfilled', reviews: 0 };
     }
@@ -430,30 +458,43 @@ function finishPending(input, file, { dryRun = false } = {}) {
 function onSubagentStop(input) {
   const t = readTranscript(input.agent_transcript_path, input.turn_id);
   const record = completionRecord(input, t);
-  const dir = pendingDir(input);
-  fs.mkdirSync(dir, { recursive: true });
+  const dir = lib.safeMkdir(pendingDir(input));
   const file = path.join(dir, `${record.event_id}.json`);
   records.withRecordLock(input, `codex-stop:${path.basename(file)}`, () => {
     if (fs.existsSync(file) || records.readJsonl(path.join(lib.logDir(input), 'completions.jsonl')).some((r) => r.event_id === record.event_id)) return;
-    const temp = `${file}.${process.pid}.tmp`;
-    try {
-      fs.writeFileSync(temp, JSON.stringify({ version: 1, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
-      fs.renameSync(temp, file);
-    } finally {
-      try { fs.unlinkSync(temp); } catch { /* rename consumed it */ }
-    }
+    // A random temp name, created exclusively, then renamed into place.
+    lib.safeReplace(file, JSON.stringify({ version: PENDING_VERSION, transcript_path: input.agent_transcript_path || null, wait_for_complete: t.turnFound && !t.complete && !t.interrupted, record }));
   });
   if (fs.existsSync(file)) finishPending(input, file);
 }
 
 // No sleep/poll loop: later hooks (including wait_agent) and explicit reconcile
 // revisit pending stops. Oldest-first touching gives a bounded sweep fairness.
+// A linked .pending or codex-completions folder is not drained (lib.safeListDir
+// refuses it), and only regular files with one name are read as snapshots.
+// Move a waiting snapshot to the back of the queue. lutimes never follows a link, and a snapshot
+// that became a link (or a hard-linked file) since the listing is refused, not touched.
+function touchSnapshot(file) {
+  let st;
+  try { st = fs.lstatSync(file); } catch (e) { if (e && e.code === 'ENOENT') return; throw e; }
+  if (!st.isFile() || st.nlink !== 1) {
+    const err = new Error(`refusing to touch ${file}: not a regular file with one name`);
+    err.code = lib.REFUSED;
+    throw err;
+  }
+  const now = new Date();
+  fs.lutimesSync(file, now, now);
+}
+
 function drainPending(input = {}, { dryRun = false, cap = 20 } = {}) {
-  const stats = { checked: 0, backfilled: 0, present: 0, pending: 0, reviews: 0 };
+  const stats = { checked: 0, backfilled: 0, present: 0, pending: 0, reviews: 0, refused: [] };
   const dir = pendingDir(input);
   let files;
   try {
-    files = fs.readdirSync(dir).filter((f) => /^codex-[a-f0-9]+\.json$/.test(f)).map((f) => ({ file: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs })).sort((a, b) => a.mtime - b.mtime);
+    files = (lib.safeListDir(dir) || []).filter((f) => /^codex-[a-f0-9]+\.json$/.test(f)).flatMap((f) => {
+      const st = fs.lstatSync(path.join(dir, f));
+      return st.isFile() && st.nlink === 1 ? [{ file: path.join(dir, f), mtime: st.mtimeMs }] : [];
+    }).sort((a, b) => a.mtime - b.mtime);
   } catch { return stats; }
   for (const { file } of files.slice(0, cap)) {
     stats.checked++;
@@ -461,10 +502,14 @@ function drainPending(input = {}, { dryRun = false, cap = 20 } = {}) {
       const result = finishPending(input, file, { dryRun });
       if (result.state === 'backfilled' || result.state === 'present') stats[result.state]++;
       stats.reviews += result.reviews || 0;
-      if (!dryRun && fs.existsSync(file)) { const now = new Date(); fs.utimesSync(file, now, now); }
-    } catch { /* retain snapshot for another hook/reconcile */ }
+      if (!dryRun) touchSnapshot(file);
+    } catch (err) {
+      // A link-safe-write refusal is not a snapshot waiting for a later run: say so.
+      if (err && err.code === lib.REFUSED) stats.refused.push(err.message);
+      // Anything else: retain the snapshot for another hook/reconcile.
+    }
   }
-  stats.pending = dryRun ? files.length - stats.backfilled - stats.present : fs.readdirSync(dir).filter((f) => f.endsWith('.json')).length;
+  stats.pending = dryRun ? files.length - stats.backfilled - stats.present : (lib.safeListDir(dir) || []).filter((f) => f.endsWith('.json')).length;
   return stats;
 }
 
@@ -505,4 +550,4 @@ function handle(input) {
   } catch { /* hooks must never break a session */ }
 }
 
-module.exports = { handle, drainPending, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir };
+module.exports = { handle, drainPending, touchSnapshot, inCodexSessions, sessionsRoot, readTranscript, turnIds, fillFromTranscript, transcriptRecord, pendingDir };
