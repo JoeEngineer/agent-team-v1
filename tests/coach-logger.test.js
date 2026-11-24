@@ -12,7 +12,7 @@ const { SCRIPTS, ROOT, NO_MODELS_FILE, tmpProject, run, fakeGh, readLog, test, a
 console.log('coach-logger');
 
 const usage = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
-const REVIEW = (v, summary) => '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[],"summary":"' + summary + '"}\n```';
+const REVIEW = (v, summary) => '```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"' + v + '","severity":"none","issues":[],"summary":"' + summary + '"}\n```';
 
 const logsOf = (proj) => path.join(proj, '.agent-team', 'logs');
 function appendLog(proj, file, rows) {

@@ -122,7 +122,7 @@ test('G20: an unknown flag is kept and draws one warning', () => {
 
 // --- verdict conflict ---------------------------------------------------------
 
-const block = (verdict, severity) => '```review-json\n' + JSON.stringify({ verdict, severity, issues: [], summary: 's' }) + '\n```';
+const block = (verdict, severity) => '```review-json\n' + JSON.stringify({ verdict, severity, issues: [], summary: 's', head_sha: 'c0ffee0000000000000000000000000000000000' }) + '\n```';
 function stopWith(p, agentId, report, extra = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-fu3-'));
   const usage = { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
@@ -193,14 +193,20 @@ test('SubagentStop: a fenceless report gets only the missing-block nudge; a conf
   const none = stopWith(p, 'pn1', 'finished, no block here');
   eq(readLog(p, 'reviews.jsonl').length, 0, 'precondition: no review block, so no review row');
   assert(/ended without its `review-json` block/.test(context(none)) && !/contradicts/.test(context(none)), none.stdout);
-  // The block has no head_sha and a conflicting verdict: it is a block, so the conflict nudge alone is sent.
-  const bare = JSON.stringify({ verdict: 'changes_requested', severity: 'none', issues: [], summary: 's' });
-  const conflict = stopWith(p, 'pn2', '```review-json\n' + bare + '\n```');
+  // The block lacks other fields (no ci, no findings) and has a conflicting verdict: it is a block, so the conflict nudge alone is sent.
+  const bare = block('changes_requested', 'none');
+  const conflict = stopWith(p, 'pn2', bare);
   eq(readLog(p, 'reviews.jsonl')[0].verdict_conflict, true, 'precondition: the conflict was detected');
-  assert(!('head_sha' in readLog(p, 'reviews.jsonl')[0]), 'precondition: the block has no head_sha');
   const ctx = context(conflict);
   assert(/contradicts its severity/.test(ctx) && !/ended without/.test(ctx), ctx);
   eq(ctx.split('agent-team:').length - 1, 1, 'exactly one nudge in the turn');
-  const again = stopWith(p, 'pn2', '```review-json\n' + bare + '\n```', { stop_hook_active: true });
+  const again = stopWith(p, 'pn2', bare, { stop_hook_active: true });
   eq(again.stdout, '', 'stop_hook_active: no second nudge');
+  // With no head_sha on a PR card the block is not logged (decision 0030): the head nudge alone, not the conflict one.
+  const headless = JSON.stringify({ verdict: 'changes_requested', severity: 'none', issues: [], summary: 's' });
+  const rowsBefore = readLog(p, 'reviews.jsonl').length;
+  const noHead = stopWith(p, 'pn3', '```review-json\n' + headless + '\n```');
+  eq(readLog(p, 'reviews.jsonl').length, rowsBefore, 'no row for the headless block');
+  const hctx = context(noHead);
+  assert(/`head_sha`/.test(hctx) && !/contradicts/.test(hctx) && hctx.split('agent-team:').length - 1 === 1, hctx);
 });

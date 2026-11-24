@@ -192,7 +192,7 @@ test('subagent: unknown agent type is logged as inherited', () => {
 test('reviewer verdict goes to reviews.jsonl', () => {
   const proj = tmpProject();
   const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=AUTH-14 type=review difficulty=medium milestone=auth attempt=1 pr=212\nWHY standard review' };
-  const text = 'Findings...\n```review-json\n{"verdict":"changes_requested","severity":"major","issues":["missing-tests","error-handling"],"tests_run":true,"tests_passed":true,"criteria_met":"some","summary":"needs tests"}\n```';
+  const text = 'Findings...\n```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"changes_requested","severity":"major","issues":["missing-tests","error-handling"],"tests_run":true,"tests_passed":true,"criteria_met":"some","summary":"needs tests"}\n```';
   run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: text }, proj);
   const [rev] = readLog(proj, 'reviews.jsonl');
   eq(rev.task_id, 'AUTH-14', 'task id');
@@ -252,7 +252,7 @@ test('SubagentStop: completion linked to delegation, tokens and duration, review
   const ti = { subagent_type: 'agent-team:reviewer', effort: 'high', prompt: 'TASK id=AUTH-14 type=review difficulty=medium milestone=auth attempt=2 pr=212\nWHY review' };
   run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_use_id: 'toolu_X', tool_input: ti, tool_response: { isAsync: true, status: 'async_launched', agentId: 'r1', resolvedModel: 'claude-sonnet-5-5' } }, proj);
   const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
-  const final = 'Findings.\n```review-json\n{"verdict":"approve","severity":"none","issues":[],"tests_run":true,"tests_passed":true,"criteria_met":"all","summary":"ok"}\n```';
+  const final = 'Findings.\n```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"approve","severity":"none","issues":[],"tests_run":true,"tests_passed":true,"criteria_met":"all","summary":"ok"}\n```';
   const tPath = writeSubagentTranscript(tdir, 'r1', ti.prompt, final, 'claude-sonnet-5-5');
   const stop = { hook_event_name: 'SubagentStop', agent_id: 'r1', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath };
   run('log-delegation.js', stop, proj);
@@ -312,7 +312,7 @@ test('SubagentStop: last_assistant_message wins over a lagging transcript; effor
 test('SubagentStop: handback review-json reaches reviews.jsonl with findings', () => {
   const proj = tmpProject();
   const tdir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-team-tx-'));
-  const report = 'Findings.\n```review-json\n{"verdict":"approve","severity":"minor","issues":["docs"],"findings":[{"severity":"minor","category":"docs","path":"README.md","line":3,"blocking":false}],"ci":"green","tests_run":true,"tests_passed":true,"criteria_met":"all","summary":"ok"}\n```';
+  const report = 'Findings.\n```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"approve","severity":"minor","issues":["docs"],"findings":[{"severity":"minor","category":"docs","path":"README.md","line":3,"blocking":false}],"ci":"green","tests_run":true,"tests_passed":true,"criteria_met":"all","summary":"ok"}\n```';
   const tPath = writeSubagentTranscript(tdir, 'h2', 'TASK id=H-2 type=review difficulty=easy milestone=h attempt=1 pr=5', report, 'claude-sonnet-5-5', { handback: true });
   run('log-delegation.js', { hook_event_name: 'SubagentStop', agent_id: 'h2', agent_type: 'agent-team:reviewer', agent_transcript_path: tPath }, proj);
   const [r] = readLog(proj, 'reviews.jsonl');
@@ -394,7 +394,7 @@ test('SubagentStop: duplicate stop logged once; a resumed agent finishing again 
 });
 
 // ---- review-logging gaps (retry, resume turns, dedupe, .pending cleanup)
-const REVIEW = (v, s = 'ok') => '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[],"summary":"' + s + '"}\n```';
+const REVIEW = (v, s = 'ok') => '```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"' + v + '","severity":"none","issues":[],"summary":"' + s + '"}\n```';
 const pendingDir = (proj) => path.join(proj, '.agent-team', 'logs', '.pending');
 const addLine = (file, l) => fs.appendFileSync(file, JSON.stringify(l) + '\n');
 const handbackLine = (id, ts, message, usage) => ({ type: 'assistant', timestamp: ts, message: { id, model: 'claude-sonnet-5-5', ...(usage ? { usage } : {}), content: [{ type: 'tool_use', name: 'SubagentHandback', input: { message } }] } });
@@ -586,7 +586,7 @@ test('.pending prune: markers and start files over 24 h go; fresh ones, dotfiles
 test('reviews: a re-review by the same agent is logged; the same verdict seen twice is not', () => {
   const proj = tmpProject();
   const ti = { subagent_type: 'agent-team:reviewer', prompt: 'TASK id=RR-1 type=review difficulty=easy milestone=r attempt=1 pr=9' };
-  const rv = (v) => ({ agentId: 'rv1', content: [{ type: 'text', text: '```review-json\n{"verdict":"' + v + '","severity":"none","issues":[]}\n```' }] });
+  const rv = (v) => ({ agentId: 'rv1', content: [{ type: 'text', text: '```review-json\n{"head_sha":"c0ffee0000000000000000000000000000000000","verdict":"' + v + '","severity":"none","issues":[]}\n```' }] });
   run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: rv('changes_requested') }, proj);
   run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: rv('changes_requested') }, proj);
   run('log-delegation.js', { hook_event_name: 'PostToolUse', tool_name: 'Agent', tool_input: ti, tool_response: rv('approve') }, proj);

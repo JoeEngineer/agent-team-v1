@@ -24,7 +24,7 @@ const GROUPS = {
   attribution: { tool: 'forged', model: 'forged', effort: 'forged', tier: 'forged', agent: 'forged', reviewer_model: 'forged', reviewer_effort: 'forged', requested_model: 'forged', requested_effort: 'forged', reviewer_tier: 'forged' },
   timestamps: { ts: '1999-01-01T00:00:00.000Z', timestamp: 'forged', created_at: 'forged', started_at: 'forged', completed_at: 'forged' },
 };
-const REAL = { verdict: 'approve', severity: 'none', issues: [], summary: 'ok' };
+const REAL = { verdict: 'approve', severity: 'none', issues: [], summary: 'ok', head_sha: 'c0ffee0000000000000000000000000000000000' };
 const fence = (o) => `${F}review-json\n${JSON.stringify(o)}\n${F}`;
 
 function assertKept(row, group, fields, label) {
@@ -163,7 +163,7 @@ test('log-event review: a duplicate writes nothing and says "not logged: duplica
 test('verdict-conflict nudge: one text for the reviewer and the security-reviewer, Director text for the bridge', () => {
   for (const agent of ['agent-team:reviewer', 'agent-team:security-reviewer']) {
     const p = tmpProject();
-    const conflict = fence({ verdict: 'changes_requested', severity: 'minor', issues: [], summary: 's' });
+    const conflict = fence({ verdict: 'changes_requested', severity: 'minor', issues: [], summary: 's', head_sha: 'c0ffee0000000000000000000000000000000000' });
     const r = run('log-delegation.js', { hook_event_name: 'SubagentStop', session_id: 's1', agent_id: 'n21', agent_type: agent, agent_transcript_path: stopTranscript(conflict) }, p, env);
     eq(readLog(p, 'reviews.jsonl')[0].verdict_conflict, true, `${agent}: precondition: conflict detected`);
     eq(context(r), records.VERDICT_CONFLICT_NUDGE, `${agent}: nudge text`);

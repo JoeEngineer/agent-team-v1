@@ -63,5 +63,6 @@ For the residuals: accept each group, or reject it and fix it.
   attacker who can rewrite `milestones.jsonl` or `.git` cannot be stopped,
   decision 0026 must say so plainly.
 - FU-23 closes the remaining fence gaps: a quoted block that is the only final
-  block, and Unicode `trim()`.
+  block, and Unicode `trim()`. Its design, the `head=` card rule and the
+  one residual the user accepted on 2026-11-23 are in decision 0030.
 - The 1.2.0 release notes state the accepted scanner residuals.
